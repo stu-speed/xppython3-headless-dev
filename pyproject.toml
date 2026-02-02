@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "xppython3-dev"
+version = "0.1.0"
+description = "Simless XPWidgets environment"
+authors = ["StuSpeed"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+dearpygui = "^1.11.1"
+pyserial = "^3.5"
+
+[dependency-groups]
+dev = [
+    "pytest (>=9.0.2,<10.0.0)"
+]
+
+[tool.pytest.ini_options]
+pythonpath = [
+    "stubs",
+    "."
+]
+

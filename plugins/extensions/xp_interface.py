@@ -1,0 +1,176 @@
+# ===========================================================================
+# XPInterface Protocol
+#
+# Defines the API surface exposed by XPPython3 at runtime. FakeXP implements
+# this same interface for simless execution. The plugin interacts ONLY through
+# this protocol, ensuring deterministic behavior and clean separation between
+# simulator logic and plugin logic.
+#
+# This file contains:
+#   • No dataref lifecycle logic
+#   • No declarative dataref specifications
+#   • No plugin‑specific behavior
+# ===========================================================================
+
+from typing import Protocol, Any, Callable, Sequence
+
+
+class XPInterface(Protocol):
+    # ------------------------------------------------------------------
+    # Logging / lifecycle
+    # ------------------------------------------------------------------
+    def log(self, msg: str) -> None: ...
+    def getMyID(self) -> int: ...
+    def disablePlugin(self, plugin_id: int) -> None: ...
+
+    # ------------------------------------------------------------------
+    # DataRefs
+    # ------------------------------------------------------------------
+    def add_dataref(self, path: str, default_value: Any, writable: bool = False) -> None: ...
+    def findDataRef(self, path: str) -> int | None: ...
+    def getDataRefInfo(self, handle: int) -> tuple[int, bool, bool, int]: ...
+
+    def getDatai(self, handle: int) -> int: ...
+    def getDataf(self, handle: int) -> float: ...
+    def getDatad(self, handle: int) -> float: ...
+    def getDatavi(self, handle: int) -> list[int]: ...
+    def getDatavf(self, handle: int) -> list[float]: ...
+    def getDatab(self, handle: int) -> bytes: ...
+
+    def setDatai(self, handle: int, v: int) -> None: ...
+    def setDataf(self, handle: int, v: float) -> None: ...
+    def setDatad(self, handle: int, v: float) -> None: ...
+    def setDatavi(self, handle: int, v: Sequence[int]) -> None: ...
+    def setDatavf(self, handle: int, v: Sequence[float]) -> None: ...
+    def setDatab(self, handle: int, v: bytes) -> None: ...
+
+    # ------------------------------------------------------------------
+    # Flight loops
+    # ------------------------------------------------------------------
+    def createFlightLoop(self, callback: Callable[..., Any]) -> int: ...
+    def scheduleFlightLoop(self, loop_id: int, interval: float) -> None: ...
+    def destroyFlightLoop(self, loop_id: int) -> None: ...
+    def run_flightloops(self, iterations: int = 5, dt: float = 2.0) -> None: ...
+
+    # ------------------------------------------------------------------
+    # XPWidgets
+    # ------------------------------------------------------------------
+    def createWidget(
+        self,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+        visible: int,
+        descriptor: str,
+        is_root: int,
+        container: int,
+        widget_class: int,
+    ) -> int: ...
+
+    def createCustomWidget(
+        self,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+        visible: int,
+        descriptor: str,
+        is_root: int,
+        container: int,
+        callback: Callable[[int, int, Any, Any], Any],
+    ) -> int: ...
+
+    def destroyWidget(self, wid: int, destroy_children: int) -> None: ...
+
+    def setWidgetGeometry(self, wid: int, left: int, top: int, right: int, bottom: int) -> None: ...
+    def getWidgetGeometry(self, wid: int) -> tuple[int, int, int, int]: ...
+
+    def showWidget(self, wid: int) -> None: ...
+    def hideWidget(self, wid: int) -> None: ...
+    def isWidgetVisible(self, wid: int) -> bool: ...
+
+    def getParentWidget(self, wid: int) -> int | None: ...
+    def getWidgetWithFocus(self) -> int | None: ...
+    def setKeyboardFocus(self, wid: int | None) -> None: ...
+
+    def getWidgetProperty(self, wid: int, prop: int) -> Any: ...
+    def setWidgetProperty(self, wid: int, prop: int, value: Any) -> None: ...
+
+    def addWidgetCallback(
+        self,
+        wid: int,
+        callback: Callable[[int, int, Any, Any], Any],
+    ) -> None: ...
+
+    def sendWidgetMessage(
+        self,
+        wid: int,
+        msg: int,
+        param1: Any = None,
+        param2: Any = None,
+    ) -> None: ...
+
+    # ImGui-backed rendering
+    def begin_frame(self) -> None: ...
+    def end_frame(self) -> None: ...
+    def render_widgets(self) -> None: ...
+
+    # ------------------------------------------------------------------
+    # XPLMGraphics
+    # ------------------------------------------------------------------
+    def registerDrawCallback(
+        self,
+        callback: Callable[[int, int, Any], int],
+        phase: int,
+        before: int,
+        refcon: Any,
+    ) -> None: ...
+
+    def unregisterDrawCallback(
+        self,
+        callback: Callable[[int, int, Any], int],
+        phase: int,
+        before: int,
+        refcon: Any,
+    ) -> None: ...
+
+    def run_draw_callbacks(self) -> None: ...
+
+    def drawString(
+        self,
+        x: float,
+        y: float,
+        text: str,
+        color: tuple[float, float, float, float] | None = None,
+    ) -> None: ...
+
+    def drawNumber(
+        self,
+        x: float,
+        y: float,
+        number: float,
+        decimals: int = 2,
+    ) -> None: ...
+
+    def setGraphicsState(
+        self,
+        fog: int,
+        lighting: int,
+        alpha: int,
+        depth: int,
+        depth_write: int,
+        cull: int,
+    ) -> None: ...
+
+    def bindTexture2d(self, texture_id: int, unit: int) -> None: ...
+    def generateTextureNumbers(self, count: int) -> list[int]: ...
+    def deleteTexture(self, texture_id: int) -> None: ...
+
+    # ------------------------------------------------------------------
+    # XPLMUtilities
+    # ------------------------------------------------------------------
+    def speakString(self, text: str) -> None: ...
+    def getSystemPath(self) -> str: ...
+    def getPrefsPath(self) -> str: ...
+    def getDirectorySeparator(self) -> str: ...
