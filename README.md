@@ -138,7 +138,7 @@ This runner:
 • Boots FakeXP  
 • Replaces the real X‑Plane xp module  
 • Loads any number of plugins  
-• Executes the full lifecycle (start/enable/flight_loop/disable/stop)
+• Executes the full lifecycle (start/enable/flight_loop/disable/stop)   
 • Runs in GUI or headless mode  
 
 For details on GUI behavior, see GUI_EMULATION.md.
@@ -147,16 +147,12 @@ For details on GUI behavior, see GUI_EMULATION.md.
 
 # 🚀 Deployment to X‑Plane
 
-Copy your plugin folder into:
+Copy contents of plugin folder into:
 
 X‑Plane 12/Resources/plugins/PythonPlugins/
 
 Example:
 
-plugins/  
     PI_ss_ota.py  
     extensions/  
     extlibs/  
-
-Only the plugins folder is deployed.  
-The simless environment is for development only.

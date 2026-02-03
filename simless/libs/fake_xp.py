@@ -13,8 +13,11 @@
 
 import time
 from typing import Any, Callable, Dict, List, Sequence
-import XPPython3
 
+import XPPython3
+from plugins.extensions.datarefs import DataRefManager
+
+from simless.libs.fake_xp_runner import FakeXPRunner
 from simless.libs.fake_xp_widget import (
     FakeXPWidgets,
     xpWidgetClass_MainWindow,
@@ -56,10 +59,10 @@ class FakeXP:
         self._pending: Dict[int, str] = {}
 
         # Runner reference (set by FakeXPRunner)
-        self._runner = None
+        self._runner: FakeXPRunner | None = None
 
         # Optional DataRefManager
-        self._dataref_manager = None
+        self._dataref_manager: DataRefManager | None = None
 
         # Plugin list (populated by runner)
         self._plugins: List[Any] = []
@@ -77,8 +80,7 @@ class FakeXP:
         self._running = False
 
         # Bind xp.* into XPPython3
-        if not hasattr(XPPython3, "xp"):
-            XPPython3.xp = self
+        XPPython3.xp = self
 
         xp = XPPython3.xp
 
@@ -140,12 +142,13 @@ class FakeXP:
     def log(self, msg: str) -> None:
         print(f"[FakeXP] {msg}")
 
-    # ----------------------------------------------------------------------
-    # Runner binding (called by FakeXPRunner)
-    # ----------------------------------------------------------------------
-    def _bind_runner(self, runner):
-        self._runner = runner
-        self._dbg("[FakeXP] Runner bound")
+    def _quit(self):
+        """
+        Internal sim-less endpoint.
+        Allows plugins to request termination of the FakeXP run loop.
+        """
+        if hasattr(self, "_runner") and self._runner:
+            self._runner.end_run_loop()
 
     # ----------------------------------------------------------------------
     # DataRef API

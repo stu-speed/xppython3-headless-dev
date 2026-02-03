@@ -7,6 +7,7 @@ from typing import Any
 from XPPython3 import xp
 
 
+
 class PythonInterface:
     def XPluginStart(self):
         self.Name = "Dev OTA GUI"
@@ -83,15 +84,17 @@ class PythonInterface:
 
         xp.addWidgetCallback(self.slider, slider_callback)
 
-        def quit_callback(wid: int, msg: int, p1: Any, p2: Any):
+        def quit_callback(wid, msg, p1, p2):
             if msg == xp.Msg_MouseDown:
                 xp.log("[dev_ota_gui] Closing OTA GUI window")
+
                 if self.win is not None:
                     xp.killWidget(self.win)
                     self.win = None
 
-                # Request FakeXP to end the sim loop
-                xp._end_run_loop()
+                # Request sim-less loop termination
+                if hasattr(xp, "_quit"):
+                    xp._quit()
 
         xp.addWidgetCallback(self.quit_btn, quit_callback)
 

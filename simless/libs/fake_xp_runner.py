@@ -19,6 +19,7 @@ import dearpygui.dearpygui as dpg
 class FakeXPRunner:
     def __init__(self, xp, *, enable_gui: bool = True, run_time: float = -1.0):
         self.xp = xp
+        xp._runner = self
         self.enable_gui = enable_gui
         self.run_time = run_time
 
