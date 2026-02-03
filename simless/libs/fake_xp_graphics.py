@@ -1,6 +1,25 @@
-# simless/libs/fake_xp_graphics.py
 # ===========================================================================
-# FakeXPGraphics — strongly typed DearPyGui-backed drawing layer
+# FakeXPGraphics — DearPyGui‑backed drawing facade
+#
+# Provides a minimal, deterministic emulation of X‑Plane’s XPLMGraphics
+# overlay drawing API. Plugins register draw callbacks, and FakeXPGraphics
+# executes them once per frame inside a persistent DearPyGui overlay.
+#
+# Responsibilities:
+#   • Maintain a single DPG draw‑layer used for all plugin rendering
+#   • Execute plugin draw callbacks every frame in registration order
+#   • Provide simple drawing primitives (text, lines, rectangles, circles)
+#   • Track FPS, draw‑call count, and callback count for debug HUD mode
+#   • Integrate with FakeXP’s debug logging for high‑signal instrumentation
+#
+# Non‑Responsibilities:
+#   • DearPyGui context/viewport lifecycle (handled by FakeXPRunner)
+#   • Any 3D rendering, OpenGL state, or X‑Plane texture management
+#
+# Design notes:
+#   • Overlay is created lazily and persists for the entire run
+#   • All drawing is stateless; each frame clears and redraws the overlay
+#   • Debug HUD is optional and rendered on top of plugin output
 # ===========================================================================
 
 from __future__ import annotations

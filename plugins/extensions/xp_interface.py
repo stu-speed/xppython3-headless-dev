@@ -1,11 +1,33 @@
-# plugins/extensions/xp_interface.py
 # ===========================================================================
-# XPInterface Protocol
+# FakeXP Interfaces — unified protocol layer for production + simless
 #
-# Defines the API surface exposed by XPPython3 at runtime. FakeXP implements
-# this same interface for simless execution. The plugin interacts ONLY through
-# this protocol, ensuring deterministic behavior and clean separation between
-# simulator logic and plugin logic.
+# Defines the minimal set of interfaces that FakeXP, FakeXPWidgets,
+# FakeXPGraphics, and plugin objects must satisfy. These Protocols provide
+# a stable, typed contract shared across both real XPPython3 (production)
+# and FakeXP (simless) environments.
+#
+# Responsibilities:
+#   • Specify the callable surface expected from each subsystem:
+#       - XPWidgetAPI: widget creation, geometry, properties, callbacks
+#       - XPGraphicsAPI: draw callbacks and simple primitives
+#       - XPUtilitiesAPI: filesystem and utility helpers
+#       - XPPluginAPI: plugin lifecycle contract
+#   • Enable strong typing and static analysis for plugin authors
+#   • Allow FakeXP to emulate X‑Plane behavior without requiring XPLM
+#
+# Production notes:
+#   • These Protocols mirror the structure of XPPython3’s xp.* modules
+#   • Plugin code written against these interfaces runs identically in
+#     production and simless modes
+#
+# Simless notes:
+#   • FakeXP implements these Protocols directly using pure Python
+#   • DearPyGui is used for widget and graphics emulation where applicable
+#
+# Design goals:
+#   • Keep interfaces minimal, explicit, and stable
+#   • Avoid leaking implementation details from either environment
+#   • Provide a single source of truth for plugin‑facing API contracts
 # ===========================================================================
 
 from __future__ import annotations

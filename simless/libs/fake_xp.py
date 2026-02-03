@@ -1,21 +1,34 @@
-# simless/libs/fake_xp.py
 # ===========================================================================
-# FakeXP
-# Public API surface that emulates xp.* for XPPython3 plugins in simless mode.
+# FakeXP — unified xp.* façade for simless plugin execution
+#
+# Provides a complete, in‑memory implementation of the xp.* API surface used
+# by XPPython3 plugins. FakeXP acts as the central coordinator for all simless
+# subsystems: DataRefs, Widgets, Graphics, and Utilities.
 #
 # Responsibilities:
-#   - DataRef access (get/set/find)
-#   - Dummy-ref detection and promotion
-#   - Delegating promotion notifications to DataRefManager
-#   - Widget API surface
-#   - Graphics API surface
-#   - Flightloop scheduling
+#   • Expose the xp.* namespace expected by plugins (widgets, graphics,
+#     datarefs, utilities, flightloops)
+#   • Maintain deterministic, in‑memory state for all subsystems
+#   • Provide strongly typed FakeRefInfo handles for DataRefs
+#   • Route widget and graphics calls to FakeXPWidgets / FakeXPGraphics
+#   • Forward all flightloop registration/scheduling to FakeXPRunner
+#   • Integrate with FakeXPRunner for lifecycle and frame pumping
+#
+# Behavior notes:
+#   • All xp.* functions are bound directly onto the FakeXP instance
+#   • DataRefs support dummy‑ref promotion and default initialization
+#   • Widgets and graphics are backed by DearPyGui when GUI mode is enabled
+#   • All operations are deterministic and safe for CI/test automation
+#
+# Design goals:
+#   • Provide a drop‑in xp.* environment for plugin authors
+#   • Mirror X‑Plane semantics closely while remaining pure Python
+#   • Keep subsystem boundaries explicit and maintainable
 # ===========================================================================
 
 from __future__ import annotations
 
 import os
-import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Sequence
 
@@ -51,7 +64,7 @@ from simless.libs.fake_xp_graphics import FakeXPGraphics
 # ===========================================================================
 
 @dataclass(slots=True, unsafe_hash=True)
-class FakeRefInfo:
+class FakeDataRefInfo:
     """
     Strongly-typed DataRef representation for FakeXP.
 
@@ -77,9 +90,9 @@ class FakeXP:
         self.debug_enabled: bool = debug
 
         # DataRef tables
-        self._handles: Dict[str, FakeRefInfo] = {}
-        self._dummy_refs: Dict[str, FakeRefInfo] = {}
-        self._values: Dict[FakeRefInfo, Any] = {}
+        self._handles: Dict[str, FakeDataRefInfo] = {}
+        self._dummy_refs: Dict[str, FakeDataRefInfo] = {}
+        self._values: Dict[FakeDataRefInfo, Any] = {}
 
         # Runner reference (set by FakeXPRunner)
         self._runner: FakeXPRunner | None = None
@@ -90,16 +103,17 @@ class FakeXP:
         # Plugin list (populated by runner)
         self._plugins: List[Any] = []
 
-        # Flightloops
-        self._flightloops: List[Callable[[float], float]] = []
-        self._flightloop_handles: List[dict] = []
-        self._last_frame_time: float = time.time()
+        # Disabled plugin tracking (used by runner to skip callbacks)
+        self._disabled_plugins: set[int] = set()
 
         # Widgets + Graphics
         self.widgets = FakeXPWidgets(self)
         self.graphics = FakeXPGraphics(self)
 
-        # Loop control
+        # Sim time (advanced by runner)
+        self._sim_time: float = 0.0
+
+        # Loop control (used by runner)
         self._running: bool = False
 
         # Keyboard focus
@@ -183,24 +197,33 @@ class FakeXP:
         self.sendWidgetMessage = self.widgets.sendWidgetMessage
 
     # ----------------------------------------------------------------------
-    # Debug / lifecycle
+    # Debug / lifecycle headless methods
     # ----------------------------------------------------------------------
     def _dbg(self, msg: str) -> None:
         if self.debug_enabled:
             print(f"[FakeXP] {msg}")
 
-    def log(self, msg: str) -> None:
-        print(f"[FakeXP] {msg}")
-
-    def getMyID(self) -> int:
-        return 1
-
-    def disablePlugin(self, plugin_id: int) -> None:
-        self._dbg(f"disablePlugin({plugin_id}) called (simless no-op)")
+    def _run_plugin_lifecycle(self, plugin_names, *, debug=False, enable_gui=True, run_time=-1.0):
+        runner = FakeXPRunner(self, enable_gui=enable_gui, run_time=run_time, debug=debug)
+        runner.run_plugin_lifecycle(plugin_names)
 
     def _quit(self) -> None:
         if self._runner is not None:
             self._runner.end_run_loop()
+
+    # ----------------------------------------------------------------------
+    # Base xp methods
+    # ----------------------------------------------------------------------
+    def getMyID(self) -> int:
+        # For now, a single-plugin ID; can be extended to real IDs later.
+        return 1
+
+    def disablePlugin(self, plugin_id: int) -> None:
+        self._disabled_plugins.add(plugin_id)
+        self._dbg(f"disablePlugin({plugin_id}) → marked disabled")
+
+    def log(self, msg: str) -> None:
+        print(f"[FakeXP] {msg}")
 
     # ----------------------------------------------------------------------
     # DataRefManager binding
@@ -216,11 +239,11 @@ class FakeXP:
         path: str,
         default: Any | None,
         writable: bool | None,
-    ) -> FakeRefInfo:
+    ) -> FakeDataRefInfo:
         if path in self._handles:
             return self._handles[path]
 
-        ref = FakeRefInfo(
+        ref = FakeDataRefInfo(
             path=path,
             xp_type=None,
             writable=bool(writable) if writable is not None else True,
@@ -237,14 +260,14 @@ class FakeXP:
     # ----------------------------------------------------------------------
     # DataRef API (FakeXP-only, always FakeRefInfo)
     # ----------------------------------------------------------------------
-    def findDataRef(self, path: str) -> FakeRefInfo | None:
+    def findDataRef(self, path: str) -> FakeDataRefInfo | None:
         if path in self._handles:
             return self._handles[path]
 
         if path in self._dummy_refs:
             return self._dummy_refs[path]
 
-        ref = FakeRefInfo(
+        ref = FakeDataRefInfo(
             path=path,
             xp_type=None,
             writable=False,
@@ -257,7 +280,7 @@ class FakeXP:
         self._dbg(f"[Strict] findDataRef('{path}') -> dummy")
         return ref
 
-    def getDataRefInfo(self, handle: FakeRefInfo) -> FakeRefInfo:
+    def getDataRefInfo(self, handle: FakeDataRefInfo) -> FakeDataRefInfo:
         return handle
 
     # ----------------------------------------------------------------------
@@ -265,11 +288,11 @@ class FakeXP:
     # ----------------------------------------------------------------------
     def _promote(
         self,
-        ref: FakeRefInfo,
+        ref: FakeDataRefInfo,
         xp_type: int,
         is_array: bool,
         default: Any,
-    ) -> FakeRefInfo:
+    ) -> FakeDataRefInfo:
         if not ref.dummy:
             return ref
 
@@ -291,11 +314,11 @@ class FakeXP:
 
     def _ensure_real(
         self,
-        handle: FakeRefInfo,
+        handle: FakeDataRefInfo,
         xp_type: int,
         is_array: bool,
         default: Any,
-    ) -> FakeRefInfo:
+    ) -> FakeDataRefInfo:
         if handle.dummy:
             return self._promote(handle, xp_type, is_array, default)
         return handle
@@ -303,11 +326,11 @@ class FakeXP:
     # ----------------------------------------------------------------------
     # Datai
     # ----------------------------------------------------------------------
-    def getDatai(self, handle: FakeRefInfo) -> int:
+    def getDatai(self, handle: FakeDataRefInfo) -> int:
         ref = self._ensure_real(handle, xp_type=1, is_array=False, default=0)
         return int(self._values.get(ref, ref.value or 0))
 
-    def setDatai(self, handle: FakeRefInfo, value: int) -> None:
+    def setDatai(self, handle: FakeDataRefInfo, value: int) -> None:
         ref = self._ensure_real(handle, xp_type=1, is_array=False, default=int(value))
         v = int(value)
         ref.value = v
@@ -318,11 +341,11 @@ class FakeXP:
     # ----------------------------------------------------------------------
     # Dataf
     # ----------------------------------------------------------------------
-    def getDataf(self, handle: FakeRefInfo) -> float:
+    def getDataf(self, handle: FakeDataRefInfo) -> float:
         ref = self._ensure_real(handle, xp_type=2, is_array=False, default=0.0)
         return float(self._values.get(ref, ref.value or 0.0))
 
-    def setDataf(self, handle: FakeRefInfo, value: float) -> None:
+    def setDataf(self, handle: FakeDataRefInfo, value: float) -> None:
         ref = self._ensure_real(handle, xp_type=2, is_array=False, default=float(value))
         v = float(value)
         ref.value = v
@@ -333,11 +356,11 @@ class FakeXP:
     # ----------------------------------------------------------------------
     # Datad (double mapped to float)
     # ----------------------------------------------------------------------
-    def getDatad(self, handle: FakeRefInfo) -> float:
+    def getDatad(self, handle: FakeDataRefInfo) -> float:
         ref = self._ensure_real(handle, xp_type=4, is_array=False, default=0.0)
         return float(self._values.get(ref, ref.value or 0.0))
 
-    def setDatad(self, handle: FakeRefInfo, value: float) -> None:
+    def setDatad(self, handle: FakeDataRefInfo, value: float) -> None:
         ref = self._ensure_real(handle, xp_type=4, is_array=False, default=float(value))
         v = float(value)
         ref.value = v
@@ -348,12 +371,12 @@ class FakeXP:
     # ----------------------------------------------------------------------
     # Datavf (float array)
     # ----------------------------------------------------------------------
-    def getDatavf(self, handle: FakeRefInfo) -> List[float]:
+    def getDatavf(self, handle: FakeDataRefInfo) -> List[float]:
         ref = self._ensure_real(handle, xp_type=8, is_array=True, default=[])
         arr = self._values.get(ref, ref.value or [])
         return [float(v) for v in arr]
 
-    def setDatavf(self, handle: FakeRefInfo, values: Sequence[float]) -> None:
+    def setDatavf(self, handle: FakeDataRefInfo, values: Sequence[float]) -> None:
         ref = self._ensure_real(handle, xp_type=8, is_array=True, default=list(values))
         arr = [float(v) for v in values]
         ref.value = arr
@@ -364,12 +387,12 @@ class FakeXP:
     # ----------------------------------------------------------------------
     # Datavi (int array)
     # ----------------------------------------------------------------------
-    def getDatavi(self, handle: FakeRefInfo) -> List[int]:
+    def getDatavi(self, handle: FakeDataRefInfo) -> List[int]:
         ref = self._ensure_real(handle, xp_type=16, is_array=True, default=[])
         arr = self._values.get(ref, ref.value or [])
         return [int(v) for v in arr]
 
-    def setDatavi(self, handle: FakeRefInfo, values: Sequence[int]) -> None:
+    def setDatavi(self, handle: FakeDataRefInfo, values: Sequence[int]) -> None:
         ref = self._ensure_real(handle, xp_type=16, is_array=True, default=list(values))
         arr = [int(v) for v in values]
         ref.value = arr
@@ -380,12 +403,12 @@ class FakeXP:
     # ----------------------------------------------------------------------
     # Datab (byte array)
     # ----------------------------------------------------------------------
-    def getDatab(self, handle: FakeRefInfo) -> bytes:
+    def getDatab(self, handle: FakeDataRefInfo) -> bytes:
         ref = self._ensure_real(handle, xp_type=32, is_array=True, default=b"")
         data = self._values.get(ref, ref.value or b"")
         return bytes(data)
 
-    def setDatab(self, handle: FakeRefInfo, data: bytes) -> None:
+    def setDatab(self, handle: FakeDataRefInfo, data: bytes) -> None:
         ref = self._ensure_real(handle, xp_type=32, is_array=True, default=bytes(data))
         b = bytes(data)
         ref.value = b
@@ -403,8 +426,8 @@ class FakeXP:
         isArray: bool,
         writable: bool,
         defaultValue: Any,
-    ) -> FakeRefInfo:
-        ref = FakeRefInfo(
+    ) -> FakeDataRefInfo:
+        ref = FakeDataRefInfo(
             path=path,
             xp_type=xpType,
             writable=writable,
@@ -424,47 +447,36 @@ class FakeXP:
         return ref
 
     # ----------------------------------------------------------------------
-    # Flightloop API
+    # Flightloop API — XPPython3-accurate, forwarded to runner
     # ----------------------------------------------------------------------
-    def registerFlightLoopCallback(self, cb: Callable[[float], float]) -> None:
-        self._flightloops.append(cb)
+    def registerFlightLoopCallback(self, cb: Callable[[float], float], interval: float) -> None:
+        """
+        Legacy XPPython3 API:
+            xp.registerFlightLoopCallback(cb, interval)
+        """
+        if self._runner is None:
+            raise RuntimeError("registerFlightLoopCallback called before runner is attached")
+        plugin_id = self.getMyID()
+        self._runner.register_legacy_flightloop(plugin_id, cb, interval)
 
-    def createFlightLoop(self, callback: Callable[[float], float]) -> int:
-        handle = len(self._flightloop_handles)
-        self._flightloop_handles.append(
-            {
-                "callback": callback,
-                "next_run": None,
-                "active": True,
-            }
-        )
-        return handle
+    def createFlightLoop(self, params) -> dict:
+        """
+        Modern XPPython3 API:
+            handle = xp.createFlightLoop(params)
+        """
+        if self._runner is None:
+            raise RuntimeError("createFlightLoop called before runner is attached")
+        plugin_id = self.getMyID()
+        return self._runner.create_modern_flightloop(plugin_id, params)
 
-    def scheduleFlightLoop(self, handle: int, interval: float) -> None:
-        if 0 <= handle < len(self._flightloop_handles):
-            entry = self._flightloop_handles[handle]
-            if entry["active"]:
-                now = time.time()
-                entry["next_run"] = now if interval < 0 else now + interval
-
-    def destroyFlightLoop(self, handle: int) -> None:
-        if 0 <= handle < len(self._flightloop_handles):
-            entry = self._flightloop_handles[handle]
-            entry["active"] = False
-            entry["callback"] = lambda *args, **kwargs: 0.0
-            entry["next_run"] = None
-
-    def run_flightloops(self, iterations: int = 5, dt: float = 2.0) -> None:
-        now = time.time()
-        last = self._last_frame_time
-        self._last_frame_time = now
-        delta = now - last
-
-        for cb in list(self._flightloops):
-            try:
-                cb(delta)
-            except Exception as e:
-                self._dbg(f"[FakeXP] Flightloop error: {e!r}")
+    def scheduleFlightLoop(self, handle: dict, interval: float, relative: int) -> None:
+        """
+        Modern XPPython3 API:
+            xp.scheduleFlightLoop(handle, interval, relative)
+        """
+        if self._runner is None:
+            raise RuntimeError("scheduleFlightLoop called before runner is attached")
+        self._runner.schedule_modern_flightloop(handle, interval, relative)
 
     # ----------------------------------------------------------------------
     # XPWidgets (extra helpers)
@@ -496,9 +508,6 @@ class FakeXP:
     ) -> None:
         # No-op for now; tests don't require unregister semantics
         return None
-
-    def run_draw_callbacks(self) -> None:
-        self.graphics.run_draw_callbacks()
 
     def drawString(
         self,

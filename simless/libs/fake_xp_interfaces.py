@@ -1,15 +1,22 @@
-# plugins/extensions/fake_interfaces.py
 # ===========================================================================
-# Fake subsystem interfaces
+# Fake Interfaces — internal Protocols mirroring the production xp.* API
 #
-# These Protocols describe the internal subsystems used by FakeXP:
-#   - XPWidgetAPI: DearPyGui-backed widget emulation
-#   - XPGraphicsAPI: DearPyGui-backed drawing layer
-#   - XPUtilitiesAPI: filesystem / utility helpers
-#   - XPPluginAPI: plugin lifecycle contract
+# Defines the lightweight Protocols used by FakeXP to model the callable
+# surface of the real XPPython3 xp.* modules. These interfaces mirror the
+# production API so plugin code can run unchanged in both real X‑Plane and
+# FakeXP’s simless environment.
 #
-# They are intentionally narrower than XPInterface and are meant for
-# internal wiring and testing of the simless stack.
+# Responsibilities:
+#   • Specify typed contracts for widgets, graphics, datarefs, utilities,
+#     and plugin lifecycle behavior
+#   • Keep subsystem boundaries explicit and decoupled inside FakeXP
+#   • Support static analysis and maintainability without requiring XPLM
+#
+# Notes:
+#   • Protocols reflect the structure and naming of the production xp.* API
+#   • FakeXP implements these Protocols directly using pure Python
+#   • Implementations (FakeXPWidgets, FakeXPGraphics, etc.) conform to these
+#     contracts to ensure consistent behavior across environments
 # ===========================================================================
 
 from __future__ import annotations

@@ -1,6 +1,36 @@
-# plugins/extensions/datarefs.py
 # ===========================================================================
-# Managed dataRefs (Typed, Declarative, Deterministic)
+# DataRefs — unified production/simless DataRef layer
+#
+# Provides a consistent DataRef model for both real X‑Plane (via XPPython3)
+# and FakeXP’s simless environment. Plugins declare DataRefs up front, and
+# this layer ensures they are typed, writable as specified, and ready before
+# plugin code runs. Defaults are applied automatically when X‑Plane does not
+# supply a value.
+#
+# Responsibilities:
+#   • Register DataRefs from declarative specs (path, type, writable, default, required)
+#   • Guarantee readiness: required DataRefs must resolve; optional ones fall back to defaults
+#   • Provide the common X‑Plane get/set API surface:
+#         getDatai / setDatai
+#         getDataf / setDataf
+#         getDatad / setDatad
+#         getDatavi / setDatavi
+#         getDatavf / setDatavf
+#         getDatab / setDatab
+#   • Maintain correct scalar/array behavior and enforce type‑correct access
+#   • Notify DataRefManager when values change
+#
+# Production notes:
+#   • Resolves real XPLMDataRef handles and uses XPLMGet*/Set* APIs
+#   • Defaults apply only when X‑Plane does not provide a value
+#
+# Simless notes:
+#   • Uses FakeRefInfo handles with deterministic in‑memory storage
+#   • Dummy refs are promoted on first access with inferred type + defaults
+#
+# Design goals:
+#   • One DataRef definition and behavior model for both environments
+#   • Predictable initialization, strict typing, and clear defaults
 # ===========================================================================
 
 from __future__ import annotations
@@ -11,7 +41,7 @@ from enum import Enum
 from typing import Any, Dict, Iterable, Mapping, Protocol, Tuple
 
 from XPPython3.xp_typing import XPLMDataRefInfo_t
-from plugins.extensions.xp_interface import (
+from .xp_interface import (
     XPInterface,
     DataRefHandle,
     DataRefInfo,

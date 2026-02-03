@@ -71,14 +71,17 @@ FakeXP supports three interoperable dataref creation paths.
 Defined using DataRefSpec and accessed via TypedAccessor.
 
 Benefits:  
-• Strong typing  
-• Defaults for headless mode  
-• Required/optional semantics  
+• Strong typing using common get/set method 
+• Defaults for headless mode and easier testing  
+• Required/optional semantics with readiness checking 
 • Clean error handling  
 
 ## 2. Registered DataRefs (explicit)
 
 Created by FakeXPRunner during plugin load or manually.
+
+Benefits:  
+• All the benefits above but only good for headless 
 
 ## 3. Auto‑Created DataRefs (fallback)
 
@@ -118,9 +121,9 @@ Enables:
 A simple runner script is all that’s needed to execute plugins outside X‑Plane.
 
 ```python
+import XPPython3
 from simless.libs.fake_xp import FakeXP  
 from simless.libs.fake_xp_runner import FakeXPRunner  
-import XPPython3
 
 xp = FakeXP(debug=True)  
 runner = FakeXPRunner(xp, enable_gui=True, run_time=5.0)

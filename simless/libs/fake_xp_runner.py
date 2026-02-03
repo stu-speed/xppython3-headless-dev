@@ -1,244 +1,213 @@
-# simless/libs/fake_xp_runner.py
 # ===========================================================================
-# FakeXPRunner
-# Standalone simulation engine for FakeXP.
+# fake_xp_runner.py — deterministic simless execution harness
+#
+# Public API:
+#     xp._run_plugin_lifecycle(["PI_ss_OTA", "dev_ota_gui"])
+#
+# Responsibilities:
+#   • Internally load plugins using FakeXPPluginLoader
+#   • Execute lifecycle: Enable → frame loop → Disable → Stop
+#   • Maintain deterministic 60 Hz pacing
+#   • Provide end_run_loop() so plugins can stop the loop
+#   • Own ALL flightloop scheduling (FakeXP holds no scheduler state)
+#   • Skip flightloops/draw callbacks for disabled plugins
 # ===========================================================================
 
 from __future__ import annotations
 
-import importlib
 import time
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Callable
 
 import dearpygui.dearpygui as dpg
-import XPPython3
 
-from plugins.extensions.datarefs import DataRefManager, DataRefRegistry, DataRefSpec
-from plugins.extensions.xp_interface import XPInterface
-
-if TYPE_CHECKING:
-    from simless.libs.fake_xp import FakeXP
+from .fake_xp_loader import FakeXPPluginLoader, LoadedPlugin
 
 
 class FakeXPRunner:
     """
-    Orchestrates a simless XPPython3 session using a FakeXP backend.
+    Executes plugin lifecycle:
+        run_plugin_lifecycle(["PI_ss_OTA", "dev_ota_gui"])
     """
 
     def __init__(
         self,
-        xp: XPInterface,
+        xp: Any,
         *,
         enable_gui: bool = True,
         run_time: float = -1.0,
+        debug: bool = False,
     ) -> None:
-        self.xp: XPInterface = xp
+        self.xp = xp
+        self.enable_gui = enable_gui
+        self.run_time = run_time
+        self.debug = debug
+        self._running = False
+
+        # Allow FakeXP to call back into us
         setattr(self.xp, "_runner", self)
 
-        self.enable_gui: bool = enable_gui
-        self.run_time: float = run_time
+        # ------------------------------------------------------------------
+        # Flightloop state (runner-owned)
+        # ------------------------------------------------------------------
+        # Legacy: list of {plugin_id, callback, interval}
+        self._legacy_flightloops: list[dict] = []
+
+        # Modern: list of {plugin_id, callback, interval, relative, next_call}
+        self._modern_flightloops: list[dict] = []
 
     # ----------------------------------------------------------------------
-    # DataRefManager binding
+    # Public API for FakeXP to forward scheduling calls
     # ----------------------------------------------------------------------
-    def bind_dataref_manager(self, manager: DataRefManager) -> None:
-        setattr(self.xp, "_dataref_manager", manager)
-        if hasattr(self.xp, "_dbg"):
-            self.xp._dbg("[Runner] DataRefManager bound")  # type: ignore
 
-    # ----------------------------------------------------------------------
-    # Plugin loading
-    # ----------------------------------------------------------------------
-    def load_plugin(self, module_path: str) -> None:
-        xp = self.xp
-        if hasattr(xp, "_dbg"):
-            xp._dbg(f"[Runner] Loading plugin: {module_path}")  # type: ignore
+    def register_legacy_flightloop(self, plugin_id: int, callback: Callable, interval: float) -> None:
+        self._legacy_flightloops.append({
+            "plugin_id": plugin_id,
+            "callback": callback,
+            "interval": interval,
+        })
 
-        XPPython3.xp = xp
+    def create_modern_flightloop(self, plugin_id: int, params) -> dict:
+        entry = {
+            "plugin_id": plugin_id,
+            "callback": params.callback,
+            "interval": params.interval,
+            "relative": params.relative,
+            "next_call": 0.0,
+        }
+        self._modern_flightloops.append(entry)
+        return entry
 
-        mod = importlib.import_module(module_path)
-        if not hasattr(mod, "PythonInterface"):
-            raise RuntimeError(f"Module {module_path} has no PythonInterface class")
+    def schedule_modern_flightloop(self, handle: dict, interval: float, relative: int) -> None:
+        handle["interval"] = interval
+        handle["relative"] = relative
 
-        plugin = mod.PythonInterface()
+    # ------------------------------------------------------------------
+    # Stop loop (called by plugins via xp.end_run_loop())
+    # ------------------------------------------------------------------
 
-        registry: Optional[DataRefRegistry] = getattr(plugin, "registry", None)
-        if isinstance(registry, DataRefRegistry):
-            count = 0
-            for accessor in registry._accessors.values():  # type: ignore
-                spec: DataRefSpec = accessor._spec  # type: ignore
-                self.register_dataref(spec.path, spec.default, bool(spec.writable))
-                count += 1
-            if hasattr(xp, "_dbg"):
-                xp._dbg(f"[Runner] Auto-registered {count} datarefs")  # type: ignore
+    def end_run_loop(self) -> None:
+        """Stop the main loop immediately."""
+        self._running = False
+        self.xp.log("[Runner] end_run_loop() called — stopping main loop")
 
-        plugins = getattr(xp, "_plugins", None)
-        if plugins is None:
-            plugins = []
-            setattr(xp, "_plugins", plugins)
-        plugins.append(plugin)
+    # ------------------------------------------------------------------
+    # GUI lifecycle
+    # ------------------------------------------------------------------
 
-        if hasattr(xp, "_dbg"):
-            xp._dbg(f"[Runner] Plugin loaded: {module_path}")  # type: ignore
-
-    # ----------------------------------------------------------------------
-    # DataRef registration
-    # ----------------------------------------------------------------------
-    def register_dataref(self, path: str, default: Any, writable: bool) -> None:
-        xp = self.xp
-
-        if isinstance(default, int):
-            xp_type, is_array = 1, False
-        elif isinstance(default, float):
-            xp_type, is_array = 2, False
-        elif isinstance(default, list):
-            xp_type = 16 if all(isinstance(x, int) for x in default) else 8
-            is_array = True
-        elif isinstance(default, (bytes, bytearray)):
-            xp_type, is_array = 32, True
-        else:
-            raise TypeError(f"Unsupported default type for dataref '{path}'")
-
-        xp.registerDataRef(  # type: ignore
-            path=path,
-            xpType=xp_type,
-            isArray=is_array,
-            writable=writable,
-            defaultValue=default,
-        )
-
-        if hasattr(xp, "_dbg"):
-            xp._dbg(
-                f"[Runner] Registered dataref: {path} "
-                f"(default={default!r}, writable={writable}, xp_type={xp_type}, is_array={is_array})"
-            )  # type: ignore
-
-    # ----------------------------------------------------------------------
-    # DearPyGui lifecycle
-    # ----------------------------------------------------------------------
-    def init_dpg(self) -> None:
-        if hasattr(self.xp, "_dbg"):
-            self.xp._dbg("[Runner] Initializing DearPyGui")  # type: ignore
+    def init_gui(self) -> None:
+        self.xp.log("[Runner] Initializing DearPyGui")
         dpg.create_context()
         dpg.create_viewport(title="FakeXP", width=900, height=700)
         dpg.setup_dearpygui()
         dpg.show_viewport()
 
-    def shutdown_dpg(self) -> None:
-        if hasattr(self.xp, "_dbg"):
-            self.xp._dbg("[Runner] Shutting down DearPyGui")  # type: ignore
+    def shutdown_gui(self) -> None:
+        self.xp.log("[Runner] Shutting down DearPyGui")
         dpg.destroy_context()
 
-    # ----------------------------------------------------------------------
-    # Flightloops
-    # ----------------------------------------------------------------------
-    def run_flightloops(self) -> None:
-        xp = self.xp
-        now = time.time()
-        last = getattr(xp, "_last_frame_time", now)
-        dt = now - last
-        setattr(xp, "_last_frame_time", now)
+    # ------------------------------------------------------------------
+    # Unified per-frame execution
+    # ------------------------------------------------------------------
 
-        for cb in list(getattr(xp, "_flightloops", [])):
+    def run_one_frame(self) -> bool:
+        xp = self.xp
+
+        # 1. Advance sim time
+        xp._sim_time += 1.0 / 60.0
+        sim_time = xp._sim_time
+
+        disabled = getattr(xp, "_disabled_plugins", set())
+
+        # 2. Legacy flightloops
+        for entry in self._legacy_flightloops:
+            if entry["plugin_id"] in disabled:
+                continue
             try:
-                cb(dt)
-            except Exception as e:
-                if hasattr(xp, "_dbg"):
-                    xp._dbg(f"[Runner] Flightloop error: {e}")  # type: ignore
+                entry["callback"](sim_time)
+            except Exception as exc:
+                xp.log(f"[Runner] legacy flightloop error: {exc!r}")
 
-    def run_xppython_flightloops(self) -> None:
-        xp = self.xp
-        now = time.time()
-
-        for entry in getattr(xp, "_flightloop_handles", []):
-            if not entry.get("active", False):
+        # 3. Modern flightloops
+        for entry in self._modern_flightloops:
+            if entry["plugin_id"] in disabled:
                 continue
 
-            next_run = entry.get("next_run")
-            if next_run is None or now < next_run:
-                continue
+            if sim_time >= entry["next_call"]:
+                try:
+                    next_interval = entry["callback"](sim_time)
+                except Exception as exc:
+                    xp.log(f"[Runner] modern flightloop error: {exc!r}")
+                    next_interval = entry["interval"]
 
-            cb = entry.get("callback")
-            try:
-                returned_interval = cb(now, 0.0, 0, None)
-            except Exception as e:
-                if hasattr(xp, "_dbg"):
-                    xp._dbg(f"[Runner] XPPython3 flightloop error: {e}")  # type: ignore
-                returned_interval = 0
+                if next_interval is None or next_interval < 0:
+                    next_interval = entry["interval"]
 
-            if returned_interval > 0:
-                entry["next_run"] = now + returned_interval
-            elif returned_interval < 0:
-                entry["next_run"] = now
-            else:
-                entry["active"] = False
-                entry["next_run"] = None
+                entry["next_call"] = sim_time + next_interval
 
-    # ----------------------------------------------------------------------
-    # One-frame simulation step
-    # ----------------------------------------------------------------------
-    def run_frame(self) -> bool:
-        xp = self.xp
+        # 4. Draw callbacks
+        try:
+            xp.graphics.run_draw_callbacks()
+        except Exception as exc:
+            xp.log(f"[Runner] draw callback error: {exc!r}")
 
-        self.run_flightloops()
-        self.run_xppython_flightloops()
-
+        # 5. GUI path
         if self.enable_gui:
-            xp.graphics.run_draw_callbacks()          # type: ignore
-            xp.widgets._draw_all_widgets()            # type: ignore
-            dpg.render_dearpygui_frame()
+            try:
+                xp.widgets._draw_all_widgets()
+                dpg.render_dearpygui_frame()
 
-            if not dpg.is_dearpygui_running():
+                if not dpg.is_dearpygui_running():
+                    return False
+            except Exception as exc:
+                xp.log(f"[Runner] GUI frame error: {exc!r}")
                 return False
 
         return True
 
-    # ----------------------------------------------------------------------
-    # Full plugin lifecycle
-    # ----------------------------------------------------------------------
-    def run_plugin_lifecycle(self) -> None:
+    # ------------------------------------------------------------------
+    # Lifecycle execution
+    # ------------------------------------------------------------------
+
+    def run_plugin_lifecycle(self, plugin_names: list[str]) -> None:
+        loader = FakeXPPluginLoader(self.xp)
+        plugins = loader.load_plugins(plugin_names)
+        self.run_lifecycle(plugins)
+
+    def run_lifecycle(self, plugins: list[LoadedPlugin]) -> None:
         xp = self.xp
-        plugins = getattr(xp, "_plugins", [])
 
         if not plugins:
-            xp.log("[Runner] No plugins registered — nothing to run")
+            xp.log("[Runner] No plugins to run")
             return
 
         if self.enable_gui:
-            self.init_dpg()
-
-        # Start
-        if hasattr(xp, "_dbg"):
-            xp._dbg("[Runner] === XPluginStart phase ===")  # type: ignore
-        for plugin in plugins:
-            try:
-                plugin.XPluginStart()
-            except Exception as e:
-                xp.log(f"[Runner] XPluginStart error: {e}")
+            self.init_gui()
 
         # Enable
-        if hasattr(xp, "_dbg"):
-            xp._dbg("[Runner] === XPluginEnable phase ===")  # type: ignore
-        for plugin in plugins:
+        xp.log("[Runner] === XPluginEnable BEGIN ===")
+        for p in plugins:
             try:
-                plugin.XPluginEnable()
-            except Exception as e:
-                xp.log(f"[Runner] XPluginEnable error: {e}")
+                xp.log(f"[Runner] → XPluginEnable: {p.name}")
+                p.instance.XPluginEnable()
+            except Exception as exc:
+                raise RuntimeError(f"[Runner] XPluginEnable failed for {p.name}: {exc!r}")
+        xp.log("[Runner] === XPluginEnable END ===")
 
         # Main loop
-        setattr(xp, "_running", True)
-        start_time = time.time()
+        xp.log("[Runner] === Main loop BEGIN ===")
+        self._running = True
+        start = time.time()
         target_dt = 1.0 / 60.0
 
-        while getattr(xp, "_running", False):
+        while self._running:
             frame_start = time.time()
 
-            if not self.run_frame():
-                setattr(xp, "_running", False)
+            if not self.run_one_frame():
+                xp.log("[Runner] Main loop exit: GUI closed")
                 break
 
-            if self.run_time >= 0 and (time.time() - start_time) >= self.run_time:
-                setattr(xp, "_running", False)
+            if 0 <= self.run_time <= (time.time() - start):
+                xp.log("[Runner] Main loop exit: run_time reached")
                 break
 
             elapsed = time.time() - frame_start
@@ -246,25 +215,27 @@ class FakeXPRunner:
             if remaining > 0:
                 time.sleep(remaining)
 
+        xp.log("[Runner] === Main loop END ===")
+
         # Disable
-        for plugin in plugins:
+        xp.log("[Runner] === XPluginDisable BEGIN ===")
+        for p in plugins:
             try:
-                plugin.XPluginDisable()
-            except Exception as e:
-                xp.log(f"[Runner] XPluginDisable error: {e}")
+                xp.log(f"[Runner] → XPluginDisable: {p.name}")
+                p.instance.XPluginDisable()
+            except Exception as exc:
+                raise RuntimeError(f"[Runner] XPluginDisable failed for {p.name}: {exc!r}")
+        xp.log("[Runner] === XPluginDisable END ===")
 
         # Stop
-        for plugin in plugins:
+        xp.log("[Runner] === XPluginStop BEGIN ===")
+        for p in plugins:
             try:
-                plugin.XPluginStop()
-            except Exception as e:
-                xp.log(f"[Runner] XPluginStop error: {e}")
+                xp.log(f"[Runner] → XPluginStop: {p.name}")
+                p.instance.XPluginStop()
+            except Exception as exc:
+                raise RuntimeError(f"[Runner] XPluginStop failed for {p.name}: {exc!r}")
+        xp.log("[Runner] === XPluginStop END ===")
 
         if self.enable_gui:
-            self.shutdown_dpg()
-
-    # ----------------------------------------------------------------------
-    # End loop
-    # ----------------------------------------------------------------------
-    def end_run_loop(self) -> None:
-        setattr(self.xp, "_running", False)
+            self.shutdown_gui()
