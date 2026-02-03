@@ -1,10 +1,16 @@
-from __future__ import annotations
-from typing import Any, Callable, Dict, List, Optional
+# simless/libs/fake_xp_widget.py
+# ===========================================================================
+# FakeXPWidgets — strongly typed DearPyGui-backed widget emulation
+# ===========================================================================
 
-import dearpygui.dearpygui as dpg
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
+
 
 # ---------------------------------------------------------------------------
-# Widget classes (production-accurate names)
+# Widget class constants (mirroring X-Plane)
 # ---------------------------------------------------------------------------
 xpWidgetClass_MainWindow = 1
 xpWidgetClass_SubWindow = 2
@@ -13,65 +19,54 @@ xpWidgetClass_TextField = 4
 xpWidgetClass_Caption = 5
 xpWidgetClass_ScrollBar = 6
 xpWidgetClass_ListBox = 7
-xpWidgetClass_Custom = 99
+xpWidgetClass_Custom = 8
 
 # ---------------------------------------------------------------------------
-# Widget properties (production-accurate names)
+# Widget property constants
 # ---------------------------------------------------------------------------
 Property_ScrollValue = 2001
 Property_ScrollMin = 2002
 Property_ScrollMax = 2003
-Property_ListItems = 2101
-Property_ListSelection = 2102
+Property_ListItems = 2004
+Property_ListSelection = 2005
 
 # ---------------------------------------------------------------------------
-# Widget messages (added for production parity)
+# Widget message constants
 # ---------------------------------------------------------------------------
-Msg_MouseDown = 6
-Msg_MouseDrag = 8
-Msg_MouseUp = 7
-Msg_KeyPress = 12
+Msg_MouseDown = 3001
+Msg_MouseDrag = 3002
+Msg_MouseUp = 3003
+Msg_KeyPress = 3004
 
+
+# ---------------------------------------------------------------------------
+# Widget handle + info
+# ---------------------------------------------------------------------------
+
+WidgetHandle = int
+
+
+@dataclass(slots=True)
+class FakeWidget:
+    wid: WidgetHandle
+    widget_class: int
+    descriptor: str
+    parent: Optional[WidgetHandle]
+    visible: bool
+    geometry: Tuple[int, int, int, int]
+    properties: Dict[int, Any]
+    callbacks: List[Callable[[int, int, Any, Any], Any]]
+
+
+# ---------------------------------------------------------------------------
+# FakeXPWidgets implementation
+# ---------------------------------------------------------------------------
 
 class FakeXPWidgets:
-    """
-    Dear PyGui–backed XPWidget simulation layer.
-
-    IMPORTANT:
-      • This version performs NO DearPyGui lifecycle management.
-      • FakeXP owns DPG context + viewport.
-      • This class only creates DPG items and updates them.
-    """
-
-    def __init__(self, fakexp) -> None:
-        self.xp = fakexp
-
-        # Core widget state
-        self._widgets: Dict[int, Dict[str, Any]] = {}
-        self._callbacks: Dict[int, List[Callable[..., None]]] = {}
-        self._next_id: int = 1
-
-        # Parent/child relationships
-        self._parent: Dict[int, int] = {}
-
-        # Widget metadata
-        self._descriptor: Dict[int, str] = {}
-        self._classes: Dict[int, int] = {}
-        self._dpg_ids: Dict[int, int] = {}
-
-        # Focus + stacking
-        self._focused_widget: Optional[int] = None
-        self._z_order: List[int] = []
-
-        # Default parent window for orphan widgets
-        self._default_main_window: Optional[int] = None
-
-    # ----------------------------------------------------------------------
-    # Debug helper
-    # ----------------------------------------------------------------------
-    def _dbg(self, msg: str) -> None:
-        if getattr(self.xp, "debug_enabled", False):
-            print(msg)
+    def __init__(self, xp) -> None:
+        self.xp = xp
+        self._widgets: Dict[WidgetHandle, FakeWidget] = {}
+        self._next_wid: int = 1
 
     # ----------------------------------------------------------------------
     # Widget creation
@@ -85,290 +80,210 @@ class FakeXPWidgets:
         visible: int,
         descriptor: str,
         is_root: int,
-        parent: int,
+        container: int,
         widget_class: int,
-    ) -> int:
+    ) -> WidgetHandle:
+        wid = self._next_wid
+        self._next_wid += 1
 
-        wid = self._next_id
-        self._next_id += 1
-
-        x = left
-        y = top
-        w = right - left
-        h = top - bottom
-
-        self._dbg(
-            f"createWidget: wid={wid}, class={widget_class}, desc={descriptor!r}, "
-            f"parent={parent}, geom={(x, y, w, h)}"
+        widget = FakeWidget(
+            wid=wid,
+            widget_class=widget_class,
+            descriptor=descriptor,
+            parent=container if container != 0 else None,
+            visible=bool(visible),
+            geometry=(left, top, right, bottom),
+            properties={},
+            callbacks=[],
         )
+        self._widgets[wid] = widget
 
-        self._widgets[wid] = {
-            "geometry": (x, y, w, h),
-            "properties": {},
-            "visible": bool(visible),
-        }
+        if hasattr(self.xp, "_dbg"):
+            self.xp._dbg(
+                f"createWidget: wid={wid}, class={widget_class}, desc='{descriptor}', "
+                f"parent={container}, geom=({left}, {top}, {right-left}, {top-bottom})"
+            )  # type: ignore
 
-        self._parent[wid] = parent
-        self._descriptor[wid] = descriptor
-        self._classes[wid] = widget_class
+        return wid
 
-        # New widgets appear on top
-        self._z_order.append(wid)
-
+    def createCustomWidget(
+        self,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+        visible: int,
+        descriptor: str,
+        is_root: int,
+        container: int,
+        callback: Callable[[int, int, Any, Any], Any],
+    ) -> WidgetHandle:
+        wid = self.createWidget(
+            left, top, right, bottom, visible, descriptor, is_root, container, xpWidgetClass_Custom
+        )
+        self.addWidgetCallback(wid, callback)
         return wid
 
     # ----------------------------------------------------------------------
     # Widget destruction
     # ----------------------------------------------------------------------
-    def killWidget(self, wid: int) -> None:
-        self._dbg(f"killWidget: wid={wid}")
-
-        self._widgets.pop(wid, None)
-        self._callbacks.pop(wid, None)
-        self._parent.pop(wid, None)
-        self._descriptor.pop(wid, None)
-        self._classes.pop(wid, None)
-
-        dpg_id = self._dpg_ids.pop(wid, None)
-        if dpg_id is not None and dpg.does_item_exist(dpg_id):
-            dpg.delete_item(dpg_id)
-
-        if wid in self._z_order:
-            self._z_order.remove(wid)
-
-        if self._focused_widget == wid:
-            self._focused_widget = None
+    def killWidget(self, wid: WidgetHandle) -> None:
+        if wid in self._widgets:
+            del self._widgets[wid]
+            if hasattr(self.xp, "_dbg"):
+                self.xp._dbg(f"killWidget: wid={wid}")  # type: ignore
 
     # ----------------------------------------------------------------------
     # Geometry
     # ----------------------------------------------------------------------
-    def setWidgetGeometry(self, wid: int, x: int, y: int, w: int, h: int) -> None:
-        self._dbg(f"setWidgetGeometry: wid={wid}, geom={(x, y, w, h)}")
-        if wid in self._widgets:
-            self._widgets[wid]["geometry"] = (x, y, w, h)
-            if wid in self._dpg_ids:
-                dpg.configure_item(self._dpg_ids[wid], pos=(x, y), width=w, height=h)
+    def setWidgetGeometry(
+        self, wid: WidgetHandle, left: int, top: int, right: int, bottom: int
+    ) -> None:
+        widget = self._widgets.get(wid)
+        if widget:
+            widget.geometry = (left, top, right, bottom)
 
-    def getWidgetGeometry(self, wid: int):
-        return self._widgets.get(wid, {}).get("geometry", (0, 0, 0, 0))
+    def getWidgetGeometry(self, wid: WidgetHandle) -> Tuple[int, int, int, int]:
+        widget = self._widgets.get(wid)
+        return widget.geometry if widget else (0, 0, 0, 0)
 
-    def getWidgetExposedGeometry(self, wid: int):
+    def getWidgetExposedGeometry(self, wid: WidgetHandle) -> Tuple[int, int, int, int]:
         return self.getWidgetGeometry(wid)
 
     # ----------------------------------------------------------------------
     # Visibility
     # ----------------------------------------------------------------------
-    def showWidget(self, wid: int) -> None:
-        self._dbg(f"showWidget: wid={wid}")
-        if wid in self._widgets:
-            self._widgets[wid]["visible"] = True
-            if wid in self._dpg_ids:
-                dpg.configure_item(self._dpg_ids[wid], show=True)
+    def showWidget(self, wid: WidgetHandle) -> None:
+        widget = self._widgets.get(wid)
+        if widget:
+            widget.visible = True
 
-    def hideWidget(self, wid: int) -> None:
-        self._dbg(f"hideWidget: wid={wid}")
-        if wid in self._widgets:
-            self._widgets[wid]["visible"] = False
-            if wid in self._dpg_ids:
-                dpg.configure_item(self._dpg_ids[wid], show=False)
+    def hideWidget(self, wid: WidgetHandle) -> None:
+        widget = self._widgets.get(wid)
+        if widget:
+            widget.visible = False
 
-    def isWidgetVisible(self, wid: int) -> bool:
-        return bool(self._widgets.get(wid, {}).get("visible", False))
+    def isWidgetVisible(self, wid: WidgetHandle) -> bool:
+        widget = self._widgets.get(wid)
+        return bool(widget.visible) if widget else False
 
-    # ----------------------------------------------------------------------
-    # Stacking order
-    # ----------------------------------------------------------------------
-    def isWidgetInFront(self, wid: int) -> bool:
-        return self._z_order and self._z_order[-1] == wid
+    def isWidgetInFront(self, wid: WidgetHandle) -> bool:
+        return True
 
-    def bringWidgetToFront(self, wid: int) -> None:
-        self._dbg(f"bringWidgetToFront: wid={wid}")
-        if wid in self._z_order:
-            self._z_order.remove(wid)
-            self._z_order.append(wid)
+    def bringWidgetToFront(self, wid: WidgetHandle) -> None:
+        pass
 
-    def pushWidgetBehind(self, wid: int) -> None:
-        self._dbg(f"pushWidgetBehind: wid={wid}")
-        if wid in self._z_order:
-            self._z_order.remove(wid)
-            self._z_order.insert(0, wid)
+    def pushWidgetBehind(self, wid: WidgetHandle) -> None:
+        pass
 
     # ----------------------------------------------------------------------
-    # Parent / class / descriptor
+    # Parent / class
     # ----------------------------------------------------------------------
-    def getParentWidget(self, wid: int) -> int:
-        return self._parent.get(wid, 0)
+    def getParentWidget(self, wid: WidgetHandle) -> Optional[WidgetHandle]:
+        widget = self._widgets.get(wid)
+        return widget.parent if widget else None
 
-    def getWidgetClass(self, wid: int) -> int:
-        return self._classes.get(wid, xpWidgetClass_Custom)
+    def getWidgetClass(self, wid: WidgetHandle) -> int:
+        widget = self._widgets.get(wid)
+        return widget.widget_class if widget else 0
 
-    def getWidgetUnderlyingWindow(self, wid: int) -> int:
+    def getWidgetUnderlyingWindow(self, wid: WidgetHandle) -> int:
         return 0
 
-    def setWidgetDescriptor(self, wid: int, text: str) -> None:
-        self._dbg(f"setWidgetDescriptor: wid={wid}, text={text!r}")
-        self._descriptor[wid] = text
-        if wid in self._dpg_ids:
-            dpg.configure_item(self._dpg_ids[wid], label=text)
-
-    def getWidgetDescriptor(self, wid: int) -> str:
-        return self._descriptor.get(wid, "")
-
     # ----------------------------------------------------------------------
-    # Properties
+    # Descriptor
     # ----------------------------------------------------------------------
-    def setWidgetProperty(self, wid: int, prop: int, value: Any) -> None:
-        self._dbg(f"setWidgetProperty: wid={wid}, prop={prop}, value={value}")
-        if wid in self._widgets:
-            self._widgets[wid]["properties"][prop] = value
+    def setWidgetDescriptor(self, wid: WidgetHandle, desc: str) -> None:
+        widget = self._widgets.get(wid)
+        if widget:
+            widget.descriptor = desc
 
-    def getWidgetProperty(self, wid: int, prop: int) -> Any:
-        return self._widgets.get(wid, {}).get("properties", {}).get(prop)
+    def getWidgetDescriptor(self, wid: WidgetHandle) -> str:
+        widget = self._widgets.get(wid)
+        return widget.descriptor if widget else ""
 
     # ----------------------------------------------------------------------
-    # Callbacks + messages
+    # Hit testing
     # ----------------------------------------------------------------------
-    def addWidgetCallback(self, wid: int, callback: Callable[..., None]) -> None:
-        self._dbg(f"addWidgetCallback: wid={wid}")
-        self._callbacks.setdefault(wid, []).append(callback)
-
-    def sendWidgetMessage(self, wid: int, msg: int, param1: Any, param2: Any) -> None:
-        self._dbg(f"sendWidgetMessage: wid={wid}, msg={msg}")
-        for cb in self._callbacks.get(wid, []):
-            try:
-                cb(wid, msg, param1, param2)
-            except Exception as e:
-                self._dbg(f"  callback error: {e!r}")
-
-    # ----------------------------------------------------------------------
-    # Hit-testing
-    # ----------------------------------------------------------------------
-    def getWidgetForLocation(self, x, y):
-        for wid in reversed(self._z_order):
-            w = self._widgets.get(wid)
-            if not w or not w["visible"]:
-                continue
-            gx, gy, gw, gh = w["geometry"]
-            if gx <= x <= gx + gw and gy <= y <= gy + gh:
-                self._dbg(f"getWidgetForLocation: hit wid={wid}")
+    def getWidgetForLocation(self, x: int, y: int) -> Optional[WidgetHandle]:
+        for wid, widget in self._widgets.items():
+            left, top, right, bottom = widget.geometry
+            if left <= x <= right and bottom <= y <= top:
                 return wid
-        self._dbg("getWidgetForLocation: no hit")
         return None
 
     # ----------------------------------------------------------------------
     # Keyboard focus
     # ----------------------------------------------------------------------
-    def setKeyboardFocus(self, wid):
-        self._dbg(f"setKeyboardFocus: wid={wid}")
-        self._focused_widget = wid
+    def setKeyboardFocus(self, wid: Optional[WidgetHandle]) -> None:
+        setattr(self.xp, "_keyboard_focus", wid)
 
-    def loseKeyboardFocus(self, wid):
-        if self._focused_widget == wid:
-            self._dbg(f"loseKeyboardFocus: wid={wid}")
-            self._focused_widget = None
+    def loseKeyboardFocus(self) -> None:
+        setattr(self.xp, "_keyboard_focus", None)
 
     # ----------------------------------------------------------------------
-    # Parent resolution
+    # Properties
     # ----------------------------------------------------------------------
-    def _resolve_dpg_parent(self, wid: int) -> int:
-        wclass = self.getWidgetClass(wid)
-        parent = self._parent.get(wid, 0)
+    def setWidgetProperty(self, wid: WidgetHandle, prop: int, value: Any) -> None:
+        widget = self._widgets.get(wid)
+        if widget:
+            widget.properties[prop] = value
 
-        self._dbg(
-            f"_resolve_dpg_parent: wid={wid}, class={wclass}, xp_parent={parent}"
-        )
-
-        if wclass == xpWidgetClass_MainWindow:
-            return 0
-
-        if parent == 0:
-            if self._default_main_window is None:
-                self._default_main_window = dpg.add_window(label="FakeXP Default Window")
-            return self._default_main_window
-
-        if parent not in self._dpg_ids:
-            self._ensure_dpg_item_for_widget(parent)
-
-        return self._dpg_ids[parent]
+    def getWidgetProperty(self, wid: WidgetHandle, prop: int) -> Any:
+        widget = self._widgets.get(wid)
+        return widget.properties.get(prop) if widget else None
 
     # ----------------------------------------------------------------------
-    # XPWidget → DPG mapping
+    # Callbacks
     # ----------------------------------------------------------------------
-    def _ensure_dpg_item_for_widget(self, wid: int) -> None:
-        if wid in self._dpg_ids:
-            return
+    def addWidgetCallback(
+        self,
+        wid: WidgetHandle,
+        callback: Callable[[int, int, Any, Any], Any],
+    ) -> None:
+        widget = self._widgets.get(wid)
+        if widget:
+            widget.callbacks.append(callback)
 
-        wclass = self.getWidgetClass(wid)
-        desc = self.getWidgetDescriptor(wid)
-        x, y, w, h = self.getWidgetGeometry(wid)
-
-        dpg_parent = self._resolve_dpg_parent(wid)
-
-        try:
-            if wclass == xpWidgetClass_MainWindow:
-                dpg_id = dpg.add_window(
-                    label=desc or "Window",
-                    pos=(x, y),
-                    width=w,
-                    height=h,
-                )
-
-            elif wclass == xpWidgetClass_Caption:
-                dpg_id = dpg.add_text(desc or "", parent=dpg_parent)
-
-            elif wclass == xpWidgetClass_ScrollBar:
-                min_v = self.getWidgetProperty(wid, Property_ScrollMin) or -50
-                max_v = self.getWidgetProperty(wid, Property_ScrollMax) or 50
-                cur_v = self.getWidgetProperty(wid, Property_ScrollValue) or 0
-
-                def _on_slider(sender, app_data, user_data):
-                    self.setWidgetProperty(
-                        user_data, Property_ScrollValue, int(app_data)
-                    )
-                    self.sendWidgetMessage(user_data, Msg_MouseDrag, None, None)
-
-                dpg_id = dpg.add_slider_int(
-                    label=desc or "Slider",
-                    min_value=int(min_v),
-                    max_value=int(max_v),
-                    default_value=int(cur_v),
-                    width=w,
-                    parent=dpg_parent,
-                    callback=_on_slider,
-                    user_data=wid,
-                )
-
-            elif wclass == xpWidgetClass_Button:
-
-                def _on_button(sender, app_data, user_data):
-                    self.sendWidgetMessage(user_data, Msg_MouseDown, None, None)
-
-                dpg_id = dpg.add_button(
-                    label=desc or "Button",
-                    width=w,
-                    height=h,
-                    parent=dpg_parent,
-                    callback=_on_button,
-                    user_data=wid,
-                )
-
-            else:
-                dpg_id = dpg.add_text(desc or f"Widget {wid}", parent=dpg_parent)
-
-        except Exception as e:
-            self._dbg(
-                f"DPG creation FAILED for wid={wid}, class={wclass}, error={e!r}"
-            )
-            raise
-
-        self._dpg_ids[wid] = dpg_id
+    def sendWidgetMessage(
+        self,
+        wid: WidgetHandle,
+        msg: int,
+        param1: Any = None,
+        param2: Any = None,
+    ) -> None:
+        widget = self._widgets.get(wid)
+        if widget:
+            for cb in widget.callbacks:
+                try:
+                    cb(wid, msg, param1, param2)
+                except Exception as e:
+                    if hasattr(self.xp, "_dbg"):
+                        self.xp._dbg(f"Widget callback error: {e}")  # type: ignore
 
     # ----------------------------------------------------------------------
-    # Rendering (passive — FakeXP drives the frame pump)
+    # Rendering (DearPyGui-backed)
     # ----------------------------------------------------------------------
-    def _render_widgets(self) -> None:
-        for wid in self._widgets.keys():
-            self._ensure_dpg_item_for_widget(wid)
-
     def _draw_all_widgets(self) -> None:
-        self._render_widgets()
+        for widget in self._widgets.values():
+            if not widget.visible:
+                continue
+
+            left, top, right, bottom = widget.geometry
+            width = right - left
+            height = top - bottom
+
+            # Minimal DearPyGui rendering
+            import dearpygui.dearpygui as dpg
+
+            with dpg.window(
+                label=widget.descriptor,
+                pos=(left, bottom),
+                width=width,
+                height=height,
+                no_title_bar=True,
+                no_resize=True,
+                no_move=True,
+                no_close=True,
+            ):
+                pass

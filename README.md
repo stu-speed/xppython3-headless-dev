@@ -53,7 +53,7 @@ xplane-python-dev/
 │       └── fake_xp_utilities.py         Misc XPLM utility shims  
 │  
 ├── stubs/  
-│   └── XPPython3/                       XPPython3 .pyi stub files  
+│   └── XPPython3/                       XPPython3 .pyi and python modules
 │  
 ├── tests/                               Unit tests for FakeXP + runner  
 │  

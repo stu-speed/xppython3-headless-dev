@@ -8,13 +8,6 @@ from simless.libs.fake_xp_runner import FakeXPRunner
 
 
 def register_inline_plugin(name: str, plugin_obj) -> str:
-    """
-    Creates an inline module with a PythonInterface class,
-    registers it in sys.modules, and returns the module name.
-
-    This mirrors XPPython3's plugin loading model while avoiding
-    filesystem dependencies for deterministic unit testing.
-    """
     module = types.ModuleType(name)
 
     class PythonInterface:
@@ -38,15 +31,11 @@ def register_inline_plugin(name: str, plugin_obj) -> str:
     return name
 
 
+# ===========================================================================
+# Dummy promotion test
+# ===========================================================================
+
 class DummyPlugin:
-    """
-    Plugin that triggers dummy promotion by accessing a missing dataref.
-    Validates:
-      - Dummy handle creation
-      - Promotion on first accessor call
-      - Correct default value
-      - Lifecycle ordering
-    """
     def __init__(self):
         self.calls = []
         self.handle = None
@@ -59,10 +48,13 @@ class DummyPlugin:
     def XPluginEnable(self):
         self.calls.append("enable")
 
-        # Step 1: request a missing dataref → returns dummy handle
+        # Step 1: request a missing dataref → returns dummy FakeRefInfo
         self.handle = XPPython3.xp.findDataRef("sim/test/auto_float")
 
-        # Step 2: use the dummy handle → triggers FakeXP._promote_dummy
+        # BEFORE promotion, dummy=True
+        assert self.handle.dummy is True
+
+        # Step 2: use the dummy handle → triggers promotion
         self.promoted_value = XPPython3.xp.getDataf(self.handle)
 
         return 1
@@ -75,13 +67,6 @@ class DummyPlugin:
 
 
 def test_dummy_promotion():
-    """
-    Ensures:
-      - findDataRef returns a dummy handle
-      - getDataf(dummy) triggers FakeXP._promote_dummy
-      - Real dataref is created with correct default value
-      - Lifecycle phases run in correct order
-    """
     xp = FakeXP(debug=True)
     runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
     xp._runner = runner
@@ -96,14 +81,13 @@ def test_dummy_promotion():
     # Lifecycle assertions
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
-    # Dummy handle should be negative
-    assert plugin.handle < 0
-
     # Dataref should now exist in the real table
     assert "sim/test/auto_float" in xp._handles
 
     real_handle = xp._handles["sim/test/auto_float"]
-    assert real_handle >= 1
+
+    # After promotion, dummy=False
+    assert real_handle.dummy is False
 
     # Default value for float promotion is 0.0
     assert xp._values[real_handle] == 0.0
@@ -113,20 +97,13 @@ def test_dummy_promotion():
 # ===========================================================================
 # Cross-plugin read/write test
 # ===========================================================================
+
 def test_cross_plugin_read_write():
-    """
-    Validates that:
-      - Plugin A promotes + writes a dataref
-      - Plugin B reads the same dataref
-      - Both see the same real handle and value
-      - Promotion happens exactly once
-    """
     xp = FakeXP(debug=True)
     runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
-    # Writer plugin
     class WriterPlugin:
         def __init__(self):
             self.calls = []
@@ -147,7 +124,6 @@ def test_cross_plugin_read_write():
         def XPluginStop(self):
             self.calls.append("stop")
 
-    # Reader plugin
     class ReaderPlugin:
         def __init__(self):
             self.calls = []
@@ -179,37 +155,26 @@ def test_cross_plugin_read_write():
     runner.load_plugin(mod_reader)
     runner.run_plugin_lifecycle()
 
-    # Both plugins ran
     assert writer.calls == ["start", "enable", "disable", "stop"]
     assert reader.calls == ["start", "enable", "disable", "stop"]
 
-    # Dataref exists
     assert "sim/test/shared" in xp._handles
     real = xp._handles["sim/test/shared"]
 
-    # Writer wrote the value
     assert xp._values[real] == 123.456
-
-    # Reader saw the same value
     assert reader.value == 123.456
 
 
 # ===========================================================================
-# Managed dataref test
+# Managed dataref notification test
 # ===========================================================================
+
 def test_managed_dataref_notification():
-    """
-    Validates:
-      - FakeXP notifies DataRefManager on promotion
-      - Manager receives exactly one notification
-      - Value is written correctly
-    """
     xp = FakeXP(debug=True)
     runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
-    # Mock DataRefManager
     class MockManager:
         def __init__(self):
             self.notifications = []
@@ -220,7 +185,6 @@ def test_managed_dataref_notification():
     manager = MockManager()
     xp._dataref_manager = manager
 
-    # Plugin that writes to a missing dataref
     class Plugin:
         def __init__(self):
             self.calls = []
@@ -247,38 +211,27 @@ def test_managed_dataref_notification():
     runner.load_plugin(mod)
     runner.run_plugin_lifecycle()
 
-    # Lifecycle ran
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
-    # Dataref exists
     assert "sim/test/managed" in xp._handles
     real = xp._handles["sim/test/managed"]
 
-    # Manager was notified exactly once
-    assert manager.notifications == [real]
+    # Promotion + write = 2 notifications
+    assert manager.notifications == [real, real]
 
-    # Value was written correctly
     assert xp._values[real] == 9.99
 
 
-def test_example_gui():
-    """
-    Validates:
-      - GUI widgets are created correctly (window, caption, slider, button)
-      - Slider callback updates the promoted OAT dataref
-      - Quit button callback closes the window and ends the run loop
-      - Plugin lifecycle ordering is correct
-      - Dummy promotion for OAT dataref occurs as expected
-    """
+# ===========================================================================
+# GUI example test
+# ===========================================================================
 
+def test_example_gui():
     xp = FakeXP(debug=True)
     runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
-    # ----------------------------------------------------------------------
-    # Inline plugin that registers the OAT dataref but does NOT move slider
-    # ----------------------------------------------------------------------
     class DevOTAGUIPlugin:
         def __init__(self):
             self.calls = []
@@ -294,16 +247,14 @@ def test_example_gui():
         def XPluginEnable(self):
             self.calls.append("enable")
 
-            # Explicit dataref registration (no promotion needed)
             self.oat_handle = xp.registerDataRef(
                 "sim/cockpit2/temperature/outside_air_temp_degc",
-                xpType=2,   # float
+                xpType=2,
                 isArray=False,
                 writable=True,
                 defaultValue=0.0,
             )
 
-            # Build GUI (no interaction required)
             self.win = xp.createWidget(100, 500, 500, 100, 1,
                                        "Simless OTA Control", 1, 0,
                                        xp.WidgetClass_MainWindow)
@@ -338,30 +289,17 @@ def test_example_gui():
     plugin = DevOTAGUIPlugin()
     module_name = register_inline_plugin("dev_ota_gui_register_plugin", plugin)
 
-    # ----------------------------------------------------------------------
-    # Run plugin lifecycle
-    # ----------------------------------------------------------------------
     runner.load_plugin(module_name)
     runner.run_plugin_lifecycle()
 
-    # ----------------------------------------------------------------------
-    # Assertions
-    # ----------------------------------------------------------------------
-
-    # Lifecycle ordering
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
-    # Dataref exists (registered explicitly)
     assert "sim/cockpit2/temperature/outside_air_temp_degc" in xp._handles
     real = xp._handles["sim/cockpit2/temperature/outside_air_temp_degc"]
 
-    # Default value is correct
     assert xp._values[real] == 0.0
 
-    # GUI widgets were created during enable
-    # (we check creation indirectly via widget IDs)
     assert plugin.slider is not None
     assert plugin.quit_btn is not None
 
-    # Window is destroyed during disable (plugin logic)
     assert plugin.win is None

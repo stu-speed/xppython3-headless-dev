@@ -1,8 +1,17 @@
+# simless/libs/fake_xp_graphics.py
+# ===========================================================================
+# FakeXPGraphics — strongly typed DearPyGui-backed drawing layer
+# ===========================================================================
+
 from __future__ import annotations
-from typing import Callable, List
+
 import time
+from typing import Callable, List, Optional, Tuple
 
 import dearpygui.dearpygui as dpg
+
+
+ColorRGBA = Tuple[int, int, int, int]
 
 
 class FakeXPGraphics:
@@ -11,15 +20,15 @@ class FakeXPGraphics:
 
     Responsibilities:
       • Maintain a persistent overlay for draw calls
-      • Provide simple text/number drawing
+      • Provide simple text/number/shape drawing primitives
       • Provide optional debug HUD (FPS, draw calls, callback count)
       • Execute plugin draw callbacks each frame
       • Integrate with FakeXP debug logging
 
     NOTE:
-      This class assumes DearPyGui context + viewport are already
-      created and running by the harness (e.g. run_ota_gui.py).
-      It does NOT touch DPG lifecycle at all.
+      This class assumes DearPyGui context + viewport are already created
+      and running by the harness (FakeXPRunner). It does NOT manage DPG
+      lifecycle itself.
     """
 
     def __init__(self, fakexp) -> None:
@@ -29,7 +38,7 @@ class FakeXPGraphics:
         self._draw_callbacks: List[Callable[[], None]] = []
 
         # Overlay window
-        self._overlay: int | None = None
+        self._overlay: Optional[int] = None
         self._overlay_created: bool = False
 
         # Debug HUD state
@@ -38,9 +47,9 @@ class FakeXPGraphics:
         self._fps: float = 0.0
         self._draw_count: int = 0
 
-    # ======================================================================
+    # ----------------------------------------------------------------------
     # Public API
-    # ======================================================================
+    # ----------------------------------------------------------------------
     def enableDebug(self, enabled: bool) -> None:
         self._debug_enabled = enabled
         self.xp._dbg(f"[Graphics] Debug HUD {'enabled' if enabled else 'disabled'}")
@@ -72,9 +81,9 @@ class FakeXPGraphics:
         if self._debug_enabled:
             self._draw_debug_hud()
 
-    # ======================================================================
+    # ----------------------------------------------------------------------
     # Drawing primitives
-    # ======================================================================
+    # ----------------------------------------------------------------------
     def drawString(self, x: int, y: int, text: str) -> None:
         self._ensure_overlay()
         self._draw_count += 1
@@ -84,24 +93,44 @@ class FakeXPGraphics:
     def drawNumber(self, x: int, y: int, number: float) -> None:
         self.drawString(x, y, f"{number}")
 
-    def drawLine(self, x1: int, y1: int, x2: int, y2: int, color=(255, 255, 255, 255)) -> None:
+    def drawLine(
+        self,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        color: ColorRGBA = (255, 255, 255, 255),
+    ) -> None:
         self._ensure_overlay()
         self._draw_count += 1
         dpg.draw_line((x1, y1), (x2, y2), color=color, parent=self._overlay)
 
-    def drawRect(self, x: int, y: int, w: int, h: int, color=(255, 255, 255, 255)) -> None:
+    def drawRect(
+        self,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        color: ColorRGBA = (255, 255, 255, 255),
+    ) -> None:
         self._ensure_overlay()
         self._draw_count += 1
         dpg.draw_rectangle((x, y), (x + w, y + h), color=color, parent=self._overlay)
 
-    def drawCircle(self, x: int, y: int, radius: int, color=(255, 255, 255, 255)) -> None:
+    def drawCircle(
+        self,
+        x: int,
+        y: int,
+        radius: int,
+        color: ColorRGBA = (255, 255, 255, 255),
+    ) -> None:
         self._ensure_overlay()
         self._draw_count += 1
         dpg.draw_circle((x, y), radius, color=color, parent=self._overlay)
 
-    # ======================================================================
+    # ----------------------------------------------------------------------
     # Private helpers
-    # ======================================================================
+    # ----------------------------------------------------------------------
     def _ensure_overlay(self) -> None:
         """Create the persistent overlay window once."""
         if self._overlay_created and dpg.does_item_exist(self._overlay):
