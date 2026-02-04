@@ -17,10 +17,12 @@ class PythonInterface:
         # Widget IDs
         self.win = None
         self.slider = None
+        self.bus_slider = None
         self.quit_btn = None
 
         # Dataref handle
         self.oat_handle = None
+        self.bus_handle = None
 
         return self.Name, self.Sig, self.Desc
 
@@ -31,6 +33,12 @@ class PythonInterface:
         self.oat_handle = xp.findDataRef("sim/cockpit2/temperature/outside_air_temp_degc")
         if self.oat_handle is None:
             xp.log("[dev_ota_gui] ERROR: Missing OAT dataref")
+            return 0
+
+        # Resolve Bus Volts dataref
+        self.bus_handle = xp.findDataRef("sim/cockpit2/electrical/bus_volts[1]")
+        if self.bus_handle is None:
+            xp.log("[dev_ota_gui] ERROR: Missing bus_volts[1] dataref")
             return 0
 
         # ---------------- GUI BUILD ----------------
@@ -65,6 +73,30 @@ class PythonInterface:
         xp.setWidgetProperty(self.slider, xp.Property_ScrollMax, 50)
         xp.setWidgetProperty(self.slider, xp.Property_ScrollValue, 0)
 
+        # --- Bus Volts Caption ---
+        xp.createWidget(
+            120, 360, 480, 330,
+            1,
+            "Adjust Bus Voltage (Volts)",
+            0,
+            self.win,
+            xp.WidgetClass_Caption,
+        )
+
+        # --- Bus Volts Slider ---
+        self.bus_slider = xp.createWidget(
+            120, 320, 480, 280,
+            1,
+            "Bus Volts Slider",
+            0,
+            self.win,
+            xp.WidgetClass_ScrollBar,
+        )
+
+        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollMin, 0)
+        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollMax, 30)
+        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollValue, 24)
+
         self.quit_btn = xp.createWidget(
             120, 340, 260, 300,
             1,
@@ -83,6 +115,15 @@ class PythonInterface:
             xp.log(f"[dev_ota_gui] OAT override → {temp}°C")
 
         xp.addWidgetCallback(self.slider, slider_callback)
+
+        def bus_slider_callback(wid: int, msg: int, p1: Any, p2: Any):
+            if msg != xp.Msg_MouseDrag:
+                return
+            volts = xp.getWidgetProperty(self.bus_slider, xp.Property_ScrollValue)
+            xp.setDataf(self.bus_handle, float(volts))
+            xp.log(f"[dev_ota_gui] Bus Volts override → {volts}V")
+
+        xp.addWidgetCallback(self.bus_slider, bus_slider_callback)
 
         def quit_callback(wid, msg, p1, p2):
             if msg == xp.Msg_MouseDown:

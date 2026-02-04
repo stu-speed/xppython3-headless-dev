@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Sequence
+from typing import Any, Callable, Dict, List, Sequence, Tuple, Optional, Union
 
 import XPPython3
 
@@ -59,19 +59,14 @@ from simless.libs.fake_xp_widget import (
 from simless.libs.fake_xp_graphics import FakeXPGraphics
 
 
-# ===========================================================================
-# FakeRefInfo — strongly typed handle for simless mode
-# ===========================================================================
+class ArrayElementHandle:
+    def __init__(self, base: str, index: int):
+        self.base = base
+        self.index = index
 
-@dataclass(slots=True, unsafe_hash=True)
+
+@dataclass(slots=True)
 class FakeDataRefInfo:
-    """
-    Strongly-typed DataRef representation for FakeXP.
-
-    This object *is* the handle in simless mode and structurally matches
-    FakeRefInfoProto used in XPInterface typing.
-    """
-
     path: str
     xp_type: int | None
     writable: bool
@@ -81,45 +76,42 @@ class FakeDataRefInfo:
     value: Any = None
 
 
-# ===========================================================================
-# FakeXP implementation
-# ===========================================================================
-
 class FakeXP:
     def __init__(self, *, debug: bool = False) -> None:
         self.debug_enabled: bool = debug
 
-        # DataRef tables
+        # DataRef tables — keyed strictly by path
         self._handles: Dict[str, FakeDataRefInfo] = {}
         self._dummy_refs: Dict[str, FakeDataRefInfo] = {}
-        self._values: Dict[FakeDataRefInfo, Any] = {}
+        self._values: Dict[str, Any] = {}
+        self._datarefs: dict[str, dict] = {}
 
         # Runner reference (set by FakeXPRunner)
         self._runner: FakeXPRunner | None = None
 
-        # Optional DataRefManager (bound via bind_dataref_manager)
+        # Optional DataRefManager
         self._dataref_manager: DataRefManager | None = None
 
         # Plugin list (populated by runner)
         self._plugins: List[Any] = []
 
-        # Disabled plugin tracking (used by runner to skip callbacks)
+        # Disabled plugin tracking
         self._disabled_plugins: set[int] = set()
 
         # Widgets + Graphics
         self.widgets = FakeXPWidgets(self)
         self.graphics = FakeXPGraphics(self)
 
-        # Sim time (advanced by runner)
+        # Sim time
         self._sim_time: float = 0.0
 
-        # Loop control (used by runner)
+        # Loop control
         self._running: bool = False
 
         # Keyboard focus
         self._keyboard_focus: int | None = None
 
-        # Bind xp.* into XPPython3 (always overwrite for test isolation)
+        # Bind xp.* into XPPython3
         XPPython3.xp = self
         xp = XPPython3.xp
 
@@ -146,63 +138,32 @@ class FakeXP:
         xp.Msg_MouseUp = Msg_MouseUp
         xp.Msg_KeyPress = Msg_KeyPress
 
-        # Widget API passthrough (xp.*)
-        xp.createWidget = self.widgets.createWidget
-        xp.killWidget = self.widgets.killWidget
-        xp.setWidgetGeometry = self.widgets.setWidgetGeometry
-        xp.getWidgetGeometry = self.widgets.getWidgetGeometry
-        xp.getWidgetExposedGeometry = self.widgets.getWidgetExposedGeometry
-        xp.showWidget = self.widgets.showWidget
-        xp.hideWidget = self.widgets.hideWidget
-        xp.isWidgetVisible = self.widgets.isWidgetVisible
-        xp.isWidgetInFront = self.widgets.isWidgetInFront
-        xp.bringWidgetToFront = self.widgets.bringWidgetToFront
-        xp.pushWidgetBehind = self.widgets.pushWidgetBehind
-        xp.getParentWidget = self.widgets.getParentWidget
-        xp.getWidgetClass = self.widgets.getWidgetClass
-        xp.getWidgetUnderlyingWindow = self.widgets.getWidgetUnderlyingWindow
-        xp.setWidgetDescriptor = self.widgets.setWidgetDescriptor
-        xp.getWidgetDescriptor = self.widgets.getWidgetDescriptor
-        xp.getWidgetForLocation = self.widgets.getWidgetForLocation
-        xp.setKeyboardFocus = self.widgets.setKeyboardFocus
-        xp.loseKeyboardFocus = self.widgets.loseKeyboardFocus
-        xp.setWidgetProperty = self.widgets.setWidgetProperty
-        xp.getWidgetProperty = self.widgets.getWidgetProperty
-        xp.addWidgetCallback = self.widgets.addWidgetCallback
-        xp.sendWidgetMessage = self.widgets.sendWidgetMessage
+        # Bind widget API to xp.* and to self.*
+        widget_api = [
+            "createWidget", "killWidget", "setWidgetGeometry", "getWidgetGeometry",
+            "getWidgetExposedGeometry", "showWidget", "hideWidget", "isWidgetVisible",
+            "isWidgetInFront", "bringWidgetToFront", "pushWidgetBehind",
+            "getParentWidget", "getWidgetClass", "getWidgetUnderlyingWindow",
+            "setWidgetDescriptor", "getWidgetDescriptor", "getWidgetForLocation",
+            "setKeyboardFocus", "loseKeyboardFocus", "setWidgetProperty",
+            "getWidgetProperty", "addWidgetCallback", "sendWidgetMessage",
+        ]
 
-        # Also expose widget API on the FakeXP instance itself
-        self.createWidget = self.widgets.createWidget
-        self.killWidget = self.widgets.killWidget
-        self.setWidgetGeometry = self.widgets.setWidgetGeometry
-        self.getWidgetGeometry = self.widgets.getWidgetGeometry
-        self.getWidgetExposedGeometry = self.widgets.getWidgetExposedGeometry
-        self.showWidget = self.widgets.showWidget
-        self.hideWidget = self.widgets.hideWidget
-        self.isWidgetVisible = self.widgets.isWidgetVisible
-        self.isWidgetInFront = self.widgets.isWidgetInFront
-        self.bringWidgetToFront = self.widgets.bringWidgetToFront
-        self.pushWidgetBehind = self.widgets.pushWidgetBehind
-        self.getParentWidget = self.widgets.getParentWidget
-        self.getWidgetClass = self.widgets.getWidgetClass
-        self.getWidgetUnderlyingWindow = self.widgets.getWidgetUnderlyingWindow
-        self.setWidgetDescriptor = self.widgets.setWidgetDescriptor
-        self.getWidgetDescriptor = self.widgets.getWidgetDescriptor
-        self.getWidgetForLocation = self.widgets.getWidgetForLocation
-        self.setKeyboardFocus = self.widgets.setKeyboardFocus
-        self.loseKeyboardFocus = self.widgets.loseKeyboardFocus
-        self.setWidgetProperty = self.widgets.setWidgetProperty
-        self.getWidgetProperty = self.widgets.getWidgetProperty
-        self.addWidgetCallback = self.widgets.addWidgetCallback
-        self.sendWidgetMessage = self.widgets.sendWidgetMessage
+        for name in widget_api:
+            fn = getattr(self.widgets, name)
+            setattr(xp, name, fn)
+            setattr(self, name, fn)
 
     # ----------------------------------------------------------------------
-    # Debug / lifecycle headless methods
+    # Debug helper
     # ----------------------------------------------------------------------
     def _dbg(self, msg: str) -> None:
         if self.debug_enabled:
             print(f"[FakeXP] {msg}")
 
+    # ----------------------------------------------------------------------
+    # Lifecycle helpers
+    # ----------------------------------------------------------------------
     def _run_plugin_lifecycle(self, plugin_names, *, debug=False, enable_gui=True, run_time=-1.0):
         runner = FakeXPRunner(self, enable_gui=enable_gui, run_time=run_time, debug=debug)
         runner.run_plugin_lifecycle(plugin_names)
@@ -215,12 +176,11 @@ class FakeXP:
     # Base xp methods
     # ----------------------------------------------------------------------
     def getMyID(self) -> int:
-        # For now, a single-plugin ID; can be extended to real IDs later.
         return 1
 
     def disablePlugin(self, plugin_id: int) -> None:
         self._disabled_plugins.add(plugin_id)
-        self._dbg(f"disablePlugin({plugin_id}) → marked disabled")
+        self._dbg(f"disablePlugin({plugin_id})")
 
     def log(self, msg: str) -> None:
         print(f"[FakeXP] {msg}")
@@ -232,59 +192,70 @@ class FakeXP:
         self._dataref_manager = mgr
 
     # ----------------------------------------------------------------------
-    # Optional simless auto-registration
+    # Simless auto-registration
     # ----------------------------------------------------------------------
-    def fake_register_dataref(
-        self,
-        path: str,
-        default: Any | None,
-        writable: bool | None,
-    ) -> FakeDataRefInfo:
+    def fake_register_dataref(self, path: str, default: Any | None, writable: bool | None) -> FakeDataRefInfo:
         if path in self._handles:
             return self._handles[path]
 
+        is_array = isinstance(default, (list, tuple, bytes, bytearray))
         ref = FakeDataRefInfo(
             path=path,
             xp_type=None,
             writable=bool(writable) if writable is not None else True,
-            is_array=isinstance(default, (list, bytes, bytearray)),
+            is_array=is_array,
             size=0,
             dummy=False,
             value=default,
         )
+
         self._handles[path] = ref
-        self._values[ref] = default
-        self._dbg(f"[FakeXP] fake_register_dataref('{path}')")
+        self._values[path] = default
+        self._dbg(f"fake_register_dataref('{path}')")
         return ref
 
     # ----------------------------------------------------------------------
-    # DataRef API (FakeXP-only, always FakeRefInfo)
+    # DataRef API
     # ----------------------------------------------------------------------
-    def findDataRef(self, path: str) -> FakeDataRefInfo | None:
-        if path in self._handles:
-            return self._handles[path]
+    def findDataRef(self, name: str):
+        # Detect array element syntax: dataref[index]
+        if "[" in name and name.endswith("]"):
+            base, idx_str = name[:-1].split("[", 1)
+            index = int(idx_str)
 
-        if path in self._dummy_refs:
-            return self._dummy_refs[path]
+            # Promote base dataref as array if needed
+            if base not in self._datarefs:
+                # Default to float array of size 8 (X‑Plane uses fixed sizes)
+                self._datarefs[base] = {
+                    "type": "float_array",
+                    "values": [0.0] * 8,
+                }
+                self._dbg(f"Promoted '{base}' to real float array")
 
-        ref = FakeDataRefInfo(
-            path=path,
-            xp_type=None,
-            writable=False,
-            is_array=False,
-            size=0,
-            dummy=True,
-            value=None,
-        )
-        self._dummy_refs[path] = ref
-        self._dbg(f"[Strict] findDataRef('{path}') -> dummy")
-        return ref
+            return ArrayElementHandle(base, index)
+
+        # Scalar fallback → create uninitialized string dataref
+        if name not in self._handles:
+            ref = FakeDataRefInfo(
+                path=name,
+                xp_type=1,  # string dataref
+                writable=True,
+                is_array=False,
+                size=0,
+                dummy=True,  # <-- uninitialized
+                value="<<<uninitialized>>>",
+            )
+            self._handles[name] = ref
+            self._values[name] = "<<<uninitialized>>>"
+            self._dbg(f"Promoted '{name}' to dummy scalar dataref")
+
+        return self._handles[name]
 
     def getDataRefInfo(self, handle: FakeDataRefInfo) -> FakeDataRefInfo:
         return handle
 
     # ----------------------------------------------------------------------
-    # Promotion
+    # Promotion helpers
     # ----------------------------------------------------------------------
     def _promote(
         self,
@@ -293,19 +264,18 @@ class FakeXP:
         is_array: bool,
         default: Any,
     ) -> FakeDataRefInfo:
-        if not ref.dummy:
-            return ref
-
+        """Convert a dummy ref into a real one."""
         ref.dummy = False
         ref.xp_type = xp_type
         ref.is_array = is_array
         ref.value = default
 
+        # Move from dummy → real
         self._dummy_refs.pop(ref.path, None)
         self._handles[ref.path] = ref
-        self._values[ref] = default
+        self._values[ref.path] = default
 
-        self._dbg(f"[Strict] Promoted '{ref.path}' to real dataref")
+        self._dbg(f"Promoted '{ref.path}' to real dataref")
 
         if self._dataref_manager is not None:
             self._dataref_manager._notify_dataref_changed(ref)
@@ -319,105 +289,259 @@ class FakeXP:
         is_array: bool,
         default: Any,
     ) -> FakeDataRefInfo:
+        """Ensure a handle is real; promote if needed."""
         if handle.dummy:
             return self._promote(handle, xp_type, is_array, default)
         return handle
 
+    def _resolve_value_ref(
+            self,
+            handle: Union[FakeDataRefInfo, ArrayElementHandle, str],
+    ) -> Tuple[FakeDataRefInfo, Optional[int]]:
+        """
+        Returns (ref, index) where:
+          - ref is a FakeDataRefInfo (never a string)
+          - index is None for scalar refs
+          - index is an int for array-element refs
+        """
+
+        # ------------------------------------------------------------
+        # ARRAY ELEMENT
+        # ------------------------------------------------------------
+        if isinstance(handle, ArrayElementHandle):
+            base = handle.base
+            index = handle.index
+
+            # Ensure base dataref handle exists
+            if base not in self._handles:
+                ref = FakeDataRefInfo(
+                    path=base,
+                    xp_type=16,  # XPLMType_FloatArray
+                    writable=True,
+                    is_array=True,
+                    size=0,
+                    dummy=True,
+                    value=[],  # float array default
+                )
+                self._handles[base] = ref
+                self._values[base] = []
+            else:
+                ref = self._handles[base]
+
+            # Promote if needed
+            ref = self._ensure_real(
+                ref,
+                xp_type=16,  # float array
+                is_array=True,
+                default=[],
+            )
+            return ref, index
+
+        # ------------------------------------------------------------
+        # SCALAR
+        # ------------------------------------------------------------
+        # Convert scalar handle (string path) → FakeDataRefInfo
+        if isinstance(handle, str):
+            if handle not in self._handles:
+                ref = FakeDataRefInfo(
+                    path=handle,
+                    xp_type=1,  # XPLMType_Data (string)
+                    writable=True,
+                    is_array=False,
+                    size=0,
+                    dummy=True,
+                    value="<<<uninitialized>>>",
+                )
+                self._handles[handle] = ref
+                self._values[handle] = "<<<uninitialized>>>"
+            else:
+                ref = self._handles[handle]
+        else:
+            # Already a FakeDataRefInfo
+            ref = handle
+
+        # Promote if needed
+        ref = self._ensure_real(
+            ref,
+            xp_type=1,  # string dataref
+            is_array=False,
+            default="<<<uninitialized>>>",
+        )
+        return ref, None
+
     # ----------------------------------------------------------------------
     # Datai
     # ----------------------------------------------------------------------
-    def getDatai(self, handle: FakeDataRefInfo) -> int:
-        ref = self._ensure_real(handle, xp_type=1, is_array=False, default=0)
-        return int(self._values.get(ref, ref.value or 0))
+    def getDatai(self, handle):
+        ref, idx = self._resolve_value_ref(handle)
 
-    def setDatai(self, handle: FakeDataRefInfo, value: int) -> None:
-        ref = self._ensure_real(handle, xp_type=1, is_array=False, default=int(value))
+        if idx is not None:
+            arr = self._values.get(ref.path, ref.value or [])
+            return int(arr[idx])
+
+        value = self._values.get(ref.path, ref.value or 0)
+        return int(value)
+
+    def setDatai(self, handle, value):
+        ref, idx = self._resolve_value_ref(handle)
         v = int(value)
-        ref.value = v
-        self._values[ref] = v
-        if self._dataref_manager is not None:
+
+        if idx is not None:
+            arr = self._values.setdefault(ref.path, ref.value or [])
+            arr[idx] = v
+        else:
+            ref.value = v
+            self._values[ref.path] = v
+
+        if self._dataref_manager:
             self._dataref_manager._notify_dataref_changed(ref)
 
     # ----------------------------------------------------------------------
     # Dataf
     # ----------------------------------------------------------------------
-    def getDataf(self, handle: FakeDataRefInfo) -> float:
-        ref = self._ensure_real(handle, xp_type=2, is_array=False, default=0.0)
-        return float(self._values.get(ref, ref.value or 0.0))
+    def getDataf(self, handle):
+        ref, idx = self._resolve_value_ref(handle)
 
-    def setDataf(self, handle: FakeDataRefInfo, value: float) -> None:
-        ref = self._ensure_real(handle, xp_type=2, is_array=False, default=float(value))
+        if idx is not None:
+            arr = self._values.get(ref.path, ref.value or [])
+            return float(arr[idx])
+
+        value = self._values.get(ref.path, ref.value or 0.0)
+        return float(value)
+
+    def setDataf(self, handle, value):
+        ref, idx = self._resolve_value_ref(handle)
         v = float(value)
-        ref.value = v
-        self._values[ref] = v
-        if self._dataref_manager is not None:
+
+        if idx is not None:
+            arr = self._values.setdefault(ref.path, ref.value or [])
+            arr[idx] = v
+        else:
+            ref.value = v
+            self._values[ref.path] = v
+
+        if self._dataref_manager:
             self._dataref_manager._notify_dataref_changed(ref)
 
     # ----------------------------------------------------------------------
     # Datad (double mapped to float)
     # ----------------------------------------------------------------------
-    def getDatad(self, handle: FakeDataRefInfo) -> float:
-        ref = self._ensure_real(handle, xp_type=4, is_array=False, default=0.0)
-        return float(self._values.get(ref, ref.value or 0.0))
+    def getDatad(self, handle):
+        ref, idx = self._resolve_value_ref(handle)
 
-    def setDatad(self, handle: FakeDataRefInfo, value: float) -> None:
-        ref = self._ensure_real(handle, xp_type=4, is_array=False, default=float(value))
+        if idx is not None:
+            arr = self._values.get(ref.path, ref.value or [])
+            return float(arr[idx])
+
+        value = self._values.get(ref.path, ref.value or 0.0)
+        return float(value)
+
+    def setDatad(self, handle, value):
+        ref, idx = self._resolve_value_ref(handle)
         v = float(value)
-        ref.value = v
-        self._values[ref] = v
-        if self._dataref_manager is not None:
+
+        if idx is not None:
+            arr = self._values.setdefault(ref.path, ref.value or [])
+            arr[idx] = v
+        else:
+            ref.value = v
+            self._values[ref.path] = v
+
+        if self._dataref_manager:
             self._dataref_manager._notify_dataref_changed(ref)
 
     # ----------------------------------------------------------------------
     # Datavf (float array)
     # ----------------------------------------------------------------------
-    def getDatavf(self, handle: FakeDataRefInfo) -> List[float]:
-        ref = self._ensure_real(handle, xp_type=8, is_array=True, default=[])
-        arr = self._values.get(ref, ref.value or [])
+    def getDatavf(self, handle):
+        ref, idx = self._resolve_value_ref(handle)
+        arr = self._values.get(ref.path, ref.value or [])
+
+        if idx is not None:
+            return [float(arr[idx])]
+
         return [float(v) for v in arr]
 
-    def setDatavf(self, handle: FakeDataRefInfo, values: Sequence[float]) -> None:
-        ref = self._ensure_real(handle, xp_type=8, is_array=True, default=list(values))
-        arr = [float(v) for v in values]
+    def setDatavf(self, handle, values):
+        ref, idx = self._resolve_value_ref(handle)
+        arr = self._values.setdefault(ref.path, ref.value or [])
+
+        if idx is not None:
+            arr[idx] = float(values[0])
+        else:
+            arr[:] = [float(v) for v in values]
+
         ref.value = arr
-        self._values[ref] = arr
-        if self._dataref_manager is not None:
+
+        if self._dataref_manager:
             self._dataref_manager._notify_dataref_changed(ref)
 
     # ----------------------------------------------------------------------
     # Datavi (int array)
     # ----------------------------------------------------------------------
-    def getDatavi(self, handle: FakeDataRefInfo) -> List[int]:
-        ref = self._ensure_real(handle, xp_type=16, is_array=True, default=[])
-        arr = self._values.get(ref, ref.value or [])
+    def getDatavi(self, handle):
+        ref, idx = self._resolve_value_ref(handle)
+        arr = self._values.get(ref.path, ref.value or [])
+
+        if idx is not None:
+            return [int(arr[idx])]
+
         return [int(v) for v in arr]
 
-    def setDatavi(self, handle: FakeDataRefInfo, values: Sequence[int]) -> None:
-        ref = self._ensure_real(handle, xp_type=16, is_array=True, default=list(values))
-        arr = [int(v) for v in values]
+    def setDatavi(self, handle, values):
+        ref, idx = self._resolve_value_ref(handle)
+        arr = self._values.setdefault(ref.path, ref.value or [])
+
+        if idx is not None:
+            arr[idx] = int(values[0])
+        else:
+            arr[:] = [int(v) for v in values]
+
         ref.value = arr
-        self._values[ref] = arr
-        if self._dataref_manager is not None:
+
+        if self._dataref_manager:
             self._dataref_manager._notify_dataref_changed(ref)
 
     # ----------------------------------------------------------------------
     # Datab (byte array)
     # ----------------------------------------------------------------------
-    def getDatab(self, handle: FakeDataRefInfo) -> bytes:
-        ref = self._ensure_real(handle, xp_type=32, is_array=True, default=b"")
-        data = self._values.get(ref, ref.value or b"")
-        return bytes(data)
+    def getDatab(self, handle):
+        ref, idx = self._resolve_value_ref(handle)
+        arr = self._values.get(ref.path, ref.value or b"")
 
-    def setDatab(self, handle: FakeDataRefInfo, data: bytes) -> None:
-        ref = self._ensure_real(handle, xp_type=32, is_array=True, default=bytes(data))
-        b = bytes(data)
-        ref.value = b
-        self._values[ref] = b
-        if self._dataref_manager is not None:
+        if isinstance(arr, (bytes, bytearray)):
+            if idx is not None:
+                return bytes([arr[idx]])
+            return bytes(arr)
+
+        # fallback: list of ints
+        if idx is not None:
+            return bytes([arr[idx]])
+
+        return bytes(arr)
+
+    def setDatab(self, handle, values):
+        ref, idx = self._resolve_value_ref(handle)
+
+        if isinstance(values, (bytes, bytearray)):
+            arr = bytearray(values)
+        else:
+            arr = bytearray(int(v) & 0xFF for v in values)
+
+        store = self._values.setdefault(ref.path, ref.value or bytearray())
+
+        if idx is not None:
+            store[idx] = arr[0]
+        else:
+            store[:] = arr
+
+        ref.value = store
+
+        if self._dataref_manager:
             self._dataref_manager._notify_dataref_changed(ref)
 
     # ----------------------------------------------------------------------
-    # registerDataRef (explicit registration, used by runner/tests)
+    # registerDataRef
     # ----------------------------------------------------------------------
     def registerDataRef(
         self,
@@ -427,6 +551,9 @@ class FakeXP:
         writable: bool,
         defaultValue: Any,
     ) -> FakeDataRefInfo:
+        if path in self._handles:
+            return self._handles[path]
+
         ref = FakeDataRefInfo(
             path=path,
             xp_type=xpType,
@@ -436,10 +563,10 @@ class FakeXP:
             dummy=False,
             value=defaultValue,
         )
-        self._handles[path] = ref
-        self._values[ref] = defaultValue
 
-        self._dbg(f"[Strict] registerDataRef('{path}') -> real")
+        self._handles[path] = ref
+        self._values[path] = defaultValue
+        self._dbg(f"registerDataRef('{path}')")
 
         if self._dataref_manager is not None:
             self._dataref_manager._notify_dataref_changed(ref)
@@ -447,122 +574,457 @@ class FakeXP:
         return ref
 
     # ----------------------------------------------------------------------
-    # Flightloop API — XPPython3-accurate, forwarded to runner
+    # Time
     # ----------------------------------------------------------------------
-    def registerFlightLoopCallback(self, cb: Callable[[float], float], interval: float) -> None:
-        """
-        Legacy XPPython3 API:
-            xp.registerFlightLoopCallback(cb, interval)
-        """
-        if self._runner is None:
-            raise RuntimeError("registerFlightLoopCallback called before runner is attached")
-        plugin_id = self.getMyID()
-        self._runner.register_legacy_flightloop(plugin_id, cb, interval)
+    def getElapsedTime(self) -> float:
+        return self._sim_time
 
-    def createFlightLoop(self, params) -> dict:
-        """
-        Modern XPPython3 API:
-            handle = xp.createFlightLoop(params)
-        """
+    # ----------------------------------------------------------------------
+    # FlightLoop API
+    # ----------------------------------------------------------------------
+    def registerFlightLoopCallback(self, cb: Callable, interval: float) -> None:
         if self._runner is None:
-            raise RuntimeError("createFlightLoop called before runner is attached")
-        plugin_id = self.getMyID()
-        return self._runner.create_modern_flightloop(plugin_id, params)
+            raise RuntimeError("No FakeXPRunner attached")
+        self._runner.register_legacy_flightloop(1, cb, interval)
 
-    def scheduleFlightLoop(self, handle: dict, interval: float, relative: int) -> None:
-        """
-        Modern XPPython3 API:
-            xp.scheduleFlightLoop(handle, interval, relative)
-        """
+    def createFlightLoop(self, params: Dict[str, Any]) -> Any:
         if self._runner is None:
-            raise RuntimeError("scheduleFlightLoop called before runner is attached")
+            raise RuntimeError("No FakeXPRunner attached")
+        return self._runner.create_modern_flightloop(1, params)
+
+    def scheduleFlightLoop(self, handle: Any, interval: float, relative: int) -> None:
+        if self._runner is None:
+            raise RuntimeError("No FakeXPRunner attached")
         self._runner.schedule_modern_flightloop(handle, interval, relative)
 
     # ----------------------------------------------------------------------
-    # XPWidgets (extra helpers)
+    # Graphics API
     # ----------------------------------------------------------------------
-    def getWidgetWithFocus(self) -> int | None:
-        return self._keyboard_focus
+    def registerDrawCallback(self, cb: Callable, phase: int, wantsBefore: int) -> None:
+        self.graphics.registerDrawCallback(cb, phase, wantsBefore)
 
-    # ----------------------------------------------------------------------
-    # XPLMGraphics (delegated to FakeXPGraphics)
-    # ----------------------------------------------------------------------
-    def registerDrawCallback(
-        self,
-        callback: Callable[[int, int, Any], int],
-        phase: int,
-        before: int,
-        refcon: Any,
-    ) -> None:
-        def wrapper() -> None:
-            callback(0, 0, refcon)
+    def unregisterDrawCallback(self, cb: Callable, phase: int, wantsBefore: int) -> None:
+        self.graphics.unregisterDrawCallback(cb, phase, wantsBefore)
 
-        self.graphics.registerDrawCallback(wrapper)
+    def drawString(self, color: Sequence[float], x: int, y: int, text: str, wordWrapWidth: int) -> None:
+        self.graphics.drawString(color, x, y, text, wordWrapWidth)
 
-    def unregisterDrawCallback(
-        self,
-        callback: Callable[[int, int, Any], int],
-        phase: int,
-        before: int,
-        refcon: Any,
-    ) -> None:
-        # No-op for now; tests don't require unregister semantics
-        return None
-
-    def drawString(
-        self,
-        x: float,
-        y: float,
-        text: str,
-        color: tuple[float, float, float, float] | None = None,
-    ) -> None:
-        self.graphics.drawString(int(x), int(y), text)
-
-    def drawNumber(
-        self,
-        x: float,
-        y: float,
-        number: float,
-        decimals: int = 2,
-    ) -> None:
-        fmt = f"{{:.{decimals}f}}"
-        self.graphics.drawString(int(x), int(y), fmt.format(number))
+    def drawNumber(self, color: Sequence[float], x: int, y: int, number: float, digits: int, decimals: int) -> None:
+        self.graphics.drawNumber(color, x, y, number, digits, decimals)
 
     def setGraphicsState(
         self,
         fog: int,
         lighting: int,
         alpha: int,
+        smooth: int,
+        texUnits: int,
+        texMode: int,
         depth: int,
-        depth_write: int,
-        cull: int,
     ) -> None:
-        # No-op in simless mode
-        return None
+        self.graphics.setGraphicsState(fog, lighting, alpha, smooth, texUnits, texMode, depth)
 
-    def bindTexture2d(self, texture_id: int, unit: int) -> None:
-        # No-op in simless mode
-        return None
+    def bindTexture2d(self, textureID: int, unit: int) -> None:
+        self.graphics.bindTexture2d(textureID, unit)
 
     def generateTextureNumbers(self, count: int) -> List[int]:
-        # Dummy texture IDs
-        return list(range(1, count + 1))
+        return self.graphics.generateTextureNumbers(count)
 
-    def deleteTexture(self, texture_id: int) -> None:
-        # No-op in simless mode
+    def deleteTexture(self, textureID: int) -> None:
+        self.graphics.deleteTexture(textureID)
+
+    # ----------------------------------------------------------------------
+    # Keyboard focus
+    # ----------------------------------------------------------------------
+    def getKeyboardFocus(self) -> int | None:
+        return self._keyboard_focus
+
+    def setKeyboardFocus(self, widget_id: int) -> None:
+        self._keyboard_focus = widget_id
+        self._dbg(f"Keyboard focus → {widget_id}")
+
+    def loseKeyboardFocus(self, widget_id: int) -> None:
+        if self._keyboard_focus == widget_id:
+            self._keyboard_focus = None
+            self._dbg("Keyboard focus cleared")
+
+    # ----------------------------------------------------------------------
+    # Window / screen geometry
+    # ----------------------------------------------------------------------
+    def getScreenSize(self) -> tuple[int, int]:
+        return self.graphics.getScreenSize()
+
+    def getMouseLocation(self) -> tuple[int, int]:
+        return self.graphics.getMouseLocation()
+
+    # ----------------------------------------------------------------------
+    # Menu stubs (not implemented)
+    # ----------------------------------------------------------------------
+    def createMenu(self, *args, **kwargs):
+        self._dbg("createMenu() called — stub")
+        return 1
+
+    def appendMenuItem(self, *args, **kwargs):
+        self._dbg("appendMenuItem() called — stub")
+
+    def appendMenuSeparator(self, *args, **kwargs):
+        self._dbg("appendMenuSeparator() called — stub")
+
+    def setMenuItemName(self, *args, **kwargs):
+        self._dbg("setMenuItemName() called — stub")
+
+    def getMenuItemName(self, *args, **kwargs):
+        self._dbg("getMenuItemName() called — stub")
+        return ""
+
+    def getMenuItemInfo(self, *args, **kwargs):
+        self._dbg("getMenuItemInfo() called — stub")
         return None
 
     # ----------------------------------------------------------------------
-    # XPLMUtilities
+    # Utilities
     # ----------------------------------------------------------------------
-    def speakString(self, text: str) -> None:
-        self._dbg(f"[Speak] {text}")
-
-    def getSystemPath(self) -> str:
-        return os.getcwd() + os.sep
-
-    def getPrefsPath(self) -> str:
-        return os.getcwd() + os.sep
-
     def getDirectorySeparator(self) -> str:
         return os.sep
+
+    def getSystemPath(self) -> str:
+        return os.getcwd()
+
+    def getPrefsPath(self) -> str:
+        return os.getcwd()
+
+    def getPluginPrefsPath(self) -> str:
+        return os.getcwd()
+
+    def getPluginInfo(self, plugin_id: int) -> tuple[str, str, str, str]:
+        return ("Fake Plugin", "1.0", "FakeXP", "Simless")
+
+    # ----------------------------------------------------------------------
+    # Command stubs
+    # ----------------------------------------------------------------------
+    def findCommand(self, name: str) -> int:
+        self._dbg(f"findCommand('{name}') → stub")
+        return 1
+
+    def commandOnce(self, cmd: int) -> None:
+        self._dbg(f"commandOnce({cmd}) → stub")
+
+    def commandBegin(self, cmd: int) -> None:
+        self._dbg(f"commandBegin({cmd}) → stub")
+
+    def commandEnd(self, cmd: int) -> None:
+        self._dbg(f"commandEnd({cmd}) → stub")
+
+    # ----------------------------------------------------------------------
+    # Hotkey stubs
+    # ----------------------------------------------------------------------
+    def registerHotKey(self, *args, **kwargs):
+        self._dbg("registerHotKey() → stub")
+        return 1
+
+    def unregisterHotKey(self, *args, **kwargs):
+        self._dbg("unregisterHotKey() → stub")
+
+    # ----------------------------------------------------------------------
+    # Misc stubs
+    # ----------------------------------------------------------------------
+    def getVirtualKeyDescription(self, vkey: int) -> str:
+        return f"Key {vkey}"
+
+    def getMouseState(self) -> tuple[int, int]:
+        return self.graphics.getMouseState()
+
+    def getDatabLength(self, handle: FakeDataRefInfo) -> int:
+        ref = self._ensure_real(handle, xp_type=32, is_array=True, default=b"")
+        arr = self._values.get(ref.path, ref.value or b"")
+        return len(arr)
+
+    def getDatavfLength(self, handle: FakeDataRefInfo) -> int:
+        ref = self._ensure_real(handle, xp_type=8, is_array=True, default=[])
+        arr = self._values.get(ref.path, ref.value or [])
+        return len(arr)
+
+    def getDataviLength(self, handle: FakeDataRefInfo) -> int:
+        ref = self._ensure_real(handle, xp_type=16, is_array=True, default=[])
+        arr = self._values.get(ref.path, ref.value or [])
+        return len(arr)
+
+    # ----------------------------------------------------------------------
+    # Plugin enable/disable
+    # ----------------------------------------------------------------------
+    def isPluginEnabled(self, plugin_id: int) -> bool:
+        return plugin_id not in self._disabled_plugins
+
+    def enablePlugin(self, plugin_id: int) -> None:
+        if plugin_id in self._disabled_plugins:
+            self._disabled_plugins.remove(plugin_id)
+        self._dbg(f"enablePlugin({plugin_id})")
+
+    # ----------------------------------------------------------------------
+    # Message stubs
+    # ----------------------------------------------------------------------
+    def sendMessageToPlugin(self, plugin_id: int, msg: int, param: Any) -> None:
+        self._dbg(f"sendMessageToPlugin({plugin_id}, {msg}, {param}) → stub")
+
+    # ----------------------------------------------------------------------
+    # Cursor stubs
+    # ----------------------------------------------------------------------
+    def setCursor(self, cursor_type: int) -> None:
+        self._dbg(f"setCursor({cursor_type}) → stub")
+
+    # ----------------------------------------------------------------------
+    # Drawing phases
+    # ----------------------------------------------------------------------
+    def getCycleNumber(self) -> int:
+        return int(self._sim_time * 60)
+
+    # ----------------------------------------------------------------------
+    # Misc xp.* compatibility helpers
+    # ----------------------------------------------------------------------
+    def getPluginID(self) -> int:
+        return 1
+
+    def getNthPlugin(self, index: int) -> int:
+        return 1
+
+    def getPluginName(self, plugin_id: int) -> str:
+        return "FakeXP"
+
+    def getPluginSignature(self, plugin_id: int) -> str:
+        return "fake.xp"
+
+    def getPluginDescription(self, plugin_id: int) -> str:
+        return "Simless FakeXP Environment"
+
+    # ----------------------------------------------------------------------
+    # Path helpers
+    # ----------------------------------------------------------------------
+    def getSystemDirectory(self) -> str:
+        return os.getcwd()
+
+    def getPrefsDirectory(self) -> str:
+        return os.getcwd()
+
+    def getPluginDirectory(self) -> str:
+        return os.getcwd()
+
+    # ----------------------------------------------------------------------
+    # Sound stubs
+    # ----------------------------------------------------------------------
+    def playSound(self, sound_id: int) -> None:
+        self._dbg(f"playSound({sound_id}) → stub")
+
+    # ----------------------------------------------------------------------
+    # Clipboard stubs
+    # ----------------------------------------------------------------------
+    def getClipboardText(self) -> str:
+        self._dbg("getClipboardText() → stub")
+        return ""
+
+    def setClipboardText(self, text: str) -> None:
+        self._dbg(f"setClipboardText('{text}') → stub")
+
+    # ----------------------------------------------------------------------
+    # Joystick stubs
+    # ----------------------------------------------------------------------
+    def countJoystickButtons(self) -> int:
+        return 0
+
+    def getJoystickButtonAssignment(self, button: int) -> tuple[str, str]:
+        return ("", "")
+
+    def setJoystickButtonAssignment(self, button: int, desc: str, cmd: str) -> None:
+        self._dbg(f"setJoystickButtonAssignment({button}, '{desc}', '{cmd}') → stub")
+
+    # ----------------------------------------------------------------------
+    # Mouse stubs
+    # ----------------------------------------------------------------------
+    def getMouseWheel(self) -> int:
+        return 0
+
+    def setMouseWheel(self, delta: int) -> None:
+        self._dbg(f"setMouseWheel({delta}) → stub")
+
+    # ----------------------------------------------------------------------
+    # DataRef change notifications
+    # ----------------------------------------------------------------------
+    def _notify_dataref_changed(self, ref: FakeDataRefInfo) -> None:
+        if self._dataref_manager is not None:
+            self._dataref_manager._notify_dataref_changed(ref)
+
+    # ----------------------------------------------------------------------
+    # Runner attachment
+    # ----------------------------------------------------------------------
+    def _attach_runner(self, runner: FakeXPRunner) -> None:
+        self._runner = runner
+
+    # ----------------------------------------------------------------------
+    # Sim time update (called by runner)
+    # ----------------------------------------------------------------------
+    def _update_sim_time(self, dt: float) -> None:
+        self._sim_time += dt
+
+    # ----------------------------------------------------------------------
+    # Plugin loading helpers
+    # ----------------------------------------------------------------------
+    def _load_plugins(self, plugin_names: list[str]) -> None:
+        self._plugins = plugin_names
+
+    def getNthPluginInfo(self, index: int) -> tuple[str, str, str, str]:
+        return ("FakeXP", "1.0", "fake.xp", "Simless FakeXP Environment")
+
+    # ----------------------------------------------------------------------
+    # Logging helpers
+    # ----------------------------------------------------------------------
+    def debugString(self, msg: str) -> None:
+        self._dbg(msg)
+
+    # ----------------------------------------------------------------------
+    # Menu click stub
+    # ----------------------------------------------------------------------
+    def handleMenuClick(self, menu_id: int, item: int) -> None:
+        self._dbg(f"handleMenuClick({menu_id}, {item}) → stub")
+
+    # ----------------------------------------------------------------------
+    # Cursor visibility stubs
+    # ----------------------------------------------------------------------
+    def hideCursor(self) -> None:
+        self._dbg("hideCursor() → stub")
+
+    def showCursor(self) -> None:
+        self._dbg("showCursor() → stub")
+
+    # ----------------------------------------------------------------------
+    # DataRef type queries
+    # ----------------------------------------------------------------------
+    def getDataRefTypes(self, handle: FakeDataRefInfo) -> int:
+        if handle.dummy:
+            return 0
+        return handle.xp_type or 0
+
+    # ----------------------------------------------------------------------
+    # DataRef writable query
+    # ----------------------------------------------------------------------
+    def canWriteDataRef(self, handle: FakeDataRefInfo) -> bool:
+        return bool(handle.writable)
+
+    # ----------------------------------------------------------------------
+    # DataRef existence helpers
+    # ----------------------------------------------------------------------
+    def dataRefExists(self, path: str) -> bool:
+        return path in self._handles or path in self._dummy_refs
+
+    # ----------------------------------------------------------------------
+    # DataRef value helpers
+    # ----------------------------------------------------------------------
+    def getDataRefValue(self, path: str) -> Any:
+        ref = self.findDataRef(path)
+        if ref is None:
+            return None
+        return self._values.get(ref.path, ref.value)
+
+    def setDataRefValue(self, path: str, value: Any) -> None:
+        ref = self.findDataRef(path)
+        if ref is None:
+            return
+
+        # Determine type
+        if isinstance(value, float):
+            self.setDataf(ref, value)
+        elif isinstance(value, int):
+            self.setDatai(ref, value)
+        elif isinstance(value, (bytes, bytearray)):
+            self.setDatab(ref, value)
+        elif isinstance(value, Sequence):
+            # Heuristic: float array if any float present
+            if any(isinstance(v, float) for v in value):
+                self.setDatavf(ref, value)
+            else:
+                self.setDatavi(ref, value)
+        else:
+            # Fallback: store raw
+            ref = self._ensure_real(ref, xp_type=0, is_array=False, default=value)
+            ref.value = value
+            self._values[ref.path] = value
+
+        if self._dataref_manager is not None:
+            self._dataref_manager._notify_dataref_changed(ref)
+
+    # ----------------------------------------------------------------------
+    # Plugin reload stub
+    # ----------------------------------------------------------------------
+    def reloadPlugin(self, plugin_id: int) -> None:
+        self._dbg(f"reloadPlugin({plugin_id}) → stub")
+
+    # ----------------------------------------------------------------------
+    # Command creation stub
+    # ----------------------------------------------------------------------
+    def createCommand(self, name: str, description: str) -> int:
+        self._dbg(f"createCommand('{name}', '{description}') → stub")
+        return 1
+
+    # ----------------------------------------------------------------------
+    # Command handler stubs
+    # ----------------------------------------------------------------------
+    def registerCommandHandler(self, cmd: int, handler: Callable, before: int, refcon: Any) -> None:
+        self._dbg(f"registerCommandHandler({cmd}) → stub")
+
+    def unregisterCommandHandler(self, cmd: int, handler: Callable, before: int, refcon: Any) -> None:
+        self._dbg(f"unregisterCommandHandler({cmd}) → stub")
+
+    # ----------------------------------------------------------------------
+    # Cursor state stubs
+    # ----------------------------------------------------------------------
+    def getCursorPosition(self) -> tuple[int, int]:
+        return self.graphics.getMouseLocation()
+
+    # ----------------------------------------------------------------------
+    # Window stubs
+    # ----------------------------------------------------------------------
+    def createWindow(self, *args, **kwargs):
+        self._dbg("createWindow() → stub")
+        return 1
+
+    def destroyWindow(self, win_id: int) -> None:
+        self._dbg(f"destroyWindow({win_id}) → stub")
+
+    def setWindowTitle(self, win_id: int, title: str) -> None:
+        self._dbg(f"setWindowTitle({win_id}, '{title}') → stub")
+
+    def getWindowGeometry(self, win_id: int) -> tuple[int, int, int, int]:
+        return (0, 0, 100, 100)
+
+    def setWindowGeometry(self, win_id: int, left: int, top: int, right: int, bottom: int) -> None:
+        self._dbg(f"setWindowGeometry({win_id}, {left}, {top}, {right}, {bottom}) → stub")
+
+    # ----------------------------------------------------------------------
+    # Window visibility stubs
+    # ----------------------------------------------------------------------
+    def isWindowVisible(self, win_id: int) -> bool:
+        return True
+
+    def setWindowVisible(self, win_id: int, visible: int) -> None:
+        self._dbg(f"setWindowVisible({win_id}, {visible}) → stub")
+
+    # ----------------------------------------------------------------------
+    # Deprecated drawing stubs
+    # ----------------------------------------------------------------------
+    def drawTranslucentDarkBox(self, left: int, top: int, right: int, bottom: int) -> None:
+        self._dbg(f"drawTranslucentDarkBox({left}, {top}, {right}, {bottom}) → stub")
+
+    # ----------------------------------------------------------------------
+    # Map stubs
+    # ----------------------------------------------------------------------
+    def createMapLayer(self, *args, **kwargs):
+        self._dbg("createMapLayer() → stub")
+        return 1
+
+    def registerMapCreationHook(self, *args, **kwargs):
+        self._dbg("registerMapCreationHook() → stub")
+
+    # ----------------------------------------------------------------------
+    # VR stubs
+    # ----------------------------------------------------------------------
+    def isVREnabled(self) -> bool:
+        return False
+

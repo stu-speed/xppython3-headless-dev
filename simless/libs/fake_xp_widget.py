@@ -260,8 +260,24 @@ class FakeXPWidgets:
     # ----------------------------------------------------------------------
     def setWidgetProperty(self, wid: WidgetHandle, prop: int, value: Any) -> None:
         self._dbg(f"setWidgetProperty: wid={wid}, prop={prop}, value={value}")
-        if wid in self._widgets:
-            self._widgets[wid]["properties"][prop] = value
+        if wid not in self._widgets:
+            return
+
+        self._widgets[wid]["properties"][prop] = value
+
+        # --- NEW: update DPG item if it already exists ---
+        # TODO: add updates for listBox and others
+        if wid in self._dpg_ids:
+            dpg_id = self._dpg_ids[wid]
+
+            if prop == Property_ScrollMin:
+                dpg.configure_item(dpg_id, min_value=int(value))
+
+            elif prop == Property_ScrollMax:
+                dpg.configure_item(dpg_id, max_value=int(value))
+
+            elif prop == Property_ScrollValue:
+                dpg.set_value(dpg_id, int(value))
 
     def getWidgetProperty(self, wid: WidgetHandle, prop: int) -> Any:
         return self._widgets.get(wid, {}).get("properties", {}).get(prop)
@@ -279,7 +295,7 @@ class FakeXPWidgets:
             try:
                 cb(wid, msg, param1, param2)
             except Exception as e:
-                self._dbg(f"  callback error: {e!r}")
+                self._dbg(f" callback error in {cb.__name__}: {e!r}")
 
     # ----------------------------------------------------------------------
     # Hit-testing
@@ -358,9 +374,17 @@ class FakeXPWidgets:
                 dpg_id = dpg.add_text(desc or "", parent=dpg_parent)
 
             elif wclass == xpWidgetClass_ScrollBar:
-                min_v = self.getWidgetProperty(wid, Property_ScrollMin) or -50
-                max_v = self.getWidgetProperty(wid, Property_ScrollMax) or 50
-                cur_v = self.getWidgetProperty(wid, Property_ScrollValue) or 0
+                min_v = self.getWidgetProperty(wid, Property_ScrollMin)
+                max_v = self.getWidgetProperty(wid, Property_ScrollMax)
+                cur_v = self.getWidgetProperty(wid, Property_ScrollValue)
+
+                # XPWidgets semantics: missing properties get defaults
+                if min_v is None:
+                    min_v = 0
+                if max_v is None:
+                    max_v = 100
+                if cur_v is None:
+                    cur_v = min_v
 
                 def _on_slider(sender, app_data, user_data):
                     self.setWidgetProperty(

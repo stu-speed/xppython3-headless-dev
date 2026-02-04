@@ -6,31 +6,6 @@
 # this layer ensures they are typed, writable as specified, and ready before
 # plugin code runs. Defaults are applied automatically when X‑Plane does not
 # supply a value.
-#
-# Responsibilities:
-#   • Register DataRefs from declarative specs (path, type, writable, default, required)
-#   • Guarantee readiness: required DataRefs must resolve; optional ones fall back to defaults
-#   • Provide the common X‑Plane get/set API surface:
-#         getDatai / setDatai
-#         getDataf / setDataf
-#         getDatad / setDatad
-#         getDatavi / setDatavi
-#         getDatavf / setDatavf
-#         getDatab / setDatab
-#   • Maintain correct scalar/array behavior and enforce type‑correct access
-#   • Notify DataRefManager when values change
-#
-# Production notes:
-#   • Resolves real XPLMDataRef handles and uses XPLMGet*/Set* APIs
-#   • Defaults apply only when X‑Plane does not provide a value
-#
-# Simless notes:
-#   • Uses FakeRefInfo handles with deterministic in‑memory storage
-#   • Dummy refs are promoted on first access with inferred type + defaults
-#
-# Design goals:
-#   • One DataRef definition and behavior model for both environments
-#   • Predictable initialization, strict typing, and clear defaults
 # ===========================================================================
 
 from __future__ import annotations
@@ -40,13 +15,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, Iterable, Mapping, Protocol, Tuple
 
-from XPPython3.xp_typing import XPLMDataRefInfo_t
-from .xp_interface import (
-    XPInterface,
-    DataRefHandle,
-    DataRefInfo,
-)
 
+# ===========================================================================
+# DataRef types
+# ===========================================================================
 
 class DRefType(Enum):
     INT = "int"
@@ -74,7 +46,12 @@ class FakeRefInfoProto(Protocol):
     is_array: bool
     size: int
     dummy: bool
+    value: Any
 
+
+# ===========================================================================
+# Helpers
+# ===========================================================================
 
 def _map_xplane_type(xp_type: int) -> DRefType:
     if xp_type & 1:
@@ -109,37 +86,58 @@ def _infer_default_dtype(default: Any) -> DRefType | None:
     return None
 
 
+# ===========================================================================
+# Normalize FakeXP + real X‑Plane info (duck‑typed)
+# ===========================================================================
+
 def _normalize_info_for_binding(
-    xp: XPInterface,
+    xp: Any,
     path: str,
-    info: DataRefInfo,
+    info: Any,
 ) -> Tuple[int, bool, bool, int] | None:
+    """
+    Returns:
+        (xp_type, writable, is_array, size)
+    or None if the ref is not yet bound.
+    """
+
+    # FakeXP FakeRefInfo: xp_type + dummy + is_array + size
     if hasattr(info, "xp_type") and hasattr(info, "dummy"):
         xp_type = getattr(info, "xp_type", None)
         dummy = bool(getattr(info, "dummy", False))
+
         if dummy or xp_type is None:
             xp.log(f"[DataRef] Not bound yet: {path}")
             return None
 
-        writable = bool(getattr(info, "writable", False))
-        is_array = bool(getattr(info, "is_array", False))
-        size = int(getattr(info, "size", 0))
-        return int(xp_type), writable, is_array, size
+        return (
+            int(xp_type),
+            bool(getattr(info, "writable", False)),
+            bool(getattr(info, "is_array", False)),
+            int(getattr(info, "size", 0)),
+        )
 
-    if isinstance(info, XPLMDataRefInfo_t):
-        xp_type = int(info.type)
-        writable = bool(info.writable)
+    # Real X‑Plane DataRefInfo: type + writable (duck‑typed)
+    if hasattr(info, "type") and hasattr(info, "writable"):
+        xp_type = int(getattr(info, "type"))
+        writable = bool(getattr(info, "writable"))
         is_array = bool(xp_type & (8 | 16 | 32))
-        size = 0
+        size = int(getattr(info, "size", 0)) if hasattr(info, "size") else 0
         return xp_type, writable, is_array, size
 
-    raise TypeError(f"Unknown info type from getDataRefInfo: {type(info)}")
+    # Unknown → treat as unbound
+    xp.log(f"[DataRef] Unknown info type for '{path}': {type(info)}")
+    return None
 
+
+# ===========================================================================
+# Typed accessor
+# ===========================================================================
 
 class TypedAccessor:
-    _handle: DataRefHandle | None
+    _handle: Any | None
 
-    def __init__(self, xp: XPInterface, spec: DataRefSpec) -> None:
+    def __init__(self, xp: Any, spec: DataRefSpec) -> None:
         self._xp = xp
         self._spec = spec
         self._handle = None
@@ -171,7 +169,7 @@ class TypedAccessor:
         if expected is not None and actual_dtype != expected:
             self._xp.log(
                 f"[DataRef] ERROR: Type mismatch for '{self._spec.path}'. "
-                f"Expected {expected.value}, got {actual_dtype.value}. Binding aborted."
+                f"Expected {expected.value}, got {actual_dtype.value}"
             )
             return False
 
@@ -189,7 +187,7 @@ class TypedAccessor:
 
         dtype = self._spec.dtype
         if dtype is None:
-            raise TypeError(f"DataRef '{self._spec.path}' has no dtype")
+            raise TypeError(f"No dtype for '{self._spec.path}'")
 
         match dtype:
             case DRefType.INT:
@@ -209,11 +207,11 @@ class TypedAccessor:
 
     def set(self, value: Any) -> None:
         if not self._spec.writable:
-            raise PermissionError(f"DataRef '{self._spec.path}' is read‑only")
+            raise PermissionError(f"'{self._spec.path}' is read‑only")
 
         dtype = self._spec.dtype
         if dtype is None:
-            raise TypeError(f"DataRef '{self._spec.path}' has no dtype")
+            raise TypeError(f"No dtype for '{self._spec.path}'")
 
         if self._handle is None:
             self._spec.default = value
@@ -234,13 +232,18 @@ class TypedAccessor:
                 self._xp.setDatab(self._handle, value)
 
 
+# ===========================================================================
+# Registry
+# ===========================================================================
+
 class DataRefRegistry:
-    def __init__(self, xp: XPInterface, specs: Mapping[str, DataRefSpec]) -> None:
+    def __init__(self, xp: Any, specs: Mapping[str, DataRefSpec]) -> None:
         self._xp = xp
         self._accessors: Dict[str, TypedAccessor] = {
             name: TypedAccessor(xp, spec) for name, spec in specs.items()
         }
 
+        # Simless auto-registration
         for _, spec in specs.items():
             if hasattr(xp, "fake_register_dataref"):
                 xp.fake_register_dataref(spec.path, spec.default, spec.writable)
@@ -252,11 +255,15 @@ class DataRefRegistry:
         return self._accessors.items()
 
 
+# ===========================================================================
+# Manager
+# ===========================================================================
+
 class DataRefManager:
     def __init__(
         self,
         registry: DataRefRegistry,
-        xp: XPInterface,
+        xp: Any,
         timeout_seconds: float = 30.0,
     ) -> None:
         self._registry = registry
@@ -268,7 +275,7 @@ class DataRefManager:
         if hasattr(xp, "bind_dataref_manager"):
             xp.bind_dataref_manager(self)
 
-    def _notify_dataref_changed(self, handle: DataRefHandle) -> None:
+    def _notify_dataref_changed(self, handle: Any) -> None:
         return None
 
     def try_bind_all(self) -> bool:

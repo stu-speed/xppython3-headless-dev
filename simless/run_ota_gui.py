@@ -7,18 +7,12 @@
 
 import XPPython3
 from simless.libs.fake_xp import FakeXP
-from simless.libs.fake_xp_runner import FakeXPRunner
 
 
-# ---------------------------------------------------------------------------
-# Main harness
-# ---------------------------------------------------------------------------
 def run_simless_ota_gui() -> None:
     xp = FakeXP(debug=True)
-    # Replace X-Plane's xp module with FakeXP
-    XPPython3.xp = xp
+    XPPython3.xp = xp # Replace X-Plane's xp module with FakeXP to run headless
 
-    # Execute full lifecycle (runner owns lifecycle + GUI)
     plugins = [
         "PI_ss_OTA",
         "dev_ota_gui",

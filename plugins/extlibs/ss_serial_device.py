@@ -74,9 +74,40 @@ class SerialDevice:
     def close_conn(self) -> None:
         if self.conn is None:
             return
-        self.send_data("", power_on=False)
-        self.conn.close()
-        self.conn = None
+
+        try:
+            # send sleep command if applicable
+            self.send_data("", power_on=False)
+        except Exception:
+            pass
+
+        # ===========================================================================
+        # Sequence to ensure com port is closed and released
+        # ===========================================================================
+
+        try:
+            # flush buffers
+            self.conn.reset_output_buffer()
+            self.conn.reset_input_buffer()
+        except Exception:
+            pass
+
+        try:
+            # close underlying file descriptor explicitly
+            if hasattr(self.conn, "fd") and self.conn.fd:
+                try:
+                    self.conn.fd.close()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+
+        del self.conn  # ensure con is released
         self._reset_vars()
 
     def send_data(self, data: str, power_on=True) -> None:

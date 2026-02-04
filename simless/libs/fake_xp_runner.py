@@ -185,12 +185,21 @@ class FakeXPRunner:
 
         # Enable
         xp.log("[Runner] === XPluginEnable BEGIN ===")
+        disabled = set()
+        setattr(xp, "_disabled_plugins", disabled)
+
         for p in plugins:
             try:
                 xp.log(f"[Runner] → XPluginEnable: {p.name}")
-                p.instance.XPluginEnable()
+                result = p.instance.XPluginEnable()
             except Exception as exc:
                 raise RuntimeError(f"[Runner] XPluginEnable failed for {p.name}: {exc!r}")
+
+            # X-Plane semantics: 1 = enabled, 0 = disabled
+            if not result:
+                xp.log(f"[Runner] Plugin disabled by XPluginEnable: {p.name}")
+                disabled.add(p.plugin_id)
+
         xp.log("[Runner] === XPluginEnable END ===")
 
         # Main loop

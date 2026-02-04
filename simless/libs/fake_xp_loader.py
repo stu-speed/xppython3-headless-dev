@@ -15,19 +15,40 @@ from __future__ import annotations
 import importlib
 import inspect
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 
-@dataclass
 class LoadedPlugin:
-    name: str
-    sig: str
-    desc: str
-    module: ModuleType
-    instance: Any
+    """
+    Strongly-typed wrapper around a PythonInterface-based plugin.
+    - module: the imported plugin module
+    - instance: the PythonInterface instance
+    - one plugin = one instance
+    """
+    _next_id: int = 1
+
+    def __init__(
+        self,
+        name: str,
+        sig: str,
+        desc: str,
+        module: ModuleType,
+        instance: Any,
+    ) -> None:
+        self.name: str = name
+        self.signature: str = sig
+        self.description: str = desc
+
+        self.module: ModuleType = module
+        self.instance: Any = instance
+
+        self.plugin_id: int = LoadedPlugin._next_id
+        LoadedPlugin._next_id += 1
+
+    def __repr__(self) -> str:
+        return f"<LoadedPlugin id={self.plugin_id} name={self.name}>"
 
 
 class FakeXPPluginLoader:
