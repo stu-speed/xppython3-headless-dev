@@ -105,6 +105,10 @@ class TypedAccessor:
         raise TypeError(f"Unsupported dtype {self._dtype}")
 
 
+def _is_fake_xp(xp):
+    return hasattr(xp, "fake_register_dataref")
+
+
 # ======================================================================
 # DataRefRegistry — plugin‑side declaration + FakeXP auto‑registration
 # ======================================================================
@@ -128,13 +132,16 @@ class DataRefRegistry:
             if is_array and isinstance(spec.default, (list, tuple, bytearray)):
                 size = len(spec.default)
 
-            handle = xp.fake_register_dataref(
-                spec.path,
-                xp_type=xp_type,
-                is_array=is_array,
-                size=size,
-                writable=spec.writable,
-            )
+            if _is_fake_xp(self._xp):
+                handle = xp.fake_register_dataref(
+                    spec.path,
+                    xp_type=xp_type,
+                    is_array=is_array,
+                    size=size,
+                    writable=spec.writable,
+                )
+            else:
+                handle = xp.findDataRef(spec.path)
 
             self._handles[key] = handle
 
@@ -155,26 +162,42 @@ class DataRefManager:
         self._timeout = timeout_seconds
         self._bound: Dict[str, TypedAccessor] = {}
 
-        xp.bind_dataref_manager(self)
+        if _is_fake_xp(self._xp):
+            xp.bind_dataref_manager(self)
 
-    def ensure_datarefs(self) -> bool:
-        # All datarefs are already registered by DataRefRegistry
-        # This method simply verifies they exist and are typed correctly.
-        for key, spec in self._registry._specs.items():
-            handle = self._registry._handles[key]
-            info = self._xp.getDataRefInfo(handle)
+    def ensure_datarefs(self, counter: int = 1) -> bool:
+        # XPPython3 validation call (counter == 0)
+        if counter == 0:
+            return False
 
-            if info.xp_type != int(spec.dtype):
-                self._xp.log(
-                    f"[DataRef] ERROR: Type mismatch for '{spec.path}'. "
-                    f"Expected {spec.dtype}, got {info.xp_type}"
-                )
-                return False
+        # If already fully bound, we're done
+        if len(self._bound) == len(self._registry._specs):
+            return True
 
-            self._bound[key] = TypedAccessor(self._xp, handle, spec.dtype)
+        # Attempt incremental binding
+        try:
+            for key, spec in self._registry._specs.items():
+                # Skip already-bound datarefs
+                if key in self._bound:
+                    continue
 
-        self._xp._dbg("[DataRefManager] All required datarefs bound")
-        return True
+                handle = self._registry._handles[key]
+                info = self._xp.getDataRefInfo(handle)
+
+                # Not yet available in X‑Plane
+                if info is None or info.xp_type != int(spec.dtype):
+                    return False
+
+                # Bind this dataref
+                self._bound[key] = TypedAccessor(self._xp, handle, spec.dtype)
+
+            # All required datarefs are now bound
+            self._xp._dbg("[DataRefManager] All required datarefs bound")
+            return True
+
+        except Exception:
+            # Early startup: X‑Plane may not be ready yet
+            return False
 
     def _notify_dataref_changed(self, ref):
         # Optional hook — currently unused
