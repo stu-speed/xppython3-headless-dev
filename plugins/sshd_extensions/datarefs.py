@@ -286,6 +286,9 @@ class DataRefManager:
         if _is_fake_xp(self.xp):
             xp.bind_dataref_manager(self)
 
+    def __getitem__(self, name: str):
+        return self.registry.accessor(name)
+
     # ------------------------------------------------------------------
 
     def ready(self, counter: int) -> bool:

@@ -33,22 +33,46 @@ DATAREFS: dict[str, DataRefSpec] = {
 }
 
 
-# ===========================================================================
-# Helpers
-# ===========================================================================
-
-def detect_avionics_bus(volts: list[float]) -> int:
+def avionics_bus_volts(volts: list[float]) -> float:
+    # No datarefs bound or array empty → avionics unpowered
     if not volts:
-        return 1
+        return 0.0
 
-    max_v = max(volts)
-    candidates = [i for i, v in enumerate(volts) if 1.0 < v < max_v - 0.5]
+    # Filter out obviously dead buses (< 1 volt)
+    live = [(i, v) for i, v in enumerate(volts) if v > 1.0]
 
-    if len(candidates) == 1:
-        return candidates[0]
-    if candidates:
-        return candidates[0]
-    return 1
+    # If nothing is alive, avionics are definitely unpowered
+    if not live:
+        return 0.0
+
+    # Highest voltage on any bus (usually generator/alternator)
+    max_v = max(v for _, v in live)
+
+    # Identify A/B generator buses:
+    # These are typically the highest-voltage buses in multi-engine aircraft.
+    # We treat any bus within 0.3V of max_v as a generator bus.
+    generator_buses = {
+        i for i, v in live
+        if abs(v - max_v) < 0.3
+    }
+
+    # Avionics buses are typically:
+    #   • alive (>1V)
+    #   • NOT one of the generator buses (A/B)
+    #   • lower than the generator bus by a noticeable margin
+    #   • stable (not a transient spike)
+    avionics_candidates = [
+        v for i, v in live
+        if i not in generator_buses and v < max_v - 0.3
+    ]
+
+    # If we found a plausible avionics bus, return its voltage
+    if avionics_candidates:
+        # Choose the highest of the "lower" buses → most stable avionics feed
+        return max(avionics_candidates)
+
+    # If all live buses are equal (simple aircraft), return the first live bus
+    return live[0][1]
 
 
 class PythonInterface:
@@ -97,22 +121,22 @@ class PythonInterface:
         if not self.manager.ready(counter):
             return 0.5
 
-        # Handle device recovery on disconnects
+        # Check device status or recovery on disconnects
         if not self._ensure_device():
             return 10.0
 
-        temp_raw = self.manager["oat_c"].get()
+        temp_c = self.manager["oat_c"].get()
         volts_raw = self.manager["bus_volts"].get()
 
         try:
             volts_list = list(volts_raw) if volts_raw is not None else []
-            idx = detect_avionics_bus(volts_list)
-            avpwr = float(volts_list[idx]) > 8.0
+            av_volts = avionics_bus_volts(volts_list)
+            avionic_on = float(av_volts) > 8.0
         except Exception as exc:
             xp.log(f"OTA: avionics bus detection error: {exc!r}")
-            avpwr = False
+            avionic_on = False
 
-        xp.log(f"OTA: temp:{int(temp_raw)} volts:{volts_raw} avionics:{avpwr}")
+        self.device.send_data(f"{int(temp_c)}", power_on=avionic_on)
         return 2.0
 
     # ----------------------------------------------------------------------
