@@ -12,8 +12,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
+from XPPython3 import xp
 
 # ======================================================================
 # X‑Plane bitmask types (production‑accurate)
@@ -62,17 +63,17 @@ class TypedAccessor:
         if self._dtype == DRefType.DOUBLE:
             return xp.getDatad(h)
         if self._dtype == DRefType.FLOAT_ARRAY:
-            size = xp.getDatavfLength(h)
-            out = [0.0] * size
+            size = xp.getDatavf(h, None, 0, 0)   # query length
+            out: list[float] = [0.0] * size
             xp.getDatavf(h, out, 0, size)
             return out
         if self._dtype == DRefType.INT_ARRAY:
-            size = xp.getDataviLength(h)
-            out = [0] * size
+            size = xp.getDatavi(h, None, 0, 0)   # query length
+            out: list[int] = [0] * size
             xp.getDatavi(h, out, 0, size)
             return out
         if self._dtype == DRefType.BYTE_ARRAY:
-            size = xp.getDatabLength(h)
+            size = xp.getDatab(h, None, 0, 0)    # query length
             out = bytearray(size)
             xp.getDatab(h, out, 0, size)
             return out
@@ -105,6 +106,10 @@ class TypedAccessor:
         raise TypeError(f"Unsupported dtype {self._dtype}")
 
 
+# ======================================================================
+# FakeXP detection
+# ======================================================================
+
 def _is_fake_xp(xp):
     return hasattr(xp, "fake_register_dataref")
 
@@ -119,7 +124,6 @@ class DataRefRegistry:
         self._specs = specs
         self._handles: Dict[str, Any] = {}
 
-        # Auto‑register all declared datarefs with FakeXP
         for key, spec in specs.items():
             xp_type = int(spec.dtype)
             is_array = spec.dtype in (
@@ -165,41 +169,90 @@ class DataRefManager:
         if _is_fake_xp(self._xp):
             xp.bind_dataref_manager(self)
 
-    def ensure_datarefs(self, counter: int = 1) -> bool:
-        # XPPython3 validation call (counter == 0)
+    def ready(self, counter: int) -> bool:
+        """
+        Determine whether all managed DataRefs are bound and safe to use.
+
+        This readiness check is only required when a plugin uses DataRefManager.
+        X‑Plane may expose DataRefs several frames after plugin load, especially
+        during aircraft reloads or when other plugins register DataRefs late.
+
+        We retry binding incrementally until all required DataRefs are available.
+        If binding does not complete within the configured timeout, the plugin is
+        disabled to avoid running in a partially initialized state.
+        """
+
+        # Validation call: never ready on counter 0
         if counter == 0:
+            self._start_counter = counter
+            self._last_warn_counter = counter
             return False
 
-        # If already fully bound, we're done
+        # Initialize counters on first real call
+        if not hasattr(self, "_start_counter"):
+            self._start_counter = counter
+            self._last_warn_counter = counter
+
+        # Fast path: already bound
         if len(self._bound) == len(self._registry._specs):
             return True
 
-        # Attempt incremental binding
         try:
             for key, spec in self._registry._specs.items():
-                # Skip already-bound datarefs
                 if key in self._bound:
                     continue
 
                 handle = self._registry._handles[key]
+
+                # Retry findDataRef if missing
+                if not handle:
+                    new_handle = self._xp.findDataRef(spec.path)
+                    if not new_handle:
+                        break  # still missing; check timeout below
+                    self._registry._handles[key] = new_handle
+                    handle = new_handle
+
                 info = self._xp.getDataRefInfo(handle)
+                if info is None:
+                    xp.log(f"[DRM] ERROR: getDataRefInfo failed for {spec.path}")
+                    break
 
-                # Not yet available in X‑Plane
-                if info is None or info.xp_type != int(spec.dtype):
-                    return False
+                if info.type != int(spec.dtype):
+                    xp.log(
+                        f"[DRM] ERROR: type mismatch for {spec.path} "
+                        f"(got {info.type}, expected {int(spec.dtype)})"
+                    )
+                    break
 
-                # Bind this dataref
+                # Bind accessor
                 self._bound[key] = TypedAccessor(self._xp, handle, spec.dtype)
 
-            # All required datarefs are now bound
-            self._xp._dbg("[DataRefManager] All required datarefs bound")
+            # If still not fully bound, check timeout
+            if len(self._bound) != len(self._registry._specs):
+                elapsed = counter - self._start_counter
+
+                # Emit a warning once per minute
+                if elapsed > self._timeout and (counter - self._last_warn_counter) >= 60:
+                    xp.log(
+                        f"[DRM] WARNING: Required DataRefs not ready after "
+                        f"{elapsed} seconds; still waiting..."
+                    )
+                    self._last_warn_counter = counter
+
+                # Hard timeout: disable plugin
+                if elapsed > self._timeout:
+                    plugin_id = self._xp.getMyID()
+                    xp.log(
+                        f"[DRM] ERROR: Required DataRefs not available after "
+                        f"{self._timeout} seconds — disabling plugin."
+                    )
+                    self._xp.disablePlugin(plugin_id)
+                    return False
+
+                return False
+
             return True
 
-        except Exception:
-            # Early startup: X‑Plane may not be ready yet
+        except Exception as exc:
+            xp.log(f"[DRM] ERROR: Exception in ready(): {exc!r}")
             return False
-
-    def _notify_dataref_changed(self, ref):
-        # Optional hook — currently unused
-        pass
-
