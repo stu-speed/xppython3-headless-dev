@@ -31,32 +31,36 @@ All dependencies are declared in pyproject.toml.
 # 📁 Directory Structure
 
 ```
-xplane-python-dev/  
-│  
-├── plugins/  
-│   ├── PI_ss_ota.py                     Example hardware plugin  
-│   ├── dev_ota_gui.py                   Example XPWidget GUI plugin  
-│   │  
-│   ├── extlibs/                         Vendor modules, hardware drivers  
-│   └── extensions/                      Shared plugin architecture  
-│       ├── xp_interface.py              Protocol describing xp.* API  
-│       └── datarefs.py                  DataRefSpec, TypedAccessor, Registry  
-│  
-├── simless/  
-│   ├── run_ota_gui.py                   Example multi‑plugin runner  
-│   │  
-│   └── libs/  
-│       ├── fake_xp.py                   FakeXP: public API surface  
-│       ├── fake_xp_runner.py            FakeXPRunner: lifecycle + GUI + datarefs  
-│       ├── fake_xp_widget.py            XPWidget emulation (DPG‑backed)  
-│       ├── fake_xp_graphics.py          XPLMDisplay/XPLMGraphics emulation  
-│       └── fake_xp_utilities.py         Misc XPLM utility shims  
-│  
-├── stubs/  
-│   └── XPPython3/                       XPPython3 .pyi and python modules
-│  
-├── tests/                               Unit tests for FakeXP + runner  
-│  
+xplane-python-dev/
+│
+├── plugins/                               # All XPPython3 plugins (production-style)
+│   ├── PI_ss_ota.py                        # Example hardware plugin (serial OTA)
+│   ├── dev_ota_gui.py                      # Example XPWidget GUI plugin (DPG-backed)
+│   │
+│   ├── sshd_extlibs/                       # Shared modules
+│   │   ├── ss_serial_device.py             # Serial hardware driver
+│   │   └── ...                             
+│   │
+│   └── sshd_extensions/                    # Shared plugin architecture (namespaced)
+│       ├── xp_interface.py                 # Protocol describing xp.* API surface
+│       ├── datarefs.py                     # DataRefSpec, TypedAccessor, Registry, Manager
+│       └── ...                             
+│
+├── simless/                                # Sim-less execution harnesses (no X‑Plane required)
+│   ├── run_ota.py                          # Example runner: FakeXP + multiple plugins
+│   │
+│   └── libs/                               # Fake X‑Plane runtime (drop‑in xp module)
+│       ├── fake_xp.py                      # FakeXP: public API surface
+│       ├── fake_xp_runner.py               # Lifecycle, plugin loading, GUI, timing
+│       ├── fake_xp_widget.py               # XPWidget emulation (DearPyGui-backed)
+│       ├── fake_xp_graphics.py             # XPLMDisplay/XPLMGraphics simulation
+│       └── fake_xp_utilities.py            # Misc XPLM utility shims (menus, commands, etc.)
+│
+├── stubs/
+│   └── XPPython3/                           # XPPython3 .pyi stubs for IDE type checking
+│
+├── tests/                                   # Unit tests for FakeXP + plugin lifecycle
+│
 └── README.md
 ```
 
@@ -96,23 +100,9 @@ All plugins share a single global dataref table.
 
 ---
 
-# 🧩 Using .pyi Stub Files
+## 🧩 IDE (PyCharm) Configuration
 
-Place XPPython3 stubs in:
-
-stubs/XPPython3/
-
-Configure PyCharm:
-1. Mark stubs/ as Excluded  
-2. Add as Content Root  
-3. Mark stubs/XPPython3 as Sources  
-
-![Structure](docs/structure.png)
-
-Enables:
-• xp.* autocomplete  
-• mypy type checking  
-• fast indexing (prevents periodic freezes) 
+See **[docs/PYCHARM_CONFIGURATION.md](docs/PYCHARM_CONFIGURATION.md)** for full setup instructions, including how to enable XPPython3 stubs, configure Sources Roots, and run sim‑less scripts from the project root.
 
 ---
 
@@ -122,18 +112,22 @@ A simple runner script is all that’s needed to execute plugins outside X‑Pla
 
 ```python
 import XPPython3
-from simless.libs.fake_xp import FakeXP  
-from simless.libs.fake_xp_runner import FakeXPRunner  
+from simless.libs.fake_xp import FakeXP
+from pathlib import Path
+import sys
 
-xp = FakeXP(debug=True)  
-runner = FakeXPRunner(xp, enable_gui=True, run_time=5.0)
+ROOT = Path(__file__).resolve().parent.parent
+PLUGIN_ROOT = ROOT / "plugins"
+sys.path.insert(0, str(PLUGIN_ROOT))
+ 
+xp = FakeXP(debug=True)
+XPPython3.xp = xp # Replace X-Plane's xp module with FakeXP to run headless
 
-XPPython3.xp = xp
-
-runner.load_plugin("plugins.PI_ss_ota")  
-runner.load_plugin("plugins.dev_ota_gui")
-
-runner.run_plugin_lifecycle()
+plugins = [
+    "PI_sshd_OTA",
+    "PI_sshd_dev_ota_gui",
+]
+xp._run_plugin_lifecycle(plugins, debug=True, enable_gui=True)
 ```
 
 This runner:

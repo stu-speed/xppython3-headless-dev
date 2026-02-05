@@ -1,11 +1,8 @@
-# plugins/dev_ota_gui.py
-#
 # Development OTA GUI plugin, written exactly like a production XPPython3 plugin.
 # Uses only public xp APIs and follows real X-Plane plugin structure.
 
 from typing import Any
 from XPPython3 import xp
-
 
 
 class PythonInterface:
@@ -20,25 +17,25 @@ class PythonInterface:
         self.bus_slider = None
         self.quit_btn = None
 
-        # Dataref handle
+        # Dataref handles
         self.oat_handle = None
-        self.bus_handle = None
+        self.bus_array_handle = None
 
         return self.Name, self.Sig, self.Desc
 
     def XPluginEnable(self):
         xp.log("[dev_ota_gui] Enabling OTA GUI plugin")
 
-        # Resolve OAT dataref (production-style)
+        # Resolve OAT dataref
         self.oat_handle = xp.findDataRef("sim/cockpit2/temperature/outside_air_temp_degc")
         if self.oat_handle is None:
             xp.log("[dev_ota_gui] ERROR: Missing OAT dataref")
             return 0
 
-        # Resolve Bus Volts dataref
-        self.bus_handle = xp.findDataRef("sim/cockpit2/electrical/bus_volts[1]")
-        if self.bus_handle is None:
-            xp.log("[dev_ota_gui] ERROR: Missing bus_volts[1] dataref")
+        # Resolve bus_volts array (entire array, not [1] syntax)
+        self.bus_array_handle = xp.findDataRef("sim/cockpit2/electrical/bus_volts")
+        if self.bus_array_handle is None:
+            xp.log("[dev_ota_gui] ERROR: Missing bus_volts dataref")
             return 0
 
         # ---------------- GUI BUILD ----------------
@@ -51,6 +48,7 @@ class PythonInterface:
             xp.WidgetClass_MainWindow,
         )
 
+        # --- OAT Caption ---
         xp.createWidget(
             120, 460, 480, 430,
             1,
@@ -60,6 +58,7 @@ class PythonInterface:
             xp.WidgetClass_Caption,
         )
 
+        # --- OAT Slider ---
         self.slider = xp.createWidget(
             120, 420, 480, 380,
             1,
@@ -68,16 +67,15 @@ class PythonInterface:
             self.win,
             xp.WidgetClass_ScrollBar,
         )
-
         xp.setWidgetProperty(self.slider, xp.Property_ScrollMin, -50)
         xp.setWidgetProperty(self.slider, xp.Property_ScrollMax, 50)
-        xp.setWidgetProperty(self.slider, xp.Property_ScrollValue, 0)
+        xp.setWidgetProperty(self.slider, xp.Property_ScrollValue, 14)
 
         # --- Bus Volts Caption ---
         xp.createWidget(
             120, 360, 480, 330,
             1,
-            "Adjust Bus Voltage (Volts)",
+            "Adjust Avionics Bus Voltage (Volts)",
             0,
             self.win,
             xp.WidgetClass_Caption,
@@ -92,21 +90,22 @@ class PythonInterface:
             self.win,
             xp.WidgetClass_ScrollBar,
         )
-
         xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollMin, 0)
         xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollMax, 30)
-        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollValue, 24)
+        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollValue, 0)
 
+        # --- Quit Button ---
         self.quit_btn = xp.createWidget(
-            120, 340, 260, 300,
+            120, 240, 260, 200,
             1,
-            "Close",
+            "Quit",
             0,
             self.win,
             xp.WidgetClass_Button,
         )
 
         # ---------------- Callbacks ----------------
+
         def slider_callback(wid: int, msg: int, p1: Any, p2: Any):
             if msg != xp.Msg_MouseDrag:
                 return
@@ -120,7 +119,10 @@ class PythonInterface:
             if msg != xp.Msg_MouseDrag:
                 return
             volts = xp.getWidgetProperty(self.bus_slider, xp.Property_ScrollValue)
-            xp.setDataf(self.bus_handle, float(volts))
+
+            # Write to bus_volts[1] using array setter
+            xp.setDatavf(self.bus_array_handle, [float(volts)], 1, 1)
+
             xp.log(f"[dev_ota_gui] Bus Volts override → {volts}V")
 
         xp.addWidgetCallback(self.bus_slider, bus_slider_callback)

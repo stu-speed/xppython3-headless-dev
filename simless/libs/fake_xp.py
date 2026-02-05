@@ -34,7 +34,7 @@ from typing import Any, Callable, Dict, List, Sequence, Tuple, Optional, Union
 
 import XPPython3
 
-from plugins.extensions.datarefs import DataRefManager, DRefType
+from plugins.sshd_extensions.datarefs import DataRefManager, DRefType
 from simless.libs.fake_xp_runner import FakeXPRunner
 from simless.libs.fake_xp_widget import (
     FakeXPWidgets,
