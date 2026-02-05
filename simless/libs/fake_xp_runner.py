@@ -10,13 +10,12 @@
 #   • Maintain deterministic 60 Hz pacing
 #   • Provide end_run_loop() so plugins can stop the loop
 #   • Own ALL flightloop scheduling (FakeXP holds no scheduler state)
-#   • Skip flightloops/draw callbacks for disabled plugins
 # ===========================================================================
 
 from __future__ import annotations
 
 import time
-from typing import Any, Callable
+from typing import Any, Dict
 
 import dearpygui.dearpygui as dpg
 
@@ -49,37 +48,48 @@ class FakeXPRunner:
         # ------------------------------------------------------------------
         # Flightloop state (runner-owned)
         # ------------------------------------------------------------------
-        # Legacy: list of {plugin_id, callback, interval}
-        self._legacy_flightloops: list[dict] = []
-
-        # Modern: list of {plugin_id, callback, interval, relative, next_call}
-        self._modern_flightloops: list[dict] = []
+        self._next_flightloop_id = 1
+        self._flightloops: Dict[int, Dict[str, Any]] = {}
+        self._sim_time = 0.0  # single source of sim time
 
     # ----------------------------------------------------------------------
     # Public API for FakeXP to forward scheduling calls
     # ----------------------------------------------------------------------
+    def create_flightloop(self, version: int, params: Dict[str, Any]) -> int:
+        """
+        Modern X-Plane 12-style flightloop creation.
+        'params' must contain: callback, refcon, phase, structSize.
+        """
+        loop_id = self._next_flightloop_id
+        self._next_flightloop_id += 1
 
-    def register_legacy_flightloop(self, plugin_id: int, callback: Callable, interval: float) -> None:
-        self._legacy_flightloops.append({
-            "plugin_id": plugin_id,
-            "callback": callback,
-            "interval": interval,
-        })
-
-    def create_modern_flightloop(self, plugin_id: int, params) -> dict:
-        entry = {
-            "plugin_id": plugin_id,
-            "callback": params.callback,
-            "interval": params.interval,
-            "relative": params.relative,
+        self._flightloops[loop_id] = {
+            "callback": params["callback"],
+            "refcon": params.get("refcon"),
+            "phase": params.get("phase", 0),
+            "structSize": params.get("structSize", 1),
+            "interval": 0.0,
             "next_call": 0.0,
+            "last_call": 0.0,
+            "counter": 0,
         }
-        self._modern_flightloops.append(entry)
-        return entry
+        return loop_id
 
-    def schedule_modern_flightloop(self, handle: dict, interval: float, relative: int) -> None:
-        handle["interval"] = interval
-        handle["relative"] = relative
+    def schedule_flightloop(self, loop_id: int, interval: float) -> None:
+        fl = self._flightloops.get(loop_id)
+        if fl is None:
+            return
+
+        fl["interval"] = float(interval)
+
+        if interval < 0:
+            # schedule immediately
+            fl["next_call"] = self._sim_time
+        else:
+            fl["next_call"] = self._sim_time + float(interval)
+
+    def destroy_flightloop(self, loop_id: int) -> None:
+        self._flightloops.pop(loop_id, None)
 
     # ------------------------------------------------------------------
     # Stop loop (called by plugins via xp.end_run_loop())
@@ -112,45 +122,47 @@ class FakeXPRunner:
     def run_one_frame(self) -> bool:
         xp = self.xp
 
-        # 1. Advance sim time
-        xp._sim_time += 1.0 / 60.0
-        sim_time = xp._sim_time
+        # 1. Advance sim time (60 Hz)
+        dt = 1.0 / 60.0
+        self._sim_time += dt
+        sim_time = self._sim_time
 
-        disabled = getattr(xp, "_disabled_plugins", set())
+        # 2. Flightloops (modern API)
+        #    We don't filter by plugin_id here; all scheduled loops run.
+        for fl in list(self._flightloops.values()):
+            if sim_time >= fl["next_call"]:
+                since = sim_time - fl["last_call"]
+                elapsed = since  # simple model: elapsed since last call
+                counter = fl["counter"]
+                refcon = fl["refcon"]
 
-        # 2. Legacy flightloops
-        for entry in self._legacy_flightloops:
-            if entry["plugin_id"] in disabled:
-                continue
-            try:
-                entry["callback"](sim_time)
-            except Exception as exc:
-                xp.log(f"[Runner] legacy flightloop error: {exc!r}")
-
-        # 3. Modern flightloops
-        for entry in self._modern_flightloops:
-            if entry["plugin_id"] in disabled:
-                continue
-
-            if sim_time >= entry["next_call"]:
                 try:
-                    next_interval = entry["callback"](sim_time)
+                    next_interval = fl["callback"](since, elapsed, counter, refcon)
                 except Exception as exc:
                     xp.log(f"[Runner] modern flightloop error: {exc!r}")
-                    next_interval = entry["interval"]
+                    next_interval = fl["interval"]
 
+                fl["last_call"] = sim_time
+                fl["counter"] += 1
+
+                # If callback returns None or negative, keep previous interval
                 if next_interval is None or next_interval < 0:
-                    next_interval = entry["interval"]
+                    next_interval = fl["interval"]
 
-                entry["next_call"] = sim_time + next_interval
+                # X-Plane semantics: 0 means "do not reschedule"
+                if next_interval == 0:
+                    fl["next_call"] = float("inf")
+                else:
+                    fl["interval"] = float(next_interval)
+                    fl["next_call"] = sim_time + float(next_interval)
 
-        # 4. Draw callbacks
+        # 3. Draw callbacks
         try:
             xp.graphics.run_draw_callbacks()
         except Exception as exc:
             xp.log(f"[Runner] draw callback error: {exc!r}")
 
-        # 5. GUI path
+        # 4. GUI path
         if self.enable_gui:
             try:
                 xp.widgets._draw_all_widgets()
@@ -212,7 +224,7 @@ class FakeXPRunner:
             frame_start = time.time()
 
             if not self.run_one_frame():
-                xp.log("[Runner] Main loop exit: GUI closed")
+                xp.log("[Runner] Main loop exit: GUI closed or fatal error")
                 break
 
             if 0 <= self.run_time <= (time.time() - start):

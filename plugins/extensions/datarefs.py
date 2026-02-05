@@ -10,300 +10,173 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Dict, Iterable, Mapping, Protocol, Tuple
+from enum import IntEnum
+from typing import Any, Dict, Optional
 
 
-# ===========================================================================
-# DataRef types
-# ===========================================================================
+# ======================================================================
+# X‑Plane bitmask types (production‑accurate)
+# ======================================================================
 
-class DRefType(Enum):
-    INT = "int"
-    FLOAT = "float"
-    DOUBLE = "double"
-    INT_ARRAY = "int_array"
-    FLOAT_ARRAY = "float_array"
-    BYTE_ARRAY = "byte_array"
+class DRefType(IntEnum):
+    INT         = 1
+    FLOAT       = 2
+    DOUBLE      = 4
+    FLOAT_ARRAY = 8
+    INT_ARRAY   = 16
+    BYTE_ARRAY  = 32
 
+
+# ======================================================================
+# DataRefSpec — declarative plugin‑side specification
+# ======================================================================
 
 @dataclass(slots=True)
 class DataRefSpec:
     path: str
-    dtype: DRefType | None = None
-    writable: bool | None = None
-    description: str | None = None
-    required: bool = True
-    default: Any | None = None
+    dtype: DRefType
+    writable: bool = False
+    required: bool = False
+    default: Any = None
 
 
-class FakeRefInfoProto(Protocol):
-    path: str
-    xp_type: int | None
-    writable: bool
-    is_array: bool
-    size: int
-    dummy: bool
-    value: Any
-
-
-# ===========================================================================
-# Helpers
-# ===========================================================================
-
-def _map_xplane_type(xp_type: int) -> DRefType:
-    if xp_type & 1:
-        return DRefType.INT
-    if xp_type & 2:
-        return DRefType.FLOAT
-    if xp_type & 4:
-        return DRefType.DOUBLE
-    if xp_type & 8:
-        return DRefType.FLOAT_ARRAY
-    if xp_type & 16:
-        return DRefType.INT_ARRAY
-    if xp_type & 32:
-        return DRefType.BYTE_ARRAY
-    raise ValueError(f"Unknown X‑Plane dataref type flag: {xp_type}")
-
-
-def _infer_default_dtype(default: Any) -> DRefType | None:
-    if default is None:
-        return None
-    if isinstance(default, int):
-        return DRefType.INT
-    if isinstance(default, float):
-        return DRefType.FLOAT
-    if isinstance(default, list):
-        if all(isinstance(x, int) for x in default):
-            return DRefType.INT_ARRAY
-        if all(isinstance(x, float) for x in default):
-            return DRefType.FLOAT_ARRAY
-    if isinstance(default, (bytes, bytearray)):
-        return DRefType.BYTE_ARRAY
-    return None
-
-
-# ===========================================================================
-# Normalize FakeXP + real X‑Plane info (duck‑typed)
-# ===========================================================================
-
-def _normalize_info_for_binding(
-    xp: Any,
-    path: str,
-    info: Any,
-) -> Tuple[int, bool, bool, int] | None:
-    """
-    Returns:
-        (xp_type, writable, is_array, size)
-    or None if the ref is not yet bound.
-    """
-
-    # FakeXP FakeRefInfo: xp_type + dummy + is_array + size
-    if hasattr(info, "xp_type") and hasattr(info, "dummy"):
-        xp_type = getattr(info, "xp_type", None)
-        dummy = bool(getattr(info, "dummy", False))
-
-        if dummy or xp_type is None:
-            xp.log(f"[DataRef] Not bound yet: {path}")
-            return None
-
-        return (
-            int(xp_type),
-            bool(getattr(info, "writable", False)),
-            bool(getattr(info, "is_array", False)),
-            int(getattr(info, "size", 0)),
-        )
-
-    # Real X‑Plane DataRefInfo: type + writable (duck‑typed)
-    if hasattr(info, "type") and hasattr(info, "writable"):
-        xp_type = int(getattr(info, "type"))
-        writable = bool(getattr(info, "writable"))
-        is_array = bool(xp_type & (8 | 16 | 32))
-        size = int(getattr(info, "size", 0)) if hasattr(info, "size") else 0
-        return xp_type, writable, is_array, size
-
-    # Unknown → treat as unbound
-    xp.log(f"[DataRef] Unknown info type for '{path}': {type(info)}")
-    return None
-
-
-# ===========================================================================
-# Typed accessor
-# ===========================================================================
+# ======================================================================
+# TypedAccessor — strongly typed access to a bound dataref
+# ======================================================================
 
 class TypedAccessor:
-    _handle: Any | None
-
-    def __init__(self, xp: Any, spec: DataRefSpec) -> None:
+    def __init__(self, xp, handle, dtype: DRefType):
         self._xp = xp
-        self._spec = spec
-        self._handle = None
-
-    @property
-    def spec(self) -> DataRefSpec:
-        return self._spec
-
-    def try_bind(self) -> bool:
-        if self._handle is not None:
-            return True
-
-        handle = self._xp.findDataRef(self._spec.path)
         self._handle = handle
+        self._dtype = dtype
 
-        if handle is None:
-            self._xp.log(f"[DataRef] Not found yet: {self._spec.path}")
-            return False
+    def get(self):
+        xp = self._xp
+        h = self._handle
 
-        info = self._xp.getDataRefInfo(handle)
-        normalized = _normalize_info_for_binding(self._xp, self._spec.path, info)
-        if normalized is None:
-            return False
+        if self._dtype == DRefType.FLOAT:
+            return xp.getDataf(h)
+        if self._dtype == DRefType.INT:
+            return xp.getDatai(h)
+        if self._dtype == DRefType.DOUBLE:
+            return xp.getDatad(h)
+        if self._dtype == DRefType.FLOAT_ARRAY:
+            size = xp.getDatavfLength(h)
+            out = [0.0] * size
+            xp.getDatavf(h, out, 0, size)
+            return out
+        if self._dtype == DRefType.INT_ARRAY:
+            size = xp.getDataviLength(h)
+            out = [0] * size
+            xp.getDatavi(h, out, 0, size)
+            return out
+        if self._dtype == DRefType.BYTE_ARRAY:
+            size = xp.getDatabLength(h)
+            out = bytearray(size)
+            xp.getDatab(h, out, 0, size)
+            return out
 
-        xp_type, writable, is_array, _ = normalized
-        actual_dtype = _map_xplane_type(xp_type)
+        raise TypeError(f"Unsupported dtype {self._dtype}")
 
-        expected = self._spec.dtype or _infer_default_dtype(self._spec.default)
-        if expected is not None and actual_dtype != expected:
-            self._xp.log(
-                f"[DataRef] ERROR: Type mismatch for '{self._spec.path}'. "
-                f"Expected {expected.value}, got {actual_dtype.value}"
-            )
-            return False
+    def set(self, value):
+        xp = self._xp
+        h = self._handle
 
-        if self._spec.dtype is None:
-            self._spec.dtype = actual_dtype
-        if self._spec.writable is None:
-            self._spec.writable = bool(writable)
-
-        self._xp.log(f"[DataRef] Bound: {self._spec.path}")
-        return True
-
-    def get(self) -> Any:
-        if self._handle is None:
-            return self._spec.default
-
-        dtype = self._spec.dtype
-        if dtype is None:
-            raise TypeError(f"No dtype for '{self._spec.path}'")
-
-        match dtype:
-            case DRefType.INT:
-                return self._xp.getDatai(self._handle)
-            case DRefType.FLOAT:
-                return self._xp.getDataf(self._handle)
-            case DRefType.DOUBLE:
-                return self._xp.getDatad(self._handle)
-            case DRefType.INT_ARRAY:
-                return self._xp.getDatavi(self._handle)
-            case DRefType.FLOAT_ARRAY:
-                return self._xp.getDatavf(self._handle)
-            case DRefType.BYTE_ARRAY:
-                return self._xp.getDatab(self._handle)
-
-        raise TypeError(f"Unsupported dtype: {dtype}")
-
-    def set(self, value: Any) -> None:
-        if not self._spec.writable:
-            raise PermissionError(f"'{self._spec.path}' is read‑only")
-
-        dtype = self._spec.dtype
-        if dtype is None:
-            raise TypeError(f"No dtype for '{self._spec.path}'")
-
-        if self._handle is None:
-            self._spec.default = value
+        if self._dtype == DRefType.FLOAT:
+            xp.setDataf(h, float(value))
+            return
+        if self._dtype == DRefType.INT:
+            xp.setDatai(h, int(value))
+            return
+        if self._dtype == DRefType.DOUBLE:
+            xp.setDatad(h, float(value))
+            return
+        if self._dtype == DRefType.FLOAT_ARRAY:
+            xp.setDatavf(h, list(value), 0, len(value))
+            return
+        if self._dtype == DRefType.INT_ARRAY:
+            xp.setDatavi(h, list(value), 0, len(value))
+            return
+        if self._dtype == DRefType.BYTE_ARRAY:
+            xp.setDatab(h, list(value), 0, len(value))
             return
 
-        match dtype:
-            case DRefType.INT:
-                self._xp.setDatai(self._handle, int(value))
-            case DRefType.FLOAT:
-                self._xp.setDataf(self._handle, float(value))
-            case DRefType.DOUBLE:
-                self._xp.setDatad(self._handle, float(value))
-            case DRefType.INT_ARRAY:
-                self._xp.setDatavi(self._handle, value)
-            case DRefType.FLOAT_ARRAY:
-                self._xp.setDatavf(self._handle, value)
-            case DRefType.BYTE_ARRAY:
-                self._xp.setDatab(self._handle, value)
+        raise TypeError(f"Unsupported dtype {self._dtype}")
 
 
-# ===========================================================================
-# Registry
-# ===========================================================================
+# ======================================================================
+# DataRefRegistry — plugin‑side declaration + FakeXP auto‑registration
+# ======================================================================
 
 class DataRefRegistry:
-    def __init__(self, xp: Any, specs: Mapping[str, DataRefSpec]) -> None:
+    def __init__(self, xp, specs: Dict[str, DataRefSpec]):
         self._xp = xp
-        self._accessors: Dict[str, TypedAccessor] = {
-            name: TypedAccessor(xp, spec) for name, spec in specs.items()
-        }
+        self._specs = specs
+        self._handles: Dict[str, Any] = {}
 
-        # Simless auto-registration
-        for _, spec in specs.items():
-            if hasattr(xp, "fake_register_dataref"):
-                xp.fake_register_dataref(spec.path, spec.default, spec.writable)
+        # Auto‑register all declared datarefs with FakeXP
+        for key, spec in specs.items():
+            xp_type = int(spec.dtype)
+            is_array = spec.dtype in (
+                DRefType.FLOAT_ARRAY,
+                DRefType.INT_ARRAY,
+                DRefType.BYTE_ARRAY,
+            )
 
-    def __getitem__(self, name: str) -> TypedAccessor:
-        return self._accessors[name]
+            size = 1
+            if is_array and isinstance(spec.default, (list, tuple, bytearray)):
+                size = len(spec.default)
 
-    def items(self) -> Iterable[tuple[str, TypedAccessor]]:
-        return self._accessors.items()
+            handle = xp.fake_register_dataref(
+                spec.path,
+                xp_type=xp_type,
+                is_array=is_array,
+                size=size,
+                writable=spec.writable,
+            )
+
+            self._handles[key] = handle
+
+    def __getitem__(self, key: str) -> TypedAccessor:
+        spec = self._specs[key]
+        handle = self._handles[key]
+        return TypedAccessor(self._xp, handle, spec.dtype)
 
 
-# ===========================================================================
-# Manager
-# ===========================================================================
+# ======================================================================
+# DataRefManager — runtime binding + validation
+# ======================================================================
 
 class DataRefManager:
-    def __init__(
-        self,
-        registry: DataRefRegistry,
-        xp: Any,
-        timeout_seconds: float = 30.0,
-    ) -> None:
+    def __init__(self, registry: DataRefRegistry, xp, timeout_seconds: float = 10.0):
         self._registry = registry
         self._xp = xp
-        self.ready = False
         self._timeout = timeout_seconds
-        self._start_time = time.time()
+        self._bound: Dict[str, TypedAccessor] = {}
 
-        if hasattr(xp, "bind_dataref_manager"):
-            xp.bind_dataref_manager(self)
-
-    def _notify_dataref_changed(self, handle: Any) -> None:
-        return None
-
-    def try_bind_all(self) -> bool:
-        if self.ready:
-            return True
-
-        elapsed = time.time() - self._start_time
-        if elapsed > self._timeout:
-            pid = self._xp.getMyID()
-            self._xp.log(
-                f"[DataRefManager] Timeout after {elapsed:.1f}s — disabling plugin {pid}"
-            )
-            self._xp.disablePlugin(pid)
-            return False
-
-        all_required = True
-        for _, accessor in self._registry.items():
-            if not accessor.try_bind() and accessor.spec.required:
-                all_required = False
-
-        if all_required:
-            self.ready = True
-            self._xp.log("[DataRefManager] All required datarefs bound")
-            return True
-
-        return False
+        xp.bind_dataref_manager(self)
 
     def ensure_datarefs(self) -> bool:
-        if self.ready:
-            return True
-        return self.try_bind_all()
+        # All datarefs are already registered by DataRefRegistry
+        # This method simply verifies they exist and are typed correctly.
+        for key, spec in self._registry._specs.items():
+            handle = self._registry._handles[key]
+            info = self._xp.getDataRefInfo(handle)
+
+            if info.xp_type != int(spec.dtype):
+                self._xp.log(
+                    f"[DataRef] ERROR: Type mismatch for '{spec.path}'. "
+                    f"Expected {spec.dtype}, got {info.xp_type}"
+                )
+                return False
+
+            self._bound[key] = TypedAccessor(self._xp, handle, spec.dtype)
+
+        self._xp._dbg("[DataRefManager] All required datarefs bound")
+        return True
+
+    def _notify_dataref_changed(self, ref):
+        # Optional hook — currently unused
+        pass
+

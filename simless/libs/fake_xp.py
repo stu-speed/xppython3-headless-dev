@@ -34,7 +34,7 @@ from typing import Any, Callable, Dict, List, Sequence, Tuple, Optional, Union
 
 import XPPython3
 
-from plugins.extensions.datarefs import DataRefManager
+from plugins.extensions.datarefs import DataRefManager, DRefType
 from simless.libs.fake_xp_runner import FakeXPRunner
 from simless.libs.fake_xp_widget import (
     FakeXPWidgets,
@@ -67,13 +67,27 @@ class ArrayElementHandle:
 
 @dataclass(slots=True)
 class FakeDataRefInfo:
+    """
+    Minimal X-Plane-style dataref descriptor for FakeXP.
+    xp_type:
+      1 = float
+      2 = int
+      3 = float array
+      4 = int array
+      5 = byte array
+    """
     path: str
-    xp_type: int | None
+    xp_type: int
     writable: bool
     is_array: bool
-    size: int = 0
-    dummy: bool = False
-    value: Any = None
+    size: int
+    dummy: bool
+    value: Any
+
+    def __repr__(self) -> str:
+        kind = "array" if self.is_array else "scalar"
+        dummy = " dummy" if self.dummy else ""
+        return f"<FakeDataRefInfo {self.path} ({kind}, type={self.xp_type}, size={self.size}{dummy})>"
 
 
 class FakeXP:
@@ -190,66 +204,112 @@ class FakeXP:
     # ----------------------------------------------------------------------
     def bind_dataref_manager(self, mgr: DataRefManager) -> None:
         self._dataref_manager = mgr
+        self._dbg("[DataRef] DataRefManager bound to FakeXP")
 
     # ----------------------------------------------------------------------
     # Simless auto-registration
     # ----------------------------------------------------------------------
-    def fake_register_dataref(self, path: str, default: Any | None, writable: bool | None) -> FakeDataRefInfo:
-        if path in self._handles:
-            return self._handles[path]
+    def fake_register_dataref(
+            self,
+            path: str,
+            *,
+            xp_type: int,
+            is_array: bool = False,
+            size: int = 1,
+            writable: bool = True,
+    ) -> FakeDataRefInfo:
 
-        is_array = isinstance(default, (list, tuple, bytes, bytearray))
+        # xp_type is already a DRefType value (bitmask)
+        dtype = DRefType(xp_type)
+
+        # Allocate default value based on dtype
+        if dtype == DRefType.FLOAT_ARRAY:
+            value = [0.0] * size
+        elif dtype == DRefType.INT_ARRAY:
+            value = [0] * size
+        elif dtype == DRefType.BYTE_ARRAY:
+            value = bytearray(size)
+        elif dtype == DRefType.FLOAT:
+            value = 0.0
+        elif dtype == DRefType.INT:
+            value = 0
+        elif dtype == DRefType.DOUBLE:
+            value = 0.0
+        else:
+            raise TypeError(f"Unsupported dtype {dtype} for {path}")
+
         ref = FakeDataRefInfo(
             path=path,
-            xp_type=None,
-            writable=bool(writable) if writable is not None else True,
+            xp_type=int(dtype),
+            writable=writable,
             is_array=is_array,
-            size=0,
+            size=size,
             dummy=False,
-            value=default,
+            value=value,
         )
 
         self._handles[path] = ref
-        self._values[path] = default
-        self._dbg(f"fake_register_dataref('{path}')")
+        self._values[path] = value
+        self._dbg(f"fake_register_dataref('{path}', type={int(dtype)}, array={is_array}, size={size})")
         return ref
 
     # ----------------------------------------------------------------------
     # DataRef API
     # ----------------------------------------------------------------------
     def findDataRef(self, name: str):
-        # Detect array element syntax: dataref[index]
-        if "[" in name and name.endswith("]"):
-            base, idx_str = name[:-1].split("[", 1)
-            index = int(idx_str)
+        """
+        X‑Plane 12–compliant DataRef lookup with FakeXP dummy fallback.
 
-            # Promote base dataref as array if needed
-            if base not in self._datarefs:
-                # Default to float array of size 8 (X‑Plane uses fixed sizes)
-                self._datarefs[base] = {
-                    "type": "float_array",
-                    "values": [0.0] * 8,
-                }
-                self._dbg(f"Promoted '{base}' to real float array")
+        Rules:
+          - Reject bracket syntax (e.g., "foo[1]") — X‑Plane never allows this.
+          - Return existing real datarefs if registered.
+          - If unknown, create a dummy scalar or dummy array based on naming heuristics.
+        """
 
-            return ArrayElementHandle(base, index)
+        # ------------------------------------------------------------
+        # 1. Reject array element syntax (X‑Plane 12 rule)
+        # ------------------------------------------------------------
+        if "[" in name or "]" in name:
+            self._dbg(f"findDataRef rejected invalid array element syntax: '{name}'")
+            return None
 
-        # Scalar fallback → create uninitialized string dataref
-        if name not in self._handles:
-            ref = FakeDataRefInfo(
-                path=name,
-                xp_type=1,  # string dataref
-                writable=True,
-                is_array=False,
-                size=0,
-                dummy=True,  # <-- uninitialized
-                value="<<<uninitialized>>>",
-            )
-            self._handles[name] = ref
-            self._values[name] = "<<<uninitialized>>>"
+        # ------------------------------------------------------------
+        # 2. Return existing real dataref if known
+        # ------------------------------------------------------------
+        if name in self._handles:
+            return self._handles[name]
+
+        if name in self._datarefs:
+            return self._datarefs[name]
+
+        # ------------------------------------------------------------
+        # 3. Dummy fallback (FakeXP convenience)
+        # ------------------------------------------------------------
+        is_array = name.endswith("s") or "array" in name.lower()
+
+        if is_array:
+            dtype = DRefType.FLOAT_ARRAY
+            value = [0.0] * 8
+            size = 8
+            self._dbg(f"Promoted '{name}' to dummy float array dataref")
+        else:
+            dtype = DRefType.FLOAT
+            value = 0.0
+            size = 1
             self._dbg(f"Promoted '{name}' to dummy scalar dataref")
 
-        return self._handles[name]
+        ref = FakeDataRefInfo(
+            path=name,
+            xp_type=int(dtype),
+            writable=True,
+            is_array=is_array,
+            size=size,
+            dummy=True,
+            value=value,
+        )
+
+        self._handles[name] = ref
+        return ref
 
     def getDataRefInfo(self, handle: FakeDataRefInfo) -> FakeDataRefInfo:
         return handle
@@ -294,105 +354,52 @@ class FakeXP:
             return self._promote(handle, xp_type, is_array, default)
         return handle
 
-    def _resolve_value_ref(
-            self,
-            handle: Union[FakeDataRefInfo, ArrayElementHandle, str],
-    ) -> Tuple[FakeDataRefInfo, Optional[int]]:
+    def _resolve_value_ref(self, handle):
         """
-        Returns (ref, index) where:
-          - ref is a FakeDataRefInfo (never a string)
-          - index is None for scalar refs
-          - index is an int for array-element refs
+        X‑Plane‑12‑correct:
+          • No bracket syntax allowed
+          • handle must be FakeDataRefInfo or string path
+          • Unknown datarefs become dummy float scalars (FakeXP convenience)
         """
 
-        # ------------------------------------------------------------
-        # ARRAY ELEMENT
-        # ------------------------------------------------------------
+        # Reject array element syntax entirely
         if isinstance(handle, ArrayElementHandle):
-            base = handle.base
-            index = handle.index
+            self._dbg(f"Invalid array element handle: {handle.base}[{handle.index}]")
+            return None, None
 
-            # Ensure base dataref handle exists
-            if base not in self._handles:
-                ref = FakeDataRefInfo(
-                    path=base,
-                    xp_type=16,  # XPLMType_FloatArray
-                    writable=True,
-                    is_array=True,
-                    size=0,
-                    dummy=True,
-                    value=[],  # float array default
-                )
-                self._handles[base] = ref
-                self._values[base] = []
-            else:
-                ref = self._handles[base]
-
-            # Promote if needed
-            ref = self._ensure_real(
-                ref,
-                xp_type=16,  # float array
-                is_array=True,
-                default=[],
-            )
-            return ref, index
-
-        # ------------------------------------------------------------
-        # SCALAR
-        # ------------------------------------------------------------
-        # Convert scalar handle (string path) → FakeDataRefInfo
+        # String path → lookup or create dummy
         if isinstance(handle, str):
-            if handle not in self._handles:
+            ref = self._handles.get(handle)
+            if ref is None:
+                # Dummy fallback: float scalar
                 ref = FakeDataRefInfo(
                     path=handle,
-                    xp_type=1,  # XPLMType_Data (string)
+                    xp_type=1,  # float
                     writable=True,
                     is_array=False,
-                    size=0,
+                    size=1,
                     dummy=True,
-                    value="<<<uninitialized>>>",
+                    value=0.0,
                 )
                 self._handles[handle] = ref
-                self._values[handle] = "<<<uninitialized>>>"
-            else:
-                ref = self._handles[handle]
-        else:
-            # Already a FakeDataRefInfo
-            ref = handle
+                self._values[handle] = 0.0
+            return ref, None
 
-        # Promote if needed
-        ref = self._ensure_real(
-            ref,
-            xp_type=1,  # string dataref
-            is_array=False,
-            default="<<<uninitialized>>>",
-        )
-        return ref, None
+        # Already a FakeDataRefInfo
+        return handle, None
 
     # ----------------------------------------------------------------------
     # Datai
     # ----------------------------------------------------------------------
     def getDatai(self, handle):
-        ref, idx = self._resolve_value_ref(handle)
-
-        if idx is not None:
-            arr = self._values.get(ref.path, ref.value or [])
-            return int(arr[idx])
-
-        value = self._values.get(ref.path, ref.value or 0)
-        return int(value)
+        ref, _ = self._resolve_value_ref(handle)
+        return int(self._values.get(ref.path, ref.value))
 
     def setDatai(self, handle, value):
-        ref, idx = self._resolve_value_ref(handle)
+        ref, _ = self._resolve_value_ref(handle)
         v = int(value)
-
-        if idx is not None:
-            arr = self._values.setdefault(ref.path, ref.value or [])
-            arr[idx] = v
-        else:
-            ref.value = v
-            self._values[ref.path] = v
-
+        self._values[ref.path] = v
+        ref.value = v
         if self._dataref_manager:
             self._dataref_manager._notify_dataref_changed(ref)
 
@@ -400,26 +407,14 @@ class FakeXP:
     # Dataf
     # ----------------------------------------------------------------------
     def getDataf(self, handle):
-        ref, idx = self._resolve_value_ref(handle)
-
-        if idx is not None:
-            arr = self._values.get(ref.path, ref.value or [])
-            return float(arr[idx])
-
-        value = self._values.get(ref.path, ref.value or 0.0)
-        return float(value)
+        ref, _ = self._resolve_value_ref(handle)
+        return float(self._values.get(ref.path, ref.value))
 
     def setDataf(self, handle, value):
-        ref, idx = self._resolve_value_ref(handle)
+        ref, _ = self._resolve_value_ref(handle)
         v = float(value)
-
-        if idx is not None:
-            arr = self._values.setdefault(ref.path, ref.value or [])
-            arr[idx] = v
-        else:
-            ref.value = v
-            self._values[ref.path] = v
-
+        self._values[ref.path] = v
+        ref.value = v
         if self._dataref_manager:
             self._dataref_manager._notify_dataref_changed(ref)
 
@@ -427,116 +422,79 @@ class FakeXP:
     # Datad (double mapped to float)
     # ----------------------------------------------------------------------
     def getDatad(self, handle):
-        ref, idx = self._resolve_value_ref(handle)
-
-        if idx is not None:
-            arr = self._values.get(ref.path, ref.value or [])
-            return float(arr[idx])
-
-        value = self._values.get(ref.path, ref.value or 0.0)
-        return float(value)
+        return self.getDataf(handle)
 
     def setDatad(self, handle, value):
-        ref, idx = self._resolve_value_ref(handle)
-        v = float(value)
-
-        if idx is not None:
-            arr = self._values.setdefault(ref.path, ref.value or [])
-            arr[idx] = v
-        else:
-            ref.value = v
-            self._values[ref.path] = v
-
-        if self._dataref_manager:
-            self._dataref_manager._notify_dataref_changed(ref)
+        self.setDataf(handle, value)
 
     # ----------------------------------------------------------------------
     # Datavf (float array)
     # ----------------------------------------------------------------------
-    def getDatavf(self, handle):
-        ref, idx = self._resolve_value_ref(handle)
-        arr = self._values.get(ref.path, ref.value or [])
+    def getDatavf(self, handle, out, offset, count):
+        ref, _ = self._resolve_value_ref(handle)
 
-        if idx is not None:
-            return [float(arr[idx])]
+        arr = self._values.get(ref.path, ref.value)
+        for i in range(count):
+            out[i] = float(arr[offset + i])
 
-        return [float(v) for v in arr]
+    def setDatavf(self, handle, values, offset, count):
+        ref, _ = self._resolve_value_ref(handle)
 
-    def setDatavf(self, handle, values):
-        ref, idx = self._resolve_value_ref(handle)
         arr = self._values.setdefault(ref.path, ref.value or [])
+        end = offset + count
+        if end > len(arr):
+            arr.extend([0.0] * (end - len(arr)))
 
-        if idx is not None:
-            arr[idx] = float(values[0])
-        else:
-            arr[:] = [float(v) for v in values]
+        for i in range(count):
+            arr[offset + i] = float(values[i])
 
         ref.value = arr
-
         if self._dataref_manager:
             self._dataref_manager._notify_dataref_changed(ref)
 
     # ----------------------------------------------------------------------
     # Datavi (int array)
     # ----------------------------------------------------------------------
-    def getDatavi(self, handle):
-        ref, idx = self._resolve_value_ref(handle)
-        arr = self._values.get(ref.path, ref.value or [])
+    def getDatavi(self, handle, out, offset, count):
+        ref, _ = self._resolve_value_ref(handle)
+        arr = self._values.get(ref.path, ref.value)
+        for i in range(count):
+            out[i] = int(arr[offset + i])
 
-        if idx is not None:
-            return [int(arr[idx])]
-
-        return [int(v) for v in arr]
-
-    def setDatavi(self, handle, values):
-        ref, idx = self._resolve_value_ref(handle)
+    def setDatavi(self, handle, values, offset, count):
+        ref, _ = self._resolve_value_ref(handle)
         arr = self._values.setdefault(ref.path, ref.value or [])
+        end = offset + count
+        if end > len(arr):
+            arr.extend([0] * (end - len(arr)))
 
-        if idx is not None:
-            arr[idx] = int(values[0])
-        else:
-            arr[:] = [int(v) for v in values]
+        for i in range(count):
+            arr[offset + i] = int(values[i])
 
         ref.value = arr
-
         if self._dataref_manager:
             self._dataref_manager._notify_dataref_changed(ref)
 
     # ----------------------------------------------------------------------
     # Datab (byte array)
     # ----------------------------------------------------------------------
-    def getDatab(self, handle):
-        ref, idx = self._resolve_value_ref(handle)
-        arr = self._values.get(ref.path, ref.value or b"")
+    def getDatab(self, handle, out, offset, count):
+        ref, _ = self._resolve_value_ref(handle)
+        arr = self._values.get(ref.path, ref.value)
+        for i in range(count):
+            out[i] = arr[offset + i]
 
-        if isinstance(arr, (bytes, bytearray)):
-            if idx is not None:
-                return bytes([arr[idx]])
-            return bytes(arr)
+    def setDatab(self, handle, values, offset, count):
+        ref, _ = self._resolve_value_ref(handle)
+        arr = self._values.setdefault(ref.path, ref.value or bytearray())
+        end = offset + count
+        if end > len(arr):
+            arr.extend([0] * (end - len(arr)))
 
-        # fallback: list of ints
-        if idx is not None:
-            return bytes([arr[idx]])
+        for i in range(count):
+            arr[offset + i] = int(values[i]) & 0xFF
 
-        return bytes(arr)
-
-    def setDatab(self, handle, values):
-        ref, idx = self._resolve_value_ref(handle)
-
-        if isinstance(values, (bytes, bytearray)):
-            arr = bytearray(values)
-        else:
-            arr = bytearray(int(v) & 0xFF for v in values)
-
-        store = self._values.setdefault(ref.path, ref.value or bytearray())
-
-        if idx is not None:
-            store[idx] = arr[0]
-        else:
-            store[:] = arr
-
-        ref.value = store
-
+        ref.value = arr
         if self._dataref_manager:
             self._dataref_manager._notify_dataref_changed(ref)
 
@@ -580,22 +538,49 @@ class FakeXP:
         return self._sim_time
 
     # ----------------------------------------------------------------------
-    # FlightLoop API
+    # Flight loop API — X‑Plane 12 modern API only
     # ----------------------------------------------------------------------
-    def registerFlightLoopCallback(self, cb: Callable, interval: float) -> None:
-        if self._runner is None:
-            raise RuntimeError("No FakeXPRunner attached")
-        self._runner.register_legacy_flightloop(1, cb, interval)
+    def createFlightLoop(self, params):
+        """
+        X‑Plane 12 modern flight loop API.
 
-    def createFlightLoop(self, params: Dict[str, Any]) -> Any:
-        if self._runner is None:
-            raise RuntimeError("No FakeXPRunner attached")
-        return self._runner.create_modern_flightloop(1, params)
+        Expected:
+            xp.createFlightLoop({
+                "structSize": 1,
+                "phase": 0,
+                "callback": callable,
+                "refcon": any,
+            })
+        """
+        if not isinstance(params, dict):
+            raise TypeError(
+                "createFlightLoop() requires a modern X‑Plane 12 flight loop struct"
+            )
 
-    def scheduleFlightLoop(self, handle: Any, interval: float, relative: int) -> None:
-        if self._runner is None:
-            raise RuntimeError("No FakeXPRunner attached")
-        self._runner.schedule_modern_flightloop(handle, interval, relative)
+        cb = params.get("callback")
+        if not callable(cb):
+            raise TypeError("Flight loop struct missing callable 'callback'")
+
+        struct = {
+            "structSize": int(params.get("structSize", 1)),
+            "phase": int(params.get("phase", 0)),
+            "callback": cb,
+            "refcon": params.get("refcon", None),
+        }
+
+        return self._runner.create_flightloop(1, struct)
+
+    def scheduleFlightLoop(self, loop_id, interval_seconds):
+        """
+        X‑Plane 12 modern scheduler.
+        """
+        return self._runner.schedule_flightloop(loop_id, float(interval_seconds))
+
+    def destroyFlightLoop(self, loop_id):
+        """
+        X‑Plane 12 modern destroy.
+        """
+        return self._runner.destroy_flightloop(loop_id)
 
     # ----------------------------------------------------------------------
     # Graphics API
