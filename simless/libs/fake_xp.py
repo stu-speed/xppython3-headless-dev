@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Sequence
 
 import XPPython3
+from XPPython3.xp_typing import XPLMFlightLoopID
 
 from plugins.sshd_extensions.datarefs import DataRefManager, DRefType
 from simless.libs.fake_xp_runner import FakeXPRunner
@@ -579,41 +580,43 @@ class FakeXP:
 
         return ref
 
-    # ----------------------------------------------------------------------
-    # Time
-    # ----------------------------------------------------------------------
     def getElapsedTime(self) -> float:
         return self._sim_time
 
-    # ----------------------------------------------------------------------
-    # Flight loop API — X‑Plane 12 modern API only
-    # ----------------------------------------------------------------------
-    def createFlightLoop(self, params):
+    def createFlightLoop(self, callback_or_tuple, phase=0, refCon=None):
         """
-        X‑Plane 12 modern flight loop API.
+        XPPython3‑compatible flight loop creation.
 
-        Expected:
-            xp.createFlightLoop({
-                "structSize": 1,
-                "phase": 0,
-                "callback": callable,
-                "refcon": any,
-            })
+        Supported forms:
+            xp.createFlightLoop(callback)
+            xp.createFlightLoop(callback, phase)
+            xp.createFlightLoop(callback, phase, refCon)
+            xp.createFlightLoop((phase, callback, refCon))
         """
-        if not isinstance(params, dict):
-            raise TypeError(
-                "createFlightLoop() requires a modern X‑Plane 12 flight loop struct"
-            )
 
-        cb = params.get("callback")
-        if not callable(cb):
-            raise TypeError("Flight loop struct missing callable 'callback'")
+        # ------------------------------------------------------------
+        # Tuple form: (phase, callback, refCon)
+        # ------------------------------------------------------------
+        if isinstance(callback_or_tuple, (list, tuple)):
+            if len(callback_or_tuple) != 3:
+                raise TypeError("FlightLoop tuple must be (phase, callback, refCon)")
+            phase, cb, refCon = callback_or_tuple
+            if not callable(cb):
+                raise TypeError("FlightLoop callback must be callable")
+        else:
+            # --------------------------------------------------------
+            # Normal form: callback[, phase][, refCon]
+            # --------------------------------------------------------
+            cb = callback_or_tuple
+            if not callable(cb):
+                raise TypeError("First argument to createFlightLoop must be a callback")
 
+        # Normalize into XP12 struct for the runner
         struct = {
-            "structSize": int(params.get("structSize", 1)),
-            "phase": int(params.get("phase", 0)),
+            "structSize": 1,  # XPPython3 ignores this
+            "phase": int(phase),
             "callback": cb,
-            "refcon": params.get("refcon", None),
+            "refcon": refCon,
         }
 
         return self._runner.create_flightloop(1, struct)
