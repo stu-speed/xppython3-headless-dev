@@ -151,7 +151,7 @@ class PythonInterface:
         xp.log("OTA: XPluginEnable")
 
         if not self._ensure_device():
-            self.xp.log("OTA: serial device not found")
+            xp.log("OTA: serial device not found")
             return 0
 
         self.floop = xp.createFlightLoop(self.flightloop_callback)

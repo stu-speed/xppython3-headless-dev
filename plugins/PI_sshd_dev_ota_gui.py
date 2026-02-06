@@ -1,5 +1,5 @@
-# Development OTA GUI plugin, written exactly like a production XPPython3 plugin.
-# Uses only public xp APIs and follows real X-Plane plugin structure.
+# Development OTA GUI plugin, modeled after XplaneNoaaWeather widget patterns.
+# Uses only public xp APIs and follows real X-Plane/XPPython3 widget behavior.
 
 from typing import Any
 from XPPython3 import xp
@@ -11,42 +11,41 @@ class PythonInterface:
         self.Sig = "simless.dev.ota.gui"
         self.Desc = "Development GUI for adjusting Outside Air Temperature"
 
-        # Widget IDs
         self.win = None
         self.slider = None
+        self.slider_label = None
         self.bus_slider = None
+        self.bus_label = None
         self.quit_btn = None
 
-        # Dataref handles
         self.oat_handle = None
         self.bus_array_handle = None
+
+        self._win_handler_cb = None
 
         return self.Name, self.Sig, self.Desc
 
     def XPluginEnable(self):
         xp.log("[dev_ota_gui] Enabling OTA GUI plugin")
 
-        # Resolve OAT dataref
         self.oat_handle = xp.findDataRef("sim/cockpit2/temperature/outside_air_temp_degc")
-        if self.oat_handle is None:
-            xp.log("[dev_ota_gui] ERROR: Missing OAT dataref")
-            return 0
-
-        # Resolve bus_volts array (entire array, not [1] syntax)
         self.bus_array_handle = xp.findDataRef("sim/cockpit2/electrical/bus_volts")
-        if self.bus_array_handle is None:
-            xp.log("[dev_ota_gui] ERROR: Missing bus_volts dataref")
+
+        if not self.oat_handle or not self.bus_array_handle:
+            xp.log("[dev_ota_gui] ERROR: Missing required datarefs")
             return 0
 
         # ---------------- GUI BUILD ----------------
+        # Widened window so captions fit
         self.win = xp.createWidget(
-            100, 500, 500, 100,
+            100, 500, 650, 100,   # <-- right side increased from 500 → 650
             1,
             "Simless OTA Control",
             1,
             0,
             xp.WidgetClass_MainWindow,
         )
+        xp.setWidgetProperty(self.win, xp.Property_MainWindowHasCloseBoxes, 1)
 
         # --- OAT Caption ---
         xp.createWidget(
@@ -62,14 +61,26 @@ class PythonInterface:
         self.slider = xp.createWidget(
             120, 420, 480, 380,
             1,
-            "OAT Slider",
+            "",
             0,
             self.win,
             xp.WidgetClass_ScrollBar,
         )
-        xp.setWidgetProperty(self.slider, xp.Property_ScrollMin, -50)
-        xp.setWidgetProperty(self.slider, xp.Property_ScrollMax, 50)
-        xp.setWidgetProperty(self.slider, xp.Property_ScrollValue, 14)
+        xp.setWidgetProperty(self.slider, xp.Property_ScrollBarType, xp.ScrollBarTypeSlider)
+        xp.setWidgetProperty(self.slider, xp.Property_ScrollBarMin, -50)
+        xp.setWidgetProperty(self.slider, xp.Property_ScrollBarMax, 50)
+        xp.setWidgetProperty(self.slider, xp.Property_ScrollBarPageAmount, 1)
+        xp.setWidgetProperty(self.slider, xp.Property_ScrollBarSliderPosition, 10)
+
+        # --- OAT Value Label (moved left so it's inside window) ---
+        self.slider_label = xp.createWidget(
+            500, 420, 620, 380,   # <-- fits inside new window width
+            1,
+            "10°C",
+            0,
+            self.win,
+            xp.WidgetClass_Caption,
+        )
 
         # --- Bus Volts Caption ---
         xp.createWidget(
@@ -85,14 +96,26 @@ class PythonInterface:
         self.bus_slider = xp.createWidget(
             120, 320, 480, 280,
             1,
-            "Bus Volts Slider",
+            "",
             0,
             self.win,
             xp.WidgetClass_ScrollBar,
         )
-        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollMin, 0)
-        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollMax, 30)
-        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollValue, 0)
+        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollBarType, xp.ScrollBarTypeSlider)
+        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollBarMin, 0)
+        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollBarMax, 30)
+        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollBarPageAmount, 1)
+        xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollBarSliderPosition, 0)
+
+        # --- Bus Volts Value Label (also moved left) ---
+        self.bus_label = xp.createWidget(
+            500, 320, 620, 280,
+            1,
+            "0 V",
+            0,
+            self.win,
+            xp.WidgetClass_Caption,
+        )
 
         # --- Quit Button ---
         self.quit_btn = xp.createWidget(
@@ -103,52 +126,51 @@ class PythonInterface:
             self.win,
             xp.WidgetClass_Button,
         )
+        xp.setWidgetProperty(self.quit_btn, xp.Property_ButtonType, xp.PushButton)
 
-        # ---------------- Callbacks ----------------
+        # ---------------- WINDOW HANDLER ----------------
+        def window_handler(msg: int, widget: int, param1: Any, param2: Any):
 
-        def slider_callback(wid: int, msg: int, p1: Any, p2: Any):
-            if msg != xp.Msg_MouseDrag:
-                return
-            temp = xp.getWidgetProperty(self.slider, xp.Property_ScrollValue)
-            xp.setDataf(self.oat_handle, float(temp))
-            xp.log(f"[dev_ota_gui] OAT override → {temp}°C")
+            if msg == xp.Message_CloseButtonPushed and widget == self.win:
+                xp.hideWidget(self.win)
+                return 1
 
-        xp.addWidgetCallback(self.slider, slider_callback)
+            if msg == xp.Msg_ScrollBarSliderPositionChanged:
 
-        def bus_slider_callback(wid: int, msg: int, p1: Any, p2: Any):
-            if msg != xp.Msg_MouseDrag:
-                return
-            volts = xp.getWidgetProperty(self.bus_slider, xp.Property_ScrollValue)
+                if param1 == self.slider:
+                    temp = xp.getWidgetProperty(self.slider, xp.Property_ScrollBarSliderPosition)
+                    xp.setWidgetDescriptor(self.slider_label, f"{temp}°C")
+                    xp.setDataf(self.oat_handle, float(temp))
+                    xp.log(f"[dev_ota_gui] OAT → {temp}°C")
+                    return 1
 
-            # Write to bus_volts[1] using array setter
-            xp.setDatavf(self.bus_array_handle, [float(volts)], 1, 1)
+                if param1 == self.bus_slider:
+                    volts = xp.getWidgetProperty(self.bus_slider, xp.Property_ScrollBarSliderPosition)
+                    xp.setWidgetDescriptor(self.bus_label, f"{volts} V")
+                    xp.setDatavf(self.bus_array_handle, [float(volts)], 1, 1)
+                    xp.log(f"[dev_ota_gui] Bus Volts → {volts}V")
+                    return 1
 
-            xp.log(f"[dev_ota_gui] Bus Volts override → {volts}V")
-
-        xp.addWidgetCallback(self.bus_slider, bus_slider_callback)
-
-        def quit_callback(wid, msg, p1, p2):
-            if msg == xp.Msg_MouseDown:
-                xp.log("[dev_ota_gui] Closing OTA GUI window")
-
-                if self.win is not None:
-                    xp.killWidget(self.win)
-                    self.win = None
-
-                # Request sim-less loop termination
+            if msg == xp.Msg_PushButtonPressed and param1 == self.quit_btn:
+                xp.log("[dev_ota_gui] Quit pressed, closing window")
+                xp.destroyWidget(self.win, 1)
+                self.win = None
                 if hasattr(xp, "_quit"):
                     xp._quit()
+                return 1
 
-        xp.addWidgetCallback(self.quit_btn, quit_callback)
+            return 0
+
+        self._win_handler_cb = window_handler
+        xp.addWidgetCallback(self.win, self._win_handler_cb)
 
         xp.log("[dev_ota_gui] OTA GUI enabled")
         return 1
 
     def XPluginDisable(self):
-        xp.log("[dev_ota_gui] Disabling OTA GUI")
-        if self.win is not None:
-            xp.killWidget(self.win)
+        if self.win:
+            xp.destroyWidget(self.win, 1)
             self.win = None
 
     def XPluginStop(self):
-        xp.log("[dev_ota_gui] Stopping OTA GUI plugin")
+        pass
