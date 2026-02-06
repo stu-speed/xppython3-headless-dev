@@ -1,18 +1,14 @@
 # ===========================================================================
 # fake_xp_runner.py — deterministic simless execution harness
 #
-# Public API:
-#     xp._run_plugin_lifecycle(["PI_ss_OTA", "dev_ota_gui"])
-#
 # Responsibilities:
-#   • Internally load plugins using FakeXPPluginLoader
-#   • Execute lifecycle: Enable → frame loop → Disable → Stop
+#   • Load plugins via FakeXPPluginLoader
+#   • Inject xp.* namespace into plugin instances (XPPython3‑authentic)
+#   • Execute lifecycle: Start → Enable → frame loop → Disable → Stop
 #   • Maintain deterministic 60 Hz pacing
-#   • Provide end_run_loop() so plugins can stop the loop
 #   • Own ALL flightloop scheduling (FakeXP holds no scheduler state)
+#   • Integrate DearPyGui when GUI mode is enabled
 # ===========================================================================
-
-from __future__ import annotations
 
 import time
 from typing import Any, Dict
@@ -23,10 +19,6 @@ from .fake_xp_loader import FakeXPPluginLoader, LoadedPlugin
 
 
 class FakeXPRunner:
-    """
-    Executes plugin lifecycle:
-        run_plugin_lifecycle(["PI_ss_OTA", "dev_ota_gui"])
-    """
 
     def __init__(
         self,
@@ -94,7 +86,6 @@ class FakeXPRunner:
     # ------------------------------------------------------------------
     # Stop loop (called by plugins via xp.end_run_loop())
     # ------------------------------------------------------------------
-
     def end_run_loop(self) -> None:
         """Stop the main loop immediately."""
         self._running = False
@@ -103,7 +94,6 @@ class FakeXPRunner:
     # ------------------------------------------------------------------
     # GUI lifecycle
     # ------------------------------------------------------------------
-
     def init_gui(self) -> None:
         self.xp.log("[Runner] Initializing DearPyGui")
         dpg.create_context()
@@ -118,7 +108,6 @@ class FakeXPRunner:
     # ------------------------------------------------------------------
     # Unified per-frame execution
     # ------------------------------------------------------------------
-
     def run_one_frame(self) -> bool:
         xp = self.xp
 
@@ -128,11 +117,10 @@ class FakeXPRunner:
         sim_time = self._sim_time
 
         # 2. Flightloops (modern API)
-        #    We don't filter by plugin_id here; all scheduled loops run.
         for fl in list(self._flightloops.values()):
             if sim_time >= fl["next_call"]:
                 since = sim_time - fl["last_call"]
-                elapsed = since  # simple model: elapsed since last call
+                elapsed = since
                 counter = fl["counter"]
                 refcon = fl["refcon"]
 
@@ -179,7 +167,6 @@ class FakeXPRunner:
     # ------------------------------------------------------------------
     # Lifecycle execution
     # ------------------------------------------------------------------
-
     def run_plugin_lifecycle(self, plugin_names: list[str]) -> None:
         loader = FakeXPPluginLoader(self.xp)
         plugins = loader.load_plugins(plugin_names)
@@ -201,6 +188,8 @@ class FakeXPRunner:
         setattr(xp, "_disabled_plugins", disabled)
 
         for p in plugins:
+            p.instance.xp = xp
+
             try:
                 xp.log(f"[Runner] → XPluginEnable: {p.name}")
                 result = p.instance.XPluginEnable()

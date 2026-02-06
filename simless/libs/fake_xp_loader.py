@@ -10,8 +10,6 @@
 #   • Hard‑fail (raise RuntimeError) on ANY error
 # ===========================================================================
 
-from __future__ import annotations
-
 import importlib
 import inspect
 import sys
@@ -55,6 +53,7 @@ class FakeXPPluginLoader:
     """Internal loader used only by FakeXPRunner."""
 
     def __init__(self, xp: Any) -> None:
+        # Project root → plugins/
         self.root = Path(__file__).resolve().parents[2] / "plugins"
         self.xp = xp
 
@@ -63,6 +62,12 @@ class FakeXPPluginLoader:
     # ------------------------------------------------------------------
 
     def _ensure_sys_path(self) -> None:
+        """
+        Ensure plugins/ is on sys.path so imports like:
+            import PI_sshd_OTA
+            import sshd_extensions.datarefs
+        resolve exactly like X‑Plane.
+        """
         root_str = str(self.root)
         if root_str not in sys.path:
             sys.path.insert(0, root_str)
@@ -96,22 +101,29 @@ class FakeXPPluginLoader:
     # ------------------------------------------------------------------
 
     def _load_single(self, full_name: str) -> LoadedPlugin:
+        """
+        Import module, instantiate PythonInterface, call XPluginStart.
+        """
         self.xp.log(f"[Loader] Loading module {full_name}")
 
+        # Import module
         try:
             module = importlib.import_module(full_name)
         except Exception as exc:
             raise RuntimeError(f"[Loader] Import failed for {full_name}: {exc!r}")
 
+        # Validate PythonInterface class
         iface_cls = getattr(module, "PythonInterface", None)
         if iface_cls is None or not inspect.isclass(iface_cls):
             raise RuntimeError(f"[Loader] {full_name} has no PythonInterface class")
 
+        # Instantiate plugin
         try:
             instance = iface_cls()
         except Exception as exc:
             raise RuntimeError(f"[Loader] Failed to instantiate PythonInterface: {exc!r}")
 
+        # Call XPluginStart
         try:
             name, sig, desc = instance.XPluginStart()
         except Exception as exc:

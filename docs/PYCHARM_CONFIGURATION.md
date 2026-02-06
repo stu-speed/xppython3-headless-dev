@@ -11,18 +11,16 @@ The following configuration ensures:
 ---
 
 ## 1. Use the project root as the Working Directory
-All sim‑less scripts should run with the project root as the working directory.
-
-Run → Edit Configurations → Working Directory = xplane-python-dev/
-
-This ensures headless scripts resolve paths consistently and can locate the `plugins/` directory.
+All sim‑less runners and plugin imports assume the project root is the working directory.
+Do not open PyCharm inside `plugins/` or `simless/`.
 
 ---
 
-## 2. Mark `plugins/` as a Sources Root
+## 2. Configure the `plugins/` directory
 X‑Plane treats the plugin directory as the import root.  
-PyCharm must do the same.
+PyCharm must mirror this behavior.
 
+### 2.1 Mark `plugins/` as a Source
 Right‑click: plugins/ → Mark Directory As → Sources Root
 
 This enables absolute imports such as:
@@ -30,33 +28,30 @@ This enables absolute imports such as:
     import sshd_extensions.datarefs
     import sshd_extlibs.ss_serial_device
 
----
-
-## 3. Sim‑less imports do NOT require marking `simless/libs` as a source root
-All sim‑less scripts import FakeXP using:
-
-    from simless.libs.fake_xp import FakeXP
-
-Because `simless/` is inside the project root, PyCharm resolves this automatically.  
-No additional configuration is required.
+### 2.2 Exclude plugin build artifacts (optional)
+If you generate logs, cache files, or compiled artifacts under plugins/,
+mark those subdirectories as Excluded.
 
 ---
 
-## 4. Configure XPPython3 stubs for autocomplete and type checking
-Place the official XPPython3 `.pyi` stubs in:
+## 3. Configure XPPython3 stubs for autocomplete and type checking
+Place the official XPPython3 `.pyi` stubs and python code in:
 
     stubs/XPPython3/
 
-Then configure PyCharm:
+PyCharm must treat this directory as a source root, but the parent `stubs/`
+must be excluded to avoid indexing noise.
 
-### 4.1 Exclude the `stubs/` directory
+### 3.1 Exclude the `stubs/` directory
 Right‑click stubs/ → Mark Directory As → Excluded
 
-### 4.2 Add `stubs/` as a Content Root
+### 3.2 Add `stubs/` as a Content Root
 Settings → Project Structure → Add Content Root → stubs/
 
-### 4.3 Mark `stubs/XPPython3` as a Sources Root
+### 3.3 Mark `stubs/XPPython3` as a Source
 Right‑click stubs/XPPython3 → Mark Directory As → Sources Root
+
+![Structure](docs/structure.png)
 
 This enables:
 • xp.* autocomplete  
@@ -65,9 +60,9 @@ This enables:
 
 ---
 
-## 5. Headless execution: add `plugins/` to sys.path
-Sim‑less runners live under `simless/`, so Python’s working directory is not the plugin root.  
-To mirror X‑Plane’s import model, each headless runner must add the plugin root:
+## 4. Headless execution: add `plugins/` to sys.path
+Sim‑less runners execute from inside `simless/`, not the plugin root.  
+To mirror X‑Plane’s import model, each runner must prepend the plugin root:
 
     from pathlib import Path
     import sys
@@ -76,25 +71,10 @@ To mirror X‑Plane’s import model, each headless runner must add the plugin r
     PLUGIN_ROOT = ROOT / "plugins"
     sys.path.insert(0, str(PLUGIN_ROOT))
 
-This makes headless execution behave exactly like X‑Plane:
-• plugins load by name (`PI_sshd_OTA`, etc.)  
+This ensures:
+• plugins import by name (`PI_sshd_OTA`, etc.)  
 • `sshd_extensions` and `sshd_extlibs` resolve correctly  
-• FakeXP can run multi‑plugin lifecycles without import errors  
-
----
-
-## 6. Recommended PyCharm Run Configuration
-For any sim‑less script (e.g., `simless/run_ota_gui.py`):
-
-• Script path: simless/run_ota_gui.py  
-• Working directory: xplane-python-dev/  
-• Add content roots to PYTHONPATH: enabled  
-• Add source roots to PYTHONPATH: enabled  
-
-This ensures the same import behavior across:
-• PyCharm  
-• FakeXP  
-• XPPython3 inside X‑Plane  
+• FakeXP can run multi‑plugin lifecycles without import errors
 
 ---
 

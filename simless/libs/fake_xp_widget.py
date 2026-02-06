@@ -1,25 +1,5 @@
 # ===========================================================================
-# FakeXPWidgets — DearPyGui-backed XPWidget emulator
-#
-# Provides a lightweight, deterministic simulation of X‑Plane’s XPWidgets
-# system for FakeXP. Each XP widget is represented by an integer handle and
-# mapped to a corresponding DearPyGui item at runtime.
-#
-# Responsibilities:
-#   • Maintain widget state (geometry, visibility, properties, z‑order)
-#   • Create/update DearPyGui items lazily on demand
-#   • Mirror XPWidget semantics: parent/child, descriptors, callbacks
-#   • Provide hit‑testing, stacking, and keyboard‑focus behavior
-#
-# Non‑Responsibilities:
-#   • DearPyGui context/viewport lifecycle (handled by FakeXPRunner)
-#   • Layout management beyond explicit widget geometry
-#
-# Design notes:
-#   • All state is stored in Python dicts for clarity and testability
-#   • DPG items are cached in _dpg_ids and updated each frame
-#   • Unknown widget classes fall back to simple text placeholders
-#   • High‑signal debug logging is available when FakeXP.debug_enabled is True
+# FakeXPWidgets — DearPyGui-backed XPWidget emulator (prod-compatible)
 # ===========================================================================
 
 from __future__ import annotations
@@ -27,20 +7,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import dearpygui.dearpygui as dpg
 
-# ---------------------------------------------------------------------------
-# Type aliases
-# ---------------------------------------------------------------------------
-
 WidgetHandle = int
-WidgetGeometry = Tuple[int, int, int, int]  # (x, y, w, h)
-WidgetProperties = Dict[int, Any]
+WidgetGeometry = Tuple[int, int, int, int]
 WidgetCallback = Callable[[int, int, Any, Any], None]
 
-
-# ---------------------------------------------------------------------------
-# Widget classes (production-accurate names)
-# ---------------------------------------------------------------------------
-
+# Widget classes
 xpWidgetClass_MainWindow = 1
 xpWidgetClass_SubWindow = 2
 xpWidgetClass_Button = 3
@@ -50,86 +21,58 @@ xpWidgetClass_ScrollBar = 6
 xpWidgetClass_ListBox = 7
 xpWidgetClass_Custom = 99
 
+# Properties
+Property_MainWindowType = 1000
+Property_MainWindowHasCloseBoxes = 1100
+Property_MainWindowIsCloseBox = 1101
+Property_MainWindowIsResizable = 1102
 
-# ---------------------------------------------------------------------------
-# Widget properties (production-accurate names)
-# ---------------------------------------------------------------------------
+Property_ScrollBarMin = 110
+Property_ScrollBarMax = 111
+Property_ScrollBarSliderPosition = 112
 
-Property_ScrollValue = 2001
-Property_ScrollMin = 2002
-Property_ScrollMax = 2003
 Property_ListItems = 2101
 Property_ListSelection = 2102
 
+# Messages
+ScrollBarTypeScrollBar = 0
+ScrollBarTypeSlider = 1
 
-# ---------------------------------------------------------------------------
-# Widget messages (production parity)
-# ---------------------------------------------------------------------------
-
+Msg_ScrollBarSliderPositionChanged = 13
+Message_CloseButtonPushed = 1
 Msg_MouseDown = 6
 Msg_MouseDrag = 8
 Msg_MouseUp = 7
 Msg_KeyPress = 12
+Msg_PushButtonPressed = 14
 
-
-# ===========================================================================
-# FakeXPWidgets — strongly typed, working version
-# ===========================================================================
 
 class FakeXPWidgets:
-    """
-    DearPyGui-backed XPWidget simulation layer.
-
-    FakeXP owns the DearPyGui lifecycle. This class only creates and updates
-    DPG items corresponding to XP widget definitions.
-    """
-
     def __init__(self, fakexp) -> None:
         self.xp = fakexp
 
-        # Core widget state
-        self._widgets: Dict[WidgetHandle, Dict[str, Any]] = {}
-        self._callbacks: Dict[WidgetHandle, List[WidgetCallback]] = {}
-        self._next_id: int = 1
+        self._widgets: Dict[int, Dict[str, Any]] = {}
+        self._callbacks: Dict[int, List[WidgetCallback]] = {}
+        self._next_id = 1
 
-        # Parent/child relationships
-        self._parent: Dict[WidgetHandle, WidgetHandle] = {}
+        self._parent: Dict[int, int] = {}
+        self._descriptor: Dict[int, str] = {}
+        self._classes: Dict[int, int] = {}
+        self._dpg_ids: Dict[int, int] = {}
 
-        # Widget metadata
-        self._descriptor: Dict[WidgetHandle, str] = {}
-        self._classes: Dict[WidgetHandle, int] = {}
-        self._dpg_ids: Dict[WidgetHandle, int] = {}
-
-        # Focus + stacking
-        self._focused_widget: Optional[int] = None
         self._z_order: List[int] = []
-
-        # Default parent window for orphan widgets
         self._default_main_window: Optional[int] = None
+        self._focused_widget: Optional[int] = None
 
-    # ----------------------------------------------------------------------
-    # Debug helper
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     def _dbg(self, msg: str) -> None:
         if getattr(self.xp, "debug_enabled", False):
             print(f"[FakeXPWidgets] {msg}")
 
-    # ----------------------------------------------------------------------
-    # Widget creation
-    # ----------------------------------------------------------------------
-    def createWidget(
-        self,
-        left: int,
-        top: int,
-        right: int,
-        bottom: int,
-        visible: int,
-        descriptor: str,
-        is_root: int,
-        parent: int,
-        widget_class: int,
-    ) -> WidgetHandle:
-
+    # ------------------------------------------------------------------
+    # CREATE / DESTROY
+    # ------------------------------------------------------------------
+    def createWidget(self, left, top, right, bottom, visible, descriptor, is_root, parent, widget_class):
         wid = self._next_id
         self._next_id += 1
 
@@ -138,10 +81,7 @@ class FakeXPWidgets:
         w = right - left
         h = top - bottom
 
-        self._dbg(
-            f"createWidget: wid={wid}, class={widget_class}, desc={descriptor!r}, "
-            f"parent={parent}, geom={(x, y, w, h)}"
-        )
+        self._dbg(f"CREATE wid={wid} class={widget_class} desc={descriptor!r} geom={(x,y,w,h)} parent={parent}")
 
         self._widgets[wid] = {
             "geometry": (x, y, w, h),
@@ -152,17 +92,12 @@ class FakeXPWidgets:
         self._parent[wid] = parent
         self._descriptor[wid] = descriptor
         self._classes[wid] = widget_class
-
-        # New widgets appear on top
         self._z_order.append(wid)
 
         return wid
 
-    # ----------------------------------------------------------------------
-    # Widget destruction
-    # ----------------------------------------------------------------------
-    def killWidget(self, wid: WidgetHandle) -> None:
-        self._dbg(f"killWidget: wid={wid}")
+    def killWidget(self, wid):
+        self._dbg(f"KILL wid={wid}")
 
         self._widgets.pop(wid, None)
         self._callbacks.pop(wid, None)
@@ -180,160 +115,168 @@ class FakeXPWidgets:
         if self._focused_widget == wid:
             self._focused_widget = None
 
-    # ----------------------------------------------------------------------
-    # Geometry
-    # ----------------------------------------------------------------------
-    def setWidgetGeometry(self, wid: WidgetHandle, x: int, y: int, w: int, h: int) -> None:
-        self._dbg(f"setWidgetGeometry: wid={wid}, geom={(x, y, w, h)}")
+    # ------------------------------------------------------------------
+    # GEOMETRY
+    # ------------------------------------------------------------------
+    def setWidgetGeometry(self, wid, x, y, w, h):
+        self._dbg(f"SET GEOMETRY wid={wid} → {(x,y,w,h)}")
         if wid in self._widgets:
             self._widgets[wid]["geometry"] = (x, y, w, h)
             if wid in self._dpg_ids:
                 dpg.configure_item(self._dpg_ids[wid], pos=(x, y), width=w, height=h)
 
-    def getWidgetGeometry(self, wid: WidgetHandle) -> WidgetGeometry:
+    def getWidgetGeometry(self, wid):
         return self._widgets.get(wid, {}).get("geometry", (0, 0, 0, 0))
 
-    def getWidgetExposedGeometry(self, wid: WidgetHandle) -> WidgetGeometry:
+    def getWidgetExposedGeometry(self, wid):
         return self.getWidgetGeometry(wid)
 
-    # ----------------------------------------------------------------------
-    # Visibility
-    # ----------------------------------------------------------------------
-    def showWidget(self, wid: WidgetHandle) -> None:
-        self._dbg(f"showWidget: wid={wid}")
+    # ------------------------------------------------------------------
+    # VISIBILITY
+    # ------------------------------------------------------------------
+    def showWidget(self, wid):
+        self._dbg(f"SHOW wid={wid}")
         if wid in self._widgets:
             self._widgets[wid]["visible"] = True
             if wid in self._dpg_ids:
                 dpg.configure_item(self._dpg_ids[wid], show=True)
 
-    def hideWidget(self, wid: WidgetHandle) -> None:
-        self._dbg(f"hideWidget: wid={wid}")
+    def hideWidget(self, wid):
+        self._dbg(f"HIDE wid={wid}")
         if wid in self._widgets:
             self._widgets[wid]["visible"] = False
             if wid in self._dpg_ids:
                 dpg.configure_item(self._dpg_ids[wid], show=False)
 
-    def isWidgetVisible(self, wid: WidgetHandle) -> bool:
+    def isWidgetVisible(self, wid):
         return bool(self._widgets.get(wid, {}).get("visible", False))
 
-    # ----------------------------------------------------------------------
-    # Stacking order
-    # ----------------------------------------------------------------------
-    def isWidgetInFront(self, wid: WidgetHandle) -> bool:
+    # ------------------------------------------------------------------
+    # Z‑ORDER
+    # ------------------------------------------------------------------
+    def isWidgetInFront(self, wid):
         return self._z_order and self._z_order[-1] == wid
 
-    def bringWidgetToFront(self, wid: WidgetHandle) -> None:
-        self._dbg(f"bringWidgetToFront: wid={wid}")
+    def bringWidgetToFront(self, wid):
+        self._dbg(f"BRING FRONT wid={wid}")
         if wid in self._z_order:
             self._z_order.remove(wid)
             self._z_order.append(wid)
 
-    def pushWidgetBehind(self, wid: WidgetHandle) -> None:
-        self._dbg(f"pushWidgetBehind: wid={wid}")
+    def pushWidgetBehind(self, wid):
+        self._dbg(f"PUSH BEHIND wid={wid}")
         if wid in self._z_order:
             self._z_order.remove(wid)
             self._z_order.insert(0, wid)
 
-    # ----------------------------------------------------------------------
-    # Parent / class / descriptor
-    # ----------------------------------------------------------------------
-    def getParentWidget(self, wid: WidgetHandle) -> WidgetHandle:
+    # ------------------------------------------------------------------
+    # PARENT / CLASS / DESCRIPTOR
+    # ------------------------------------------------------------------
+    def getParentWidget(self, wid):
         return self._parent.get(wid, 0)
 
-    def getWidgetClass(self, wid: WidgetHandle) -> int:
+    def getWidgetClass(self, wid):
         return self._classes.get(wid, xpWidgetClass_Custom)
 
-    def getWidgetUnderlyingWindow(self, wid: WidgetHandle) -> int:
+    def getWidgetUnderlyingWindow(self, wid):
         return 0
 
-    def setWidgetDescriptor(self, wid: WidgetHandle, text: str) -> None:
-        self._dbg(f"setWidgetDescriptor: wid={wid}, text={text!r}")
+    def setWidgetDescriptor(self, wid, text):
+        self._dbg(f"SET DESCRIPTOR wid={wid} text={text!r}")
         self._descriptor[wid] = text
-        if wid in self._dpg_ids:
-            dpg.configure_item(self._dpg_ids[wid], label=text)
 
-    def getWidgetDescriptor(self, wid: WidgetHandle) -> str:
+        if wid in self._dpg_ids:
+            dpg_id = self._dpg_ids[wid]
+            dpg.set_value(dpg_id, text)
+            dpg.configure_item(dpg_id, default_value=text)
+
+    def getWidgetDescriptor(self, wid):
         return self._descriptor.get(wid, "")
 
-    # ----------------------------------------------------------------------
-    # Properties
-    # ----------------------------------------------------------------------
-    def setWidgetProperty(self, wid: WidgetHandle, prop: int, value: Any) -> None:
-        self._dbg(f"setWidgetProperty: wid={wid}, prop={prop}, value={value}")
+    # ------------------------------------------------------------------
+    # PROPERTIES
+    # ------------------------------------------------------------------
+    def setWidgetProperty(self, wid, prop, value):
+        self._dbg(f"SET PROPERTY wid={wid} prop={prop} value={value}")
         if wid not in self._widgets:
             return
 
         self._widgets[wid]["properties"][prop] = value
 
-        # --- NEW: update DPG item if it already exists ---
-        # TODO: add updates for listBox and others
         if wid in self._dpg_ids:
             dpg_id = self._dpg_ids[wid]
 
-            if prop == Property_ScrollMin:
+            if prop == Property_ScrollBarMin:
                 dpg.configure_item(dpg_id, min_value=int(value))
 
-            elif prop == Property_ScrollMax:
+            elif prop == Property_ScrollBarMax:
                 dpg.configure_item(dpg_id, max_value=int(value))
 
-            elif prop == Property_ScrollValue:
+            elif prop == Property_ScrollBarSliderPosition:
                 dpg.set_value(dpg_id, int(value))
 
-    def getWidgetProperty(self, wid: WidgetHandle, prop: int) -> Any:
+    def getWidgetProperty(self, wid, prop):
         return self._widgets.get(wid, {}).get("properties", {}).get(prop)
 
-    # ----------------------------------------------------------------------
-    # Callbacks + messages
-    # ----------------------------------------------------------------------
-    def addWidgetCallback(self, wid: WidgetHandle, callback: WidgetCallback) -> None:
-        self._dbg(f"addWidgetCallback: wid={wid}")
+    # ------------------------------------------------------------------
+    # CALLBACKS + MESSAGE DISPATCH (prod plugin expects: handler(msg, widget,...))
+    # ------------------------------------------------------------------
+    def addWidgetCallback(self, wid, callback):
+        self._dbg(f"ADD CALLBACK wid={wid}")
         self._callbacks.setdefault(wid, []).append(callback)
 
-    def sendWidgetMessage(self, wid: WidgetHandle, msg: int, param1: Any, param2: Any) -> None:
-        self._dbg(f"sendWidgetMessage: wid={wid}, msg={msg}")
-        for cb in self._callbacks.get(wid, []):
-            try:
-                cb(wid, msg, param1, param2)
-            except Exception as e:
-                self._dbg(f" callback error in {cb.__name__}: {e!r}")
+    def sendWidgetMessage(self, wid, msg, param1, param2):
+        self._dbg(f"SEND MSG wid={wid} msg={msg} param1={param1} param2={param2}")
 
-    # ----------------------------------------------------------------------
-    # Hit-testing
-    # ----------------------------------------------------------------------
-    def getWidgetForLocation(self, x: int, y: int) -> Optional[WidgetHandle]:
+        # Bubble to widget and all ancestors, calling as (msg, widget, ...)
+        current = wid
+        visited = set()
+
+        while current and current not in visited:
+            visited.add(current)
+            self._dbg(f" → dispatching to wid={current}")
+            for cb in self._callbacks.get(current, []):
+                try:
+                    cb(msg, current, param1, param2)
+                except Exception as e:
+                    self._dbg(f"  callback error in {cb.__name__}: {e!r}")
+            current = self._parent.get(current, 0)
+
+    # ------------------------------------------------------------------
+    # HIT TEST
+    # ------------------------------------------------------------------
+    def getWidgetForLocation(self, x, y):
         for wid in reversed(self._z_order):
             w = self._widgets.get(wid)
             if not w or not w["visible"]:
                 continue
             gx, gy, gw, gh = w["geometry"]
             if gx <= x <= gx + gw and gy <= y <= gy + gh:
-                self._dbg(f"getWidgetForLocation: hit wid={wid}")
+                self._dbg(f"HIT wid={wid}")
                 return wid
-        self._dbg("getWidgetForLocation: no hit")
+        self._dbg("HIT none")
         return None
 
-    # ----------------------------------------------------------------------
-    # Keyboard focus
-    # ----------------------------------------------------------------------
-    def setKeyboardFocus(self, wid: Optional[WidgetHandle]) -> None:
-        self._dbg(f"setKeyboardFocus: wid={wid}")
+    # ------------------------------------------------------------------
+    # KEYBOARD FOCUS
+    # ------------------------------------------------------------------
+    def setKeyboardFocus(self, wid):
+        self._dbg(f"FOCUS wid={wid}")
         self._focused_widget = wid
 
-    def loseKeyboardFocus(self, wid: WidgetHandle) -> None:
+    def loseKeyboardFocus(self, wid):
         if self._focused_widget == wid:
-            self._dbg(f"loseKeyboardFocus: wid={wid}")
+            self._dbg(f"LOSE FOCUS wid={wid}")
             self._focused_widget = None
 
-    # ----------------------------------------------------------------------
-    # Parent resolution
-    # ----------------------------------------------------------------------
-    def _resolve_dpg_parent(self, wid: WidgetHandle) -> int:
-        wclass = self.getWidgetClass(wid)
+    # ------------------------------------------------------------------
+    # PARENT RESOLUTION
+    # ------------------------------------------------------------------
+    def _resolve_dpg_parent(self, wid):
         parent = self._parent.get(wid, 0)
+        wclass = self._classes.get(wid)
 
-        self._dbg(
-            f"_resolve_dpg_parent: wid={wid}, class={wclass}, xp_parent={parent}"
-        )
+        self._dbg(f"RESOLVE PARENT wid={wid} class={wclass} xp_parent={parent}")
 
         if wclass == xpWidgetClass_MainWindow:
             return 0
@@ -348,92 +291,72 @@ class FakeXPWidgets:
 
         return self._dpg_ids[parent]
 
-    # ----------------------------------------------------------------------
-    # XPWidget → DPG mapping
-    # ----------------------------------------------------------------------
-    def _ensure_dpg_item_for_widget(self, wid: WidgetHandle) -> None:
+    # ------------------------------------------------------------------
+    # DPG CREATION
+    # ------------------------------------------------------------------
+    def _ensure_dpg_item_for_widget(self, wid):
         if wid in self._dpg_ids:
-            return
+            dpg_id = self._dpg_ids[wid]
+            if dpg.is_item_ok(dpg_id):
+                return
+            self._dpg_ids.pop(wid)
 
-        wclass = self.getWidgetClass(wid)
-        desc = self.getWidgetDescriptor(wid)
-        x, y, w, h = self.getWidgetGeometry(wid)
+        wclass = self._classes[wid]
+        desc = self._descriptor[wid]
+        x, y, w, h = self._widgets[wid]["geometry"]
 
-        dpg_parent = self._resolve_dpg_parent(wid)
+        parent = self._resolve_dpg_parent(wid)
 
-        try:
-            if wclass == xpWidgetClass_MainWindow:
-                dpg_id = dpg.add_window(
-                    label=desc or "Window",
-                    pos=(x, y),
-                    width=w,
-                    height=h,
-                )
+        if wclass == xpWidgetClass_MainWindow:
+            dpg_id = dpg.add_window(label=desc or "Window", pos=(x, y), width=w, height=h)
 
-            elif wclass == xpWidgetClass_Caption:
-                dpg_id = dpg.add_text(desc or "", parent=dpg_parent)
+        elif wclass == xpWidgetClass_Caption:
+            dpg_id = dpg.add_text(default_value=desc or "", parent=parent)
 
-            elif wclass == xpWidgetClass_ScrollBar:
-                min_v = self.getWidgetProperty(wid, Property_ScrollMin)
-                max_v = self.getWidgetProperty(wid, Property_ScrollMax)
-                cur_v = self.getWidgetProperty(wid, Property_ScrollValue)
+        elif wclass == xpWidgetClass_ScrollBar:
+            min_v = self.getWidgetProperty(wid, Property_ScrollBarMin) or 0
+            max_v = self.getWidgetProperty(wid, Property_ScrollBarMax) or 100
+            cur_v = self.getWidgetProperty(wid, Property_ScrollBarSliderPosition) or min_v
 
-                # XPWidgets semantics: missing properties get defaults
-                if min_v is None:
-                    min_v = 0
-                if max_v is None:
-                    max_v = 100
-                if cur_v is None:
-                    cur_v = min_v
+            def _on_slider(sender, app_data, user_data):
+                self.setWidgetProperty(user_data, Property_ScrollBarSliderPosition, int(app_data))
+                self.sendWidgetMessage(user_data, Msg_ScrollBarSliderPositionChanged, user_data, None)
 
-                def _on_slider(sender, app_data, user_data):
-                    self.setWidgetProperty(
-                        user_data, Property_ScrollValue, int(app_data)
-                    )
-                    self.sendWidgetMessage(user_data, Msg_MouseDrag, None, None)
-
-                dpg_id = dpg.add_slider_int(
-                    label=desc or "Slider",
-                    min_value=int(min_v),
-                    max_value=int(max_v),
-                    default_value=int(cur_v),
-                    width=w,
-                    parent=dpg_parent,
-                    callback=_on_slider,
-                    user_data=wid,
-                )
-
-            elif wclass == xpWidgetClass_Button:
-
-                def _on_button(sender, app_data, user_data):
-                    self.sendWidgetMessage(user_data, Msg_MouseDown, None, None)
-
-                dpg_id = dpg.add_button(
-                    label=desc or "Button",
-                    width=w,
-                    height=h,
-                    parent=dpg_parent,
-                    callback=_on_button,
-                    user_data=wid,
-                )
-
-            else:
-                dpg_id = dpg.add_text(desc or f"Widget {wid}", parent=dpg_parent)
-
-        except Exception as e:
-            self._dbg(
-                f"DPG creation FAILED for wid={wid}, class={wclass}, error={e!r}"
+            dpg_id = dpg.add_slider_int(
+                label=desc or "Slider",
+                min_value=int(min_v),
+                max_value=int(max_v),
+                default_value=int(cur_v),
+                width=w,
+                parent=parent,
+                callback=_on_slider,
+                user_data=wid,
             )
-            raise
+
+        elif wclass == xpWidgetClass_Button:
+            def _on_button(sender, app_data, user_data):
+                self.sendWidgetMessage(user_data, Msg_PushButtonPressed, user_data, None)
+
+            dpg_id = dpg.add_button(
+                label=desc or "Button",
+                width=w,
+                height=h,
+                parent=parent,
+                callback=_on_button,
+                user_data=wid,
+            )
+
+        else:
+            dpg_id = dpg.add_text(desc or f"Widget {wid}", parent=parent)
 
         self._dpg_ids[wid] = dpg_id
 
-    # ----------------------------------------------------------------------
-    # Rendering (passive — FakeXP drives the frame pump)
-    # ----------------------------------------------------------------------
-    def _render_widgets(self) -> None:
+    # ------------------------------------------------------------------
+    # RENDER
+    # ------------------------------------------------------------------
+    def _render_widgets(self):
         for wid in self._widgets.keys():
             self._ensure_dpg_item_for_widget(wid)
 
-    def _draw_all_widgets(self) -> None:
+    def _draw_all_widgets(self):
         self._render_widgets()

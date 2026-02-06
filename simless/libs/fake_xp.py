@@ -25,12 +25,9 @@
 #   • Mirror X‑Plane semantics closely while remaining pure Python
 #   • Keep subsystem boundaries explicit and maintainable
 # ===========================================================================
-
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Sequence, Tuple, Optional, Union
+from typing import Any, Callable, Dict, List, Sequence
 
 import XPPython3
 
@@ -46,15 +43,22 @@ from simless.libs.fake_xp_widget import (
     xpWidgetClass_ScrollBar,
     xpWidgetClass_ListBox,
     xpWidgetClass_Custom,
-    Property_ScrollValue,
-    Property_ScrollMin,
-    Property_ScrollMax,
+    Property_ScrollBarMax,
+    Property_ScrollBarMin,
+    Property_ScrollBarSliderPosition,
     Property_ListItems,
     Property_ListSelection,
     Msg_MouseDown,
     Msg_MouseDrag,
     Msg_MouseUp,
     Msg_KeyPress,
+    Property_MainWindowType,
+    Property_MainWindowHasCloseBoxes,
+    Property_MainWindowIsCloseBox,
+    Property_MainWindowIsResizable,
+    Message_CloseButtonPushed,
+    Msg_ScrollBarSliderPositionChanged,
+    Msg_PushButtonPressed
 )
 from simless.libs.fake_xp_graphics import FakeXPGraphics
 
@@ -125,11 +129,15 @@ class FakeXP:
         # Keyboard focus
         self._keyboard_focus: int | None = None
 
-        # Bind xp.* into XPPython3
+        # ---------------------------------------------------------------------------
+        # Bind xp.* public API surface
+        # ---------------------------------------------------------------------------
         XPPython3.xp = self
         xp = XPPython3.xp
 
-        # Widget classes
+        # ---------------------------------------------------------------------------
+        # 1. Widget class constants (public API)
+        # ---------------------------------------------------------------------------
         xp.WidgetClass_MainWindow = xpWidgetClass_MainWindow
         xp.WidgetClass_SubWindow = xpWidgetClass_SubWindow
         xp.WidgetClass_Button = xpWidgetClass_Button
@@ -139,20 +147,48 @@ class FakeXP:
         xp.WidgetClass_ListBox = xpWidgetClass_ListBox
         xp.WidgetClass_Custom = xpWidgetClass_Custom
 
-        # Widget properties
-        xp.Property_ScrollValue = Property_ScrollValue
-        xp.Property_ScrollMin = Property_ScrollMin
-        xp.Property_ScrollMax = Property_ScrollMax
+        # ---------------------------------------------------------------------------
+        # 2. Widget properties (public API)
+        # ---------------------------------------------------------------------------
+        # Scrollbars
+        xp.Property_ScrollBarMin = Property_ScrollBarMin
+        xp.Property_ScrollBarMax = Property_ScrollBarMax
+        xp.Property_ScrollBarSliderPosition = Property_ScrollBarSliderPosition
+        xp.Property_ScrollBarPageAmount = 113
+        xp.Property_ScrollBarType = 113
+        xp.ScrollBarTypeScrollBar = 0
+        xp.ScrollBarTypeSlider = 1
+
+        # Main window
+        xp.Property_MainWindowType = Property_MainWindowType
+        xp.Property_MainWindowHasCloseBoxes = Property_MainWindowHasCloseBoxes
+        xp.Property_MainWindowIsCloseBox = Property_MainWindowIsCloseBox
+        xp.Property_MainWindowIsResizable = Property_MainWindowIsResizable
+
+        # Buttons
+        xp.Property_ButtonType = 200
+        xp.PushButton = 0
+        xp.RadioButton = 1
+        xp.CheckBox = 2
+
+        # ListBox
         xp.Property_ListItems = Property_ListItems
         xp.Property_ListSelection = Property_ListSelection
 
-        # Widget messages
+        # ---------------------------------------------------------------------------
+        # 3. Widget messages (public API)
+        # ---------------------------------------------------------------------------
         xp.Msg_MouseDown = Msg_MouseDown
         xp.Msg_MouseDrag = Msg_MouseDrag
         xp.Msg_MouseUp = Msg_MouseUp
         xp.Msg_KeyPress = Msg_KeyPress
+        xp.Msg_ScrollBarSliderPositionChanged = Msg_ScrollBarSliderPositionChanged
+        xp.Message_CloseButtonPushed = Message_CloseButtonPushed
+        xp.Msg_PushButtonPressed = Msg_PushButtonPressed
 
-        # Bind widget API to xp.* and to self.*
+        # ---------------------------------------------------------------------------
+        # 4. Bind FakeXPWidgets methods to xp.* and self.*
+        # ---------------------------------------------------------------------------
         widget_api = [
             "createWidget", "killWidget", "setWidgetGeometry", "getWidgetGeometry",
             "getWidgetExposedGeometry", "showWidget", "hideWidget", "isWidgetVisible",
@@ -168,6 +204,15 @@ class FakeXP:
             setattr(xp, name, fn)
             setattr(self, name, fn)
 
+        # ---------------------------------------------------------------------------
+        # 5. Public destroyWidget wrapper (XPPython3 API)
+        # ---------------------------------------------------------------------------
+        def destroyWidget(self, wid, destroy_children=1):
+            self.widgets.killWidget(wid)
+
+        xp.destroyWidget = destroyWidget.__get__(self)
+        self.destroyWidget = destroyWidget.__get__(self)
+
     # ----------------------------------------------------------------------
     # Debug helper
     # ----------------------------------------------------------------------
@@ -178,8 +223,16 @@ class FakeXP:
     # ----------------------------------------------------------------------
     # Lifecycle helpers
     # ----------------------------------------------------------------------
-    def _run_plugin_lifecycle(self, plugin_names, *, debug=False, enable_gui=True, run_time=-1.0):
+    def _run_plugin_lifecycle(
+        self,
+        plugin_names,
+        *,
+        debug: bool = False,
+        enable_gui: bool = True,
+        run_time: float = -1.0,
+    ) -> None:
         runner = FakeXPRunner(self, enable_gui=enable_gui, run_time=run_time, debug=debug)
+        self._runner = runner
         runner.run_plugin_lifecycle(plugin_names)
 
     def _quit(self) -> None:
@@ -210,13 +263,13 @@ class FakeXP:
     # Simless auto-registration
     # ----------------------------------------------------------------------
     def fake_register_dataref(
-            self,
-            path: str,
-            *,
-            xp_type: int,
-            is_array: bool = False,
-            size: int = 1,
-            writable: bool = True,
+        self,
+        path: str,
+        *,
+        xp_type: int,
+        is_array: bool = False,
+        size: int = 1,
+        writable: bool = True,
     ) -> FakeDataRefInfo:
 
         # xp_type is already a DRefType value (bitmask)
@@ -266,25 +319,19 @@ class FakeXP:
           - If unknown, create a dummy scalar or dummy array based on naming heuristics.
         """
 
-        # ------------------------------------------------------------
         # 1. Reject array element syntax (X‑Plane 12 rule)
-        # ------------------------------------------------------------
         if "[" in name or "]" in name:
             self._dbg(f"findDataRef rejected invalid array element syntax: '{name}'")
             return None
 
-        # ------------------------------------------------------------
         # 2. Return existing real dataref if known
-        # ------------------------------------------------------------
         if name in self._handles:
             return self._handles[name]
 
         if name in self._datarefs:
             return self._datarefs[name]
 
-        # ------------------------------------------------------------
         # 3. Dummy fallback (FakeXP convenience)
-        # ------------------------------------------------------------
         is_array = name.endswith("s") or "array" in name.lower()
 
         if is_array:
@@ -309,6 +356,7 @@ class FakeXP:
         )
 
         self._handles[name] = ref
+        self._values[name] = value
         return ref
 
     def getDataRefInfo(self, handle: FakeDataRefInfo) -> FakeDataRefInfo:

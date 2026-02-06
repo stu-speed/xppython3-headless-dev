@@ -5,13 +5,22 @@
 # See GUI_EMULATION.md for considerations in using GUI emulation
 # ===========================================================================
 
+import sys
+
 import XPPython3
 from simless.libs.fake_xp import FakeXP
+from pathlib import Path
+
+
+# Emulate plugin root dir
+ROOT = Path(__file__).resolve().parent.parent
+PLUGIN_ROOT = ROOT / "plugins"
+sys.path.insert(0, str(PLUGIN_ROOT))
 
 
 def run_simless_ota_gui() -> None:
     xp = FakeXP(debug=True)
-    XPPython3.xp = xp # Replace X-Plane's xp module with FakeXP to run headless
+    XPPython3.xp = xp  # Replace X-Plane's xp API with FakeXP to run headless
 
     plugins = [
         "PI_sshd_OTA",

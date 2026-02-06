@@ -10,6 +10,8 @@
 #   • Support both FakeRefInfo (simless) and XPLMDataRefInfo_t (real X‑Plane)
 # ===========================================================================
 
+from __future__ import annotations
+
 from typing import Any, Callable, Protocol, Sequence, Union
 
 

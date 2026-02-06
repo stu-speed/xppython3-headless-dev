@@ -8,11 +8,14 @@
 # supply a value.
 # ===========================================================================
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any, Dict
 
 from sshd_extensions.xp_interface import XPInterface
+
 
 # ======================================================================
 # X‑Plane bitmask types (production‑accurate)
@@ -45,7 +48,7 @@ class DataRefSpec:
 # ======================================================================
 
 class TypedAccessor:
-    def __init__(self, xp, handle, dtype: DRefType):
+    def __init__(self, xp: XPInterface, handle: Any, dtype: DRefType):
         self._xp = xp
         self._handle = handle
         self._dtype = dtype
@@ -61,17 +64,17 @@ class TypedAccessor:
         if self._dtype == DRefType.DOUBLE:
             return xp.getDatad(h)
         if self._dtype == DRefType.FLOAT_ARRAY:
-            size = xp.getDatavf(h, None, 0, 0)   # query length
+            size = xp.getDatavf(h, None, 0, 0)   # special gets int length
             out: list[float] = [0.0] * size
             xp.getDatavf(h, out, 0, size)
             return out
         if self._dtype == DRefType.INT_ARRAY:
-            size = xp.getDatavi(h, None, 0, 0)   # query length
+            size = xp.getDatavi(h, None, 0, 0)   # special query gets int length
             out: list[int] = [0] * size
             xp.getDatavi(h, out, 0, size)
             return out
         if self._dtype == DRefType.BYTE_ARRAY:
-            size = xp.getDatab(h, None, 0, 0)    # query length
+            size = xp.getDatab(h, None, 0, 0)   # spe query gets int length
             out = bytearray(size)
             xp.getDatab(h, out, 0, size)
             return out
@@ -108,8 +111,9 @@ class TypedAccessor:
 # FakeXP detection
 # ======================================================================
 
-def _is_fake_xp(xp):
+def _is_fake_xp(xp: XPInterface) -> bool:
     return hasattr(xp, "fake_register_dataref")
+
 
 def _validate_datarefs(specs: Dict[str, DataRefSpec]) -> None:
     """
@@ -191,12 +195,6 @@ def _validate_datarefs(specs: Dict[str, DataRefSpec]) -> None:
                         f"[DataRefs] '{key}': BYTE_ARRAY default must be bytearray"
                     )
 
-        # --- writable -----------------------------------------------------
-        if not spec.writable and default is not None:
-            # This is allowed, but warn-worthy; we enforce nothing here.
-            pass
-
-
 
 class DataRefRegistry:
     """
@@ -248,8 +246,6 @@ class DataRefRegistry:
 
             self.handles[key] = handle
 
-    # ------------------------------------------------------------------
-
     def accessor(self, key: str) -> TypedAccessor:
         """
         Convenience helper: return a TypedAccessor for a declared DataRef.
@@ -264,7 +260,7 @@ class DataRefManager:
     def __init__(
         self,
         specs: Dict[str, DataRefSpec],
-        xp,
+        xp: XPInterface,
         timeout_seconds: float = 10.0,
     ):
         """
@@ -286,10 +282,19 @@ class DataRefManager:
         if _is_fake_xp(self.xp):
             xp.bind_dataref_manager(self)
 
-    def __getitem__(self, name: str):
+    def __getitem__(self, name: str) -> TypedAccessor:
         return self.registry.accessor(name)
 
-    # ------------------------------------------------------------------
+    def _notify_dataref_changed(self, ref: Any) -> None:
+        path = getattr(ref, "path", None)
+        if not path:
+            return
+
+        for key, spec in self.specs.items():
+            if spec.path == path:
+                acc = self._bound.get(key)
+                if acc is not None:
+                    acc.invalidate()
 
     def ready(self, counter: int) -> bool:
         """
@@ -335,10 +340,11 @@ class DataRefManager:
                     self.xp.log(f"[DRM] ERROR: getDataRefInfo failed for {spec.path}")
                     break
 
-                if info.type != int(spec.dtype):
+                xp_type = getattr(info, "xp_type", getattr(info, "type", None))
+                if xp_type != int(spec.dtype):
                     self.xp.log(
                         f"[DRM] ERROR: type mismatch for {spec.path} "
-                        f"(got {info.type}, expected {int(spec.dtype)})"
+                        f"(got {xp_type}, expected {int(spec.dtype)})"
                     )
                     break
 
