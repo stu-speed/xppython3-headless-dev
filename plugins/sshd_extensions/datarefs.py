@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Any, Dict
+from typing import Any, Dict, List, Mapping
 
 from sshd_extensions.xp_interface import XPInterface
 
@@ -48,12 +48,12 @@ class DataRefSpec:
 # ======================================================================
 
 class TypedAccessor:
-    def __init__(self, xp: XPInterface, handle: Any, dtype: DRefType):
+    def __init__(self, xp: XPInterface, handle: Any, dtype: DRefType) -> None:
         self._xp = xp
         self._handle = handle
         self._dtype = dtype
 
-    def get(self):
+    def get(self) -> Any:
         xp = self._xp
         h = self._handle
 
@@ -64,24 +64,27 @@ class TypedAccessor:
         if self._dtype == DRefType.DOUBLE:
             return xp.getDatad(h)
         if self._dtype == DRefType.FLOAT_ARRAY:
-            size = xp.getDatavf(h, None, 0, 0)   # special gets int length
-            out: list[float] = [0.0] * size
+            size = xp.getDatavf(h, None, 0, 0)  # special gets int length
+            assert isinstance(size, int)
+            out: List[float] = [0.0] * size
             xp.getDatavf(h, out, 0, size)
             return out
         if self._dtype == DRefType.INT_ARRAY:
-            size = xp.getDatavi(h, None, 0, 0)   # special query gets int length
-            out: list[int] = [0] * size
-            xp.getDatavi(h, out, 0, size)
-            return out
+            size = xp.getDatavi(h, None, 0, 0)  # special query gets int length
+            assert isinstance(size, int)
+            out_int: List[int] = [0] * size
+            xp.getDatavi(h, out_int, 0, size)
+            return out_int
         if self._dtype == DRefType.BYTE_ARRAY:
-            size = xp.getDatab(h, None, 0, 0)   # spe query gets int length
-            out = bytearray(size)
-            xp.getDatab(h, out, 0, size)
-            return out
+            size = xp.getDatab(h, None, 0, 0)  # special query gets int length
+            assert isinstance(size, int)
+            out_bytes = bytearray(size)
+            xp.getDatab(h, out_bytes, 0, size)
+            return out_bytes
 
         raise TypeError(f"Unsupported dtype {self._dtype}")
 
-    def set(self, value):
+    def set(self, value: Any) -> None:
         xp = self._xp
         h = self._handle
 
@@ -95,13 +98,16 @@ class TypedAccessor:
             xp.setDatad(h, float(value))
             return
         if self._dtype == DRefType.FLOAT_ARRAY:
-            xp.setDatavf(h, list(value), 0, len(value))
+            seq = list(value)
+            xp.setDatavf(h, seq, 0, len(seq))
             return
         if self._dtype == DRefType.INT_ARRAY:
-            xp.setDatavi(h, list(value), 0, len(value))
+            seq_int = list(value)
+            xp.setDatavi(h, seq_int, 0, len(seq_int))
             return
         if self._dtype == DRefType.BYTE_ARRAY:
-            xp.setDatab(h, list(value), 0, len(value))
+            seq_bytes = list(value)
+            xp.setDatab(h, seq_bytes, 0, len(seq_bytes))
             return
 
         raise TypeError(f"Unsupported dtype {self._dtype}")
@@ -115,7 +121,7 @@ def _is_fake_xp(xp: XPInterface) -> bool:
     return hasattr(xp, "fake_register_dataref")
 
 
-def _validate_datarefs(specs: Dict[str, DataRefSpec]) -> None:
+def _validate_datarefs(specs: Mapping[str, DataRefSpec]) -> None:
     """
     Validate the declarative DataRefSpec dictionary before registry creation.
     Ensures dtype/default consistency, array sizing, and required‑field rules.
@@ -209,10 +215,10 @@ class DataRefRegistry:
     responsibility of DataRefManager.
     """
 
-    def __init__(self, xp, specs: Dict[str, DataRefSpec]):
+    def __init__(self, xp: XPInterface, specs: Dict[str, DataRefSpec]) -> None:
         _validate_datarefs(specs)
-        self.xp = xp
-        self.specs = specs
+        self.xp: XPInterface = xp
+        self.specs: Dict[str, DataRefSpec] = specs
 
         # Public handle table: key → handle or None
         self.handles: Dict[str, Any] = {}
@@ -232,17 +238,16 @@ class DataRefRegistry:
 
             # FakeXP: create the dataref
             if _is_fake_xp(self.xp):
-                handle = xp.fake_register_dataref(
+                handle = self.xp.fake_register_dataref(  # type: ignore[attr-defined]
                     spec.path,
                     xp_type=xp_type,
                     is_array=is_array,
                     size=size,
                     writable=spec.writable,
                 )
-
             # Real X‑Plane: attempt to find the dataref
             else:
-                handle = xp.findDataRef(spec.path)
+                handle = self.xp.findDataRef(spec.path)
 
             self.handles[key] = handle
 
@@ -257,21 +262,24 @@ class DataRefRegistry:
 
 
 class DataRefManager:
+    _start_counter: int
+    _last_warn_counter: int
+
     def __init__(
         self,
         specs: Dict[str, DataRefSpec],
         xp: XPInterface,
         timeout_seconds: float = 10.0,
-    ):
+    ) -> None:
         """
         DataRefManager receives only the declarative DataRefSpec dictionary.
         It internally constructs a DataRefRegistry so FakeXP can auto‑register
         datarefs and real X‑Plane can perform initial handle discovery.
         """
 
-        self.specs = specs
-        self.xp = xp
-        self.timeout = timeout_seconds
+        self.specs: Dict[str, DataRefSpec] = specs
+        self.xp: XPInterface = xp
+        self.timeout: float = timeout_seconds
 
         # Create registry internally (FakeXP auto‑registers here)
         self.registry = DataRefRegistry(xp, specs)
@@ -280,7 +288,7 @@ class DataRefManager:
         self._bound: Dict[str, TypedAccessor] = {}
 
         if _is_fake_xp(self.xp):
-            xp.bind_dataref_manager(self)
+            self.xp.bind_dataref_manager(self)  # type: ignore[attr-defined]
 
     def __getitem__(self, name: str) -> TypedAccessor:
         return self.registry.accessor(name)
@@ -294,7 +302,9 @@ class DataRefManager:
             if spec.path == path:
                 acc = self._bound.get(key)
                 if acc is not None:
-                    acc.invalidate()
+                    # Invalidate hook if you later add caching
+                    # For now, nothing to do.
+                    pass
 
     def ready(self, counter: int) -> bool:
         """

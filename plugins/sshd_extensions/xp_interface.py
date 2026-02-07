@@ -1,23 +1,48 @@
 # ===========================================================================
-# FakeXP Interfaces — minimal protocol layer for simless + production
+# XPInterface — typed, minimal API contract for xp.*
 #
-# Defines the small, stable set of xp.* methods that plugins rely on.
-# FakeXP implements these in simless mode; XPPython3 provides them in production.
+# This Protocol defines the small, stable subset of the XPPython3 xp.* API
+# that shared libraries depend on. It is *not* required by production
+# plugins at runtime — XPPython3 provides the real xp module — but it allows
+# IDE to type‑check and validate all code that interacts with xp.*.
 #
-# Purpose:
-#   • Give plugins a consistent typed API surface
-#   • Avoid importing FakeXP internals
-#   • Support both FakeRefInfo (simless) and XPLMDataRefInfo_t (real X‑Plane)
+# In short:
+#   XPInterface is a design‑time contract. It is not required by production
+#   plugins, but it ensures that all library code using xp.* is typed,
+#   validated, and portable between real X‑Plane and the simless FakeXP
+#   environment.
 # ===========================================================================
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol, Sequence, Union
+from typing import Any, Callable, Protocol, Sequence, Union, runtime_checkable
 
+from XPPython3.xp_typing import (
+    XPLMDataRef,
+    XPLMDataRefInfo_t,
+    XPLMFlightLoopID,
+    XPLMFlightLoopPhaseType,
+    XPLMDrawingPhase,
+    XPLMTextureID,
+    XPLMWindowID,
+    XPWidgetID,
+    XPWidgetClass,
+    XPWidgetMessage,
+    XPWidgetPropertyID,
+)
+
+
+# ======================================================================
+# Shared DataRef handle / info types
+# ======================================================================
 
 class FakeRefInfoProto(Protocol):
+    """
+    Minimal shape of FakeXP's FakeDataRefInfo, so code can type against
+    a common interface without importing FakeXP internals.
+    """
     path: str
-    xp_type: int | None
+    xp_type: int
     writable: bool
     is_array: bool
     size: int
@@ -25,88 +50,270 @@ class FakeRefInfoProto(Protocol):
     value: Any
 
 
-DataRefHandle = Union[FakeRefInfoProto, Any]
-DataRefInfo = Union[FakeRefInfoProto, Any]
+DataRefHandle = Union[XPLMDataRef, FakeRefInfoProto, Any]
+DataRefInfo = Union[XPLMDataRefInfo_t, FakeRefInfoProto, Any]
 
 
+# ======================================================================
+# Flight loop callback type
+# ======================================================================
+
+FlightLoopCallback = Callable[[float, float, int, Any], float]
+
+
+# ======================================================================
+# XPInterface Protocol
+# ======================================================================
+
+@runtime_checkable
 class XPInterface(Protocol):
+    # ------------------------------------------------------------------
     # Logging / lifecycle
+    # ------------------------------------------------------------------
     def log(self, msg: str) -> None: ...
     def getMyID(self) -> int: ...
     def disablePlugin(self, plugin_id: int) -> None: ...
 
-    # DataRefs
-    def add_dataref(self, path: str, default_value: Any, writable: bool = False) -> None: ...
-    def findDataRef(self, path: str) -> DataRefHandle | None: ...
-    def getDataRefInfo(self, handle: DataRefHandle) -> DataRefInfo: ...
+    # ------------------------------------------------------------------
+    # Time / processing
+    # ------------------------------------------------------------------
+    def getElapsedTime(self) -> float: ...
 
-    # get/set
+    # ------------------------------------------------------------------
+    # DataRef API (XPLMDataAccess + FakeXP)
+    # ------------------------------------------------------------------
+    def findDataRef(self, name: str) -> DataRefHandle | None: ...
+    def getDataRefInfo(self, handle: DataRefHandle) -> DataRefInfo | None: ...
+
+    # Scalar get/set
     def getDatai(self, handle: DataRefHandle) -> int: ...
+    def setDatai(self, handle: DataRefHandle, value: int) -> None: ...
+
     def getDataf(self, handle: DataRefHandle) -> float: ...
+    def setDataf(self, handle: DataRefHandle, value: float) -> None: ...
+
     def getDatad(self, handle: DataRefHandle) -> float: ...
-    def getDatavi(self, handle: DataRefHandle) -> list[int]: ...
-    def getDatavf(self, handle: DataRefHandle) -> list[float]: ...
-    def getDatab(self, handle: DataRefHandle) -> bytes: ...
-    def setDatai(self, handle: DataRefHandle, v: int) -> None: ...
-    def setDataf(self, handle: DataRefHandle, v: float) -> None: ...
-    def setDatad(self, handle: DataRefHandle, v: float) -> None: ...
-    def setDatavi(self, handle: DataRefHandle, v: Sequence[int]) -> None: ...
-    def setDatavf(self, handle: DataRefHandle, v: Sequence[float]) -> None: ...
-    def setDatab(self, handle: DataRefHandle, v: bytes | bytearray) -> None: ...
+    def setDatad(self, handle: DataRefHandle, value: float) -> None: ...
 
-    # Flight loops (XPPython3 Python API)
-    def createFlightLoop(self, callback: Callable[..., Any], refcon: Any) -> int: ...
-    def scheduleFlightLoop(self, loop_id: int, interval: float) -> None: ...
-    def destroyFlightLoop(self, loop_id: int) -> None: ...
+    # Array get/set — XPPython3-compatible buffer API
+    # When out is None and count == 0, return length (int).
+    def getDatavf(
+        self,
+        handle: DataRefHandle,
+        out: Sequence[float] | None,
+        offset: int,
+        count: int,
+    ) -> int | None: ...
 
-    # Widgets
+    def setDatavf(
+        self,
+        handle: DataRefHandle,
+        values: Sequence[float],
+        offset: int,
+        count: int,
+    ) -> None: ...
+
+    def getDatavi(
+        self,
+        handle: DataRefHandle,
+        out: Sequence[int] | None,
+        offset: int,
+        count: int,
+    ) -> int | None: ...
+
+    def setDatavi(
+        self,
+        handle: DataRefHandle,
+        values: Sequence[int],
+        offset: int,
+        count: int,
+    ) -> None: ...
+
+    def getDatab(
+        self,
+        handle: DataRefHandle,
+        out: bytearray | None,
+        offset: int,
+        count: int,
+    ) -> int | None: ...
+
+    def setDatab(
+        self,
+        handle: DataRefHandle,
+        values: Sequence[int],
+        offset: int,
+        count: int,
+    ) -> None: ...
+
+    # ------------------------------------------------------------------
+    # Flight loops (XPLMProcessing / XPPython3 Python API)
+    # ------------------------------------------------------------------
+    def createFlightLoop(
+        self,
+        callback: FlightLoopCallback | tuple[int, FlightLoopCallback, Any] | list[Any],
+        phase: XPLMFlightLoopPhaseType = XPLMFlightLoopPhaseType(0),
+        refCon: Any | None = None,
+    ) -> XPLMFlightLoopID: ...
+    """
+    XPPython3 supports:
+        createFlightLoop(callback, phase=0, refCon=None)
+        createFlightLoop((phase, callback, refCon))
+    FakeXP mirrors this behavior.
+    """
+
+    def scheduleFlightLoop(
+        self,
+        loop_id: XPLMFlightLoopID,
+        interval: float,
+        relativeToNow: int = 1,
+    ) -> None: ...
+
+    def destroyFlightLoop(self, loop_id: XPLMFlightLoopID) -> None: ...
+
+    # ------------------------------------------------------------------
+    # Widgets (XPStandardWidgets / FakeXPWidgets)
+    # ------------------------------------------------------------------
     def createWidget(
         self,
-        left: int, top: int, right: int, bottom: int,
-        visible: int, descriptor: str,
-        is_root: int, container: int, widget_class: int,
-    ) -> int: ...
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+        visible: int,
+        descriptor: str,
+        is_root: int,
+        container: XPWidgetID,
+        widget_class: XPWidgetClass,
+    ) -> XPWidgetID: ...
 
-    def createCustomWidget(
+    def killWidget(self, wid: XPWidgetID) -> None: ...
+
+    def destroyWidget(self, wid: XPWidgetID, destroy_children: int = 1) -> None: ...
+
+    def setWidgetGeometry(
         self,
-        left: int, top: int, right: int, bottom: int,
-        visible: int, descriptor: str,
-        is_root: int, container: int,
-        callback: Callable[[int, int, Any, Any], Any],
-    ) -> int: ...
+        wid: XPWidgetID,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+    ) -> None: ...
 
-    def destroyWidget(self, wid: int, destroy_children: int) -> None: ...
-    def setWidgetGeometry(self, wid: int, left: int, top: int, right: int, bottom: int) -> None: ...
-    def getWidgetGeometry(self, wid: int) -> tuple[int, int, int, int]: ...
-    def showWidget(self, wid: int) -> None: ...
-    def hideWidget(self, wid: int) -> None: ...
-    def isWidgetVisible(self, wid: int) -> bool: ...
-    def getParentWidget(self, wid: int) -> int | None: ...
-    def getWidgetWithFocus(self) -> int | None: ...
-    def setKeyboardFocus(self, wid: int | None) -> None: ...
-    def getWidgetProperty(self, wid: int, prop: int) -> Any: ...
-    def setWidgetProperty(self, wid: int, prop: int, value: Any) -> None: ...
-    def addWidgetCallback(self, wid: int, callback: Callable[[int, int, Any, Any], Any]) -> None: ...
-    def sendWidgetMessage(self, wid: int, msg: int, param1: Any = None, param2: Any = None) -> None: ...
+    def getWidgetGeometry(self, wid: XPWidgetID) -> tuple[int, int, int, int]: ...
 
-    # Widget rendering
-    def begin_frame(self) -> None: ...
-    def end_frame(self) -> None: ...
-    def render_widgets(self) -> None: ...
+    def getWidgetExposedGeometry(self, wid: XPWidgetID) -> tuple[int, int, int, int]: ...
 
-    # Graphics
-    def registerDrawCallback(self, callback: Callable[[int, int, Any], int], phase: int, before: int, refcon: Any) -> None: ...
-    def unregisterDrawCallback(self, callback: Callable[[int, int, Any], int], phase: int, before: int, refcon: Any) -> None: ...
-    def run_draw_callbacks(self) -> None: ...
-    def drawString(self, x: float, y: float, text: str, color: tuple[float, float, float, float] | None = None) -> None: ...
-    def drawNumber(self, x: float, y: float, number: float, decimals: int = 2) -> None: ...
-    def setGraphicsState(self, fog: int, lighting: int, alpha: int, depth: int, depth_write: int, cull: int) -> None: ...
-    def bindTexture2d(self, texture_id: int, unit: int) -> None: ...
-    def generateTextureNumbers(self, count: int) -> list[int]: ...
-    def deleteTexture(self, texture_id: int) -> None: ...
+    def showWidget(self, wid: XPWidgetID) -> None: ...
+    def hideWidget(self, wid: XPWidgetID) -> None: ...
+    def isWidgetVisible(self, wid: XPWidgetID) -> bool: ...
+    def isWidgetInFront(self, wid: XPWidgetID) -> bool: ...
+    def bringWidgetToFront(self, wid: XPWidgetID) -> None: ...
+    def pushWidgetBehind(self, wid: XPWidgetID) -> None: ...
 
-    # Utilities
-    def speakString(self, text: str) -> None: ...
+    def getParentWidget(self, wid: XPWidgetID) -> XPWidgetID | None: ...
+    def getWidgetClass(self, wid: XPWidgetID) -> XPWidgetClass: ...
+    def getWidgetUnderlyingWindow(self, wid: XPWidgetID) -> XPLMWindowID | None: ...
+
+    def setWidgetDescriptor(self, wid: XPWidgetID, desc: str) -> None: ...
+    def getWidgetDescriptor(self, wid: XPWidgetID) -> str: ...
+
+    def getWidgetForLocation(
+        self,
+        x: int,
+        y: int,
+        in_front: int,
+    ) -> XPWidgetID | None: ...
+
+    def setKeyboardFocus(self, wid: XPWidgetID | None) -> None: ...
+    def loseKeyboardFocus(self, wid: XPWidgetID) -> None: ...
+
+    def setWidgetProperty(
+        self,
+        wid: XPWidgetID,
+        prop: XPWidgetPropertyID,
+        value: Any,
+    ) -> None: ...
+
+    def getWidgetProperty(
+        self,
+        wid: XPWidgetID,
+        prop: XPWidgetPropertyID,
+    ) -> Any: ...
+
+    def addWidgetCallback(
+        self,
+        wid: XPWidgetID,
+        callback: Callable[[XPWidgetMessage, XPWidgetID, Any, Any], Any],
+    ) -> None: ...
+
+    def sendWidgetMessage(
+        self,
+        wid: XPWidgetID,
+        msg: XPWidgetMessage,
+        param1: Any | None = None,
+        param2: Any | None = None,
+    ) -> None: ...
+
+    # ------------------------------------------------------------------
+    # Graphics (XPLMGraphics / XPLMDisplay / FakeXPGraphics)
+    # ------------------------------------------------------------------
+    def registerDrawCallback(
+        self,
+        callback: Callable[[XPLMDrawingPhase, int, Any], int],
+        phase: XPLMDrawingPhase,
+        wantsBefore: int,
+    ) -> None: ...
+
+    def unregisterDrawCallback(
+        self,
+        callback: Callable[[XPLMDrawingPhase, int, Any], int],
+        phase: XPLMDrawingPhase,
+        wantsBefore: int,
+    ) -> None: ...
+
+    def drawString(
+        self,
+        color: Sequence[float],
+        x: int,
+        y: int,
+        text: str,
+        wordWrapWidth: int,
+    ) -> None: ...
+
+    def drawNumber(
+        self,
+        color: Sequence[float],
+        x: int,
+        y: int,
+        number: float,
+        digits: int,
+        decimals: int,
+    ) -> None: ...
+
+    def setGraphicsState(
+        self,
+        fog: int,
+        lighting: int,
+        alpha: int,
+        smooth: int,
+        texUnits: int,
+        texMode: int,
+        depth: int,
+    ) -> None: ...
+
+    def bindTexture2d(self, textureID: XPLMTextureID, unit: int) -> None: ...
+    def generateTextureNumbers(self, count: int) -> list[XPLMTextureID]: ...
+    def deleteTexture(self, textureID: XPLMTextureID) -> None: ...
+
+    # ------------------------------------------------------------------
+    # Screen / mouse
+    # ------------------------------------------------------------------
+    def getScreenSize(self) -> tuple[int, int]: ...
+    def getMouseLocation(self) -> tuple[int, int]: ...
+
+    # ------------------------------------------------------------------
+    # Utilities (XPLMUtilities subset)
+    # ------------------------------------------------------------------
     def getSystemPath(self) -> str: ...
     def getPrefsPath(self) -> str: ...
     def getDirectorySeparator(self) -> str: ...

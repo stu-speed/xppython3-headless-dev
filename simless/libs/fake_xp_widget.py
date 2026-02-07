@@ -1,50 +1,34 @@
 # ===========================================================================
 # FakeXPWidgets — DearPyGui-backed XPWidget emulator (prod-compatible)
+#
+# Strong typing via xp_typing, safe symbol-level imports, and full compatibility
+# with real XPPython3 (no nonexistent symbols). All widget constants/messages/
+# properties are accessed dynamically through XPPython3.xp to avoid importing
+# the stub xp.py (which imports XPLMCamera and crashes in simless mode).
 # ===========================================================================
 
 from __future__ import annotations
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 import dearpygui.dearpygui as dpg
 
-WidgetHandle = int
-WidgetGeometry = Tuple[int, int, int, int]
-WidgetCallback = Callable[[int, int, Any, Any], None]
+# Safe: xp_typing contains no runtime imports
+from XPPython3.xp_typing import (
+    XPWidgetID,
+    XPWidgetClass,
+    XPWidgetPropertyID,
+    XPWidgetMessage,
+    XPWidgetGeometry,
+)
 
-# Widget classes
-xpWidgetClass_MainWindow = 1
-xpWidgetClass_SubWindow = 2
-xpWidgetClass_Button = 3
-xpWidgetClass_TextField = 4
-xpWidgetClass_Caption = 5
-xpWidgetClass_ScrollBar = 6
-xpWidgetClass_ListBox = 7
-xpWidgetClass_Custom = 99
+# IMPORTANT:
+# We do NOT import from XPPython3.xp (the stub). Instead, we import the module
+# and access xp.* dynamically after FakeXP binds itself into XPPython3.xp.
+import XPPython3
 
-# Properties
-Property_MainWindowType = 1000
-Property_MainWindowHasCloseBoxes = 1100
-Property_MainWindowIsCloseBox = 1101
-Property_MainWindowIsResizable = 1102
-
-Property_ScrollBarMin = 110
-Property_ScrollBarMax = 111
-Property_ScrollBarSliderPosition = 112
-
-Property_ListItems = 2101
-Property_ListSelection = 2102
-
-# Messages
-ScrollBarTypeScrollBar = 0
-ScrollBarTypeSlider = 1
-
-Msg_ScrollBarSliderPositionChanged = 13
-Message_CloseButtonPushed = 1
-Msg_MouseDown = 6
-Msg_MouseDrag = 8
-Msg_MouseUp = 7
-Msg_KeyPress = 12
-Msg_PushButtonPressed = 14
+XPWidgetCallback = Callable[[int, int, Any, Any], int]
+WidgetCallback = XPWidgetCallback
+WidgetGeometry = XPWidgetGeometry
 
 
 class FakeXPWidgets:
@@ -53,26 +37,38 @@ class FakeXPWidgets:
 
         self._widgets: Dict[int, Dict[str, Any]] = {}
         self._callbacks: Dict[int, List[WidgetCallback]] = {}
-        self._next_id = 1
+        self._next_id: int = 1
 
         self._parent: Dict[int, int] = {}
         self._descriptor: Dict[int, str] = {}
-        self._classes: Dict[int, int] = {}
+        self._classes: Dict[int, XPWidgetClass] = {}
         self._dpg_ids: Dict[int, int] = {}
 
         self._z_order: List[int] = []
         self._default_main_window: Optional[int] = None
         self._focused_widget: Optional[int] = None
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def _dbg(self, msg: str) -> None:
         if getattr(self.xp, "debug_enabled", False):
             print(f"[FakeXPWidgets] {msg}")
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # CREATE / DESTROY
-    # ------------------------------------------------------------------
-    def createWidget(self, left, top, right, bottom, visible, descriptor, is_root, parent, widget_class):
+    # ----------------------------------------------------------------------
+    def createWidget(
+        self,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+        visible: int,
+        descriptor: str,
+        is_root: int,
+        parent: int,
+        widget_class: XPWidgetClass,
+    ) -> XPWidgetID:
+
         wid = self._next_id
         self._next_id += 1
 
@@ -94,9 +90,9 @@ class FakeXPWidgets:
         self._classes[wid] = widget_class
         self._z_order.append(wid)
 
-        return wid
+        return XPWidgetID(wid)
 
-    def killWidget(self, wid):
+    def killWidget(self, wid: XPWidgetID) -> None:
         self._dbg(f"KILL wid={wid}")
 
         self._widgets.pop(wid, None)
@@ -115,73 +111,74 @@ class FakeXPWidgets:
         if self._focused_widget == wid:
             self._focused_widget = None
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # GEOMETRY
-    # ------------------------------------------------------------------
-    def setWidgetGeometry(self, wid, x, y, w, h):
+    # ----------------------------------------------------------------------
+    def setWidgetGeometry(self, wid: XPWidgetID, x: int, y: int, w: int, h: int) -> None:
         self._dbg(f"SET GEOMETRY wid={wid} → {(x,y,w,h)}")
         if wid in self._widgets:
             self._widgets[wid]["geometry"] = (x, y, w, h)
             if wid in self._dpg_ids:
                 dpg.configure_item(self._dpg_ids[wid], pos=(x, y), width=w, height=h)
 
-    def getWidgetGeometry(self, wid):
+    def getWidgetGeometry(self, wid: XPWidgetID) -> WidgetGeometry:
         return self._widgets.get(wid, {}).get("geometry", (0, 0, 0, 0))
 
-    def getWidgetExposedGeometry(self, wid):
+    def getWidgetExposedGeometry(self, wid: XPWidgetID) -> WidgetGeometry:
         return self.getWidgetGeometry(wid)
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # VISIBILITY
-    # ------------------------------------------------------------------
-    def showWidget(self, wid):
+    # ----------------------------------------------------------------------
+    def showWidget(self, wid: XPWidgetID) -> None:
         self._dbg(f"SHOW wid={wid}")
         if wid in self._widgets:
             self._widgets[wid]["visible"] = True
             if wid in self._dpg_ids:
                 dpg.configure_item(self._dpg_ids[wid], show=True)
 
-    def hideWidget(self, wid):
+    def hideWidget(self, wid: XPWidgetID) -> None:
         self._dbg(f"HIDE wid={wid}")
         if wid in self._widgets:
             self._widgets[wid]["visible"] = False
             if wid in self._dpg_ids:
                 dpg.configure_item(self._dpg_ids[wid], show=False)
 
-    def isWidgetVisible(self, wid):
+    def isWidgetVisible(self, wid: XPWidgetID) -> bool:
         return bool(self._widgets.get(wid, {}).get("visible", False))
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Z‑ORDER
-    # ------------------------------------------------------------------
-    def isWidgetInFront(self, wid):
+    # ----------------------------------------------------------------------
+    def isWidgetInFront(self, wid: XPWidgetID) -> bool:
         return self._z_order and self._z_order[-1] == wid
 
-    def bringWidgetToFront(self, wid):
+    def bringWidgetToFront(self, wid: XPWidgetID) -> None:
         self._dbg(f"BRING FRONT wid={wid}")
         if wid in self._z_order:
             self._z_order.remove(wid)
             self._z_order.append(wid)
 
-    def pushWidgetBehind(self, wid):
+    def pushWidgetBehind(self, wid: XPWidgetID) -> None:
         self._dbg(f"PUSH BEHIND wid={wid}")
         if wid in self._z_order:
             self._z_order.remove(wid)
             self._z_order.insert(0, wid)
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # PARENT / CLASS / DESCRIPTOR
-    # ------------------------------------------------------------------
-    def getParentWidget(self, wid):
-        return self._parent.get(wid, 0)
+    # ----------------------------------------------------------------------
+    def getParentWidget(self, wid: XPWidgetID) -> XPWidgetID:
+        return XPWidgetID(self._parent.get(wid, 0))
 
-    def getWidgetClass(self, wid):
-        return self._classes.get(wid, xpWidgetClass_Custom)
+    def getWidgetClass(self, wid: XPWidgetID) -> XPWidgetClass:
+        xp = XPPython3.xp
+        return self._classes.get(wid, xp.WidgetClass_GeneralGraphics)
 
-    def getWidgetUnderlyingWindow(self, wid):
+    def getWidgetUnderlyingWindow(self, wid: XPWidgetID) -> int:
         return 0
 
-    def setWidgetDescriptor(self, wid, text):
+    def setWidgetDescriptor(self, wid: XPWidgetID, text: str) -> None:
         self._dbg(f"SET DESCRIPTOR wid={wid} text={text!r}")
         self._descriptor[wid] = text
 
@@ -190,14 +187,16 @@ class FakeXPWidgets:
             dpg.set_value(dpg_id, text)
             dpg.configure_item(dpg_id, default_value=text)
 
-    def getWidgetDescriptor(self, wid):
+    def getWidgetDescriptor(self, wid: XPWidgetID) -> str:
         return self._descriptor.get(wid, "")
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # PROPERTIES
-    # ------------------------------------------------------------------
-    def setWidgetProperty(self, wid, prop, value):
+    # ----------------------------------------------------------------------
+    def setWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID, value: Any) -> None:
+        xp = XPPython3.xp
         self._dbg(f"SET PROPERTY wid={wid} prop={prop} value={value}")
+
         if wid not in self._widgets:
             return
 
@@ -206,29 +205,35 @@ class FakeXPWidgets:
         if wid in self._dpg_ids:
             dpg_id = self._dpg_ids[wid]
 
-            if prop == Property_ScrollBarMin:
+            if prop == xp.Property_ScrollBarMin:
                 dpg.configure_item(dpg_id, min_value=int(value))
 
-            elif prop == Property_ScrollBarMax:
+            elif prop == xp.Property_ScrollBarMax:
                 dpg.configure_item(dpg_id, max_value=int(value))
 
-            elif prop == Property_ScrollBarSliderPosition:
+            elif prop == xp.Property_ScrollBarSliderPosition:
                 dpg.set_value(dpg_id, int(value))
 
-    def getWidgetProperty(self, wid, prop):
+    def getWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID) -> Any:
         return self._widgets.get(wid, {}).get("properties", {}).get(prop)
 
-    # ------------------------------------------------------------------
-    # CALLBACKS + MESSAGE DISPATCH (prod plugin expects: handler(msg, widget,...))
-    # ------------------------------------------------------------------
-    def addWidgetCallback(self, wid, callback):
+    # ----------------------------------------------------------------------
+    # CALLBACKS + MESSAGE DISPATCH
+    # ----------------------------------------------------------------------
+    def addWidgetCallback(self, wid: XPWidgetID, callback: WidgetCallback) -> None:
         self._dbg(f"ADD CALLBACK wid={wid}")
         self._callbacks.setdefault(wid, []).append(callback)
 
-    def sendWidgetMessage(self, wid, msg, param1, param2):
+    def sendWidgetMessage(
+        self,
+        wid: XPWidgetID,
+        msg: XPWidgetMessage,
+        param1: Any,
+        param2: Any,
+    ) -> None:
+
         self._dbg(f"SEND MSG wid={wid} msg={msg} param1={param1} param2={param2}")
 
-        # Bubble to widget and all ancestors, calling as (msg, widget, ...)
         current = wid
         visited = set()
 
@@ -238,14 +243,14 @@ class FakeXPWidgets:
             for cb in self._callbacks.get(current, []):
                 try:
                     cb(msg, current, param1, param2)
-                except Exception as e:
-                    self._dbg(f"  callback error in {cb.__name__}: {e!r}")
+                except Exception as exc:
+                    self._dbg(f"  callback error in {cb.__name__}: {exc!r}")
             current = self._parent.get(current, 0)
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # HIT TEST
-    # ------------------------------------------------------------------
-    def getWidgetForLocation(self, x, y):
+    # ----------------------------------------------------------------------
+    def getWidgetForLocation(self, x: int, y: int) -> Optional[XPWidgetID]:
         for wid in reversed(self._z_order):
             w = self._widgets.get(wid)
             if not w or not w["visible"]:
@@ -253,32 +258,33 @@ class FakeXPWidgets:
             gx, gy, gw, gh = w["geometry"]
             if gx <= x <= gx + gw and gy <= y <= gy + gh:
                 self._dbg(f"HIT wid={wid}")
-                return wid
+                return XPWidgetID(wid)
         self._dbg("HIT none")
         return None
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # KEYBOARD FOCUS
-    # ------------------------------------------------------------------
-    def setKeyboardFocus(self, wid):
+    # ----------------------------------------------------------------------
+    def setKeyboardFocus(self, wid: XPWidgetID) -> None:
         self._dbg(f"FOCUS wid={wid}")
         self._focused_widget = wid
 
-    def loseKeyboardFocus(self, wid):
+    def loseKeyboardFocus(self, wid: XPWidgetID) -> None:
         if self._focused_widget == wid:
             self._dbg(f"LOSE FOCUS wid={wid}")
             self._focused_widget = None
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # PARENT RESOLUTION
-    # ------------------------------------------------------------------
-    def _resolve_dpg_parent(self, wid):
+    # ----------------------------------------------------------------------
+    def _resolve_dpg_parent(self, wid: XPWidgetID) -> int:
+        xp = XPPython3.xp
         parent = self._parent.get(wid, 0)
         wclass = self._classes.get(wid)
 
         self._dbg(f"RESOLVE PARENT wid={wid} class={wclass} xp_parent={parent}")
 
-        if wclass == xpWidgetClass_MainWindow:
+        if wclass == xp.WidgetClass_MainWindow:
             return 0
 
         if parent == 0:
@@ -291,10 +297,12 @@ class FakeXPWidgets:
 
         return self._dpg_ids[parent]
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # DPG CREATION
-    # ------------------------------------------------------------------
-    def _ensure_dpg_item_for_widget(self, wid):
+    # ----------------------------------------------------------------------
+    def _ensure_dpg_item_for_widget(self, wid: XPWidgetID) -> None:
+        xp = XPPython3.xp
+
         if wid in self._dpg_ids:
             dpg_id = self._dpg_ids[wid]
             if dpg.is_item_ok(dpg_id):
@@ -307,20 +315,20 @@ class FakeXPWidgets:
 
         parent = self._resolve_dpg_parent(wid)
 
-        if wclass == xpWidgetClass_MainWindow:
+        if wclass == xp.WidgetClass_MainWindow:
             dpg_id = dpg.add_window(label=desc or "Window", pos=(x, y), width=w, height=h)
 
-        elif wclass == xpWidgetClass_Caption:
+        elif wclass == xp.WidgetClass_Caption:
             dpg_id = dpg.add_text(default_value=desc or "", parent=parent)
 
-        elif wclass == xpWidgetClass_ScrollBar:
-            min_v = self.getWidgetProperty(wid, Property_ScrollBarMin) or 0
-            max_v = self.getWidgetProperty(wid, Property_ScrollBarMax) or 100
-            cur_v = self.getWidgetProperty(wid, Property_ScrollBarSliderPosition) or min_v
+        elif wclass == xp.WidgetClass_ScrollBar:
+            min_v = self.getWidgetProperty(wid, xp.Property_ScrollBarMin) or 0
+            max_v = self.getWidgetProperty(wid, xp.Property_ScrollBarMax) or 100
+            cur_v = self.getWidgetProperty(wid, xp.Property_ScrollBarSliderPosition) or min_v
 
             def _on_slider(sender, app_data, user_data):
-                self.setWidgetProperty(user_data, Property_ScrollBarSliderPosition, int(app_data))
-                self.sendWidgetMessage(user_data, Msg_ScrollBarSliderPositionChanged, user_data, None)
+                self.setWidgetProperty(user_data, xp.Property_ScrollBarSliderPosition, int(app_data))
+                self.sendWidgetMessage(user_data, xp.Msg_ScrollBarSliderPositionChanged, user_data, None)
 
             dpg_id = dpg.add_slider_int(
                 label=desc or "Slider",
@@ -333,9 +341,9 @@ class FakeXPWidgets:
                 user_data=wid,
             )
 
-        elif wclass == xpWidgetClass_Button:
+        elif wclass == xp.WidgetClass_Button:
             def _on_button(sender, app_data, user_data):
-                self.sendWidgetMessage(user_data, Msg_PushButtonPressed, user_data, None)
+                self.sendWidgetMessage(user_data, xp.Msg_PushButtonPressed, user_data, None)
 
             dpg_id = dpg.add_button(
                 label=desc or "Button",
@@ -351,12 +359,12 @@ class FakeXPWidgets:
 
         self._dpg_ids[wid] = dpg_id
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # RENDER
-    # ------------------------------------------------------------------
-    def _render_widgets(self):
+    # ----------------------------------------------------------------------
+    def _render_widgets(self) -> None:
         for wid in self._widgets.keys():
             self._ensure_dpg_item_for_widget(wid)
 
-    def _draw_all_widgets(self):
+    def _draw_all_widgets(self) -> None:
         self._render_widgets()

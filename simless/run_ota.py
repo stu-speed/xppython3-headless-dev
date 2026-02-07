@@ -19,14 +19,15 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 
 def run_simless_ota_gui() -> None:
-    xp = FakeXP(debug=True)
-    XPPython3.xp = xp  # Replace X-Plane's xp API with FakeXP to run headless
+    xp = FakeXP(debug=True, enable_gui=True)
+    XPPython3.xp = xp
 
     plugins = [
         "PI_sshd_OTA",
         "PI_sshd_dev_ota_gui",
     ]
-    xp._run_plugin_lifecycle(plugins, debug=True, enable_gui=True)
+
+    xp._run_plugin_lifecycle(plugins, debug=True)
 
 
 if __name__ == "__main__":

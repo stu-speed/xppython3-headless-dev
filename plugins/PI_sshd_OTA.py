@@ -3,9 +3,13 @@
 #
 # Sends Outside Air Temperature (OAT) and avionics power state to a SerialOTA device
 # ---------------------------------------------------------------------------
-from typing import Any
+
+from __future__ import annotations
+
+from typing import Any, List
 
 from XPPython3 import xp
+from XPPython3.xp_typing import XPLMFlightLoopID
 
 from sshd_extensions.datarefs import DataRefSpec, DRefType, DataRefManager
 from sshd_extlibs.ss_serial_device import SerialOTA
@@ -33,7 +37,7 @@ DATAREFS: dict[str, DataRefSpec] = {
 }
 
 
-def avionics_bus_volts(volts: list[float]) -> float:
+def avionics_bus_volts(volts: List[float]) -> float:
     # No datarefs bound or array empty → avionics unpowered
     if not volts:
         return 0.0
@@ -76,18 +80,19 @@ def avionics_bus_volts(volts: list[float]) -> float:
 
 
 class PythonInterface:
-
     Name: str
     Sig: str
     Desc: str
+
     manager: DataRefManager
-    floop: Any | None
+    floop: XPLMFlightLoopID | None
     device: SerialOTA | None
 
     def __init__(self) -> None:
         self.Name = "OTA display v1.0"
         self.Sig = "ota.speedsim.xppython3"
         self.Desc = "Display Outside Air Temp to serial device"
+
         self.manager = DataRefManager(DATAREFS, xp, timeout_seconds=30.0)
         self.floop = None
         self.device = None

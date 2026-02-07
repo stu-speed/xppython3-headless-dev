@@ -1,12 +1,40 @@
-# Development OTA GUI plugin, modeled after XplaneNoaaWeather widget patterns.
-# Uses only public xp APIs and follows real X-Plane/XPPython3 widget behavior.
+# Development OTA Widget GUI dataref reader/writer
 
-from typing import Any
+from __future__ import annotations
+
+from typing import Any, Callable
+
 from XPPython3 import xp
+from XPPython3.xp_typing import (
+    XPWidgetID,
+    XPWidgetMessage,
+    XPLMFlightLoopID,
+)
+
+
+XPWidgetMessageHandler_f = Callable[[int, int, Any, Any], int]
 
 
 class PythonInterface:
-    def XPluginStart(self):
+    Name: str
+    Sig: str
+    Desc: str
+
+    win: XPWidgetID | None
+    slider: XPWidgetID | None
+    slider_label: XPWidgetID | None
+    current_oat_label: XPWidgetID | None
+    bus_slider: XPWidgetID | None
+    bus_label: XPWidgetID | None
+    quit_btn: XPWidgetID | None
+
+    oat_handle: Any | None
+    bus_array_handle: Any | None
+
+    _win_handler_cb: XPWidgetMessageHandler_f | None
+    _fl_id: XPLMFlightLoopID | None
+
+    def XPluginStart(self) -> tuple[str, str, str]:
         self.Name = "Dev OTA GUI"
         self.Sig = "simless.dev.ota.gui"
         self.Desc = "Development GUI for adjusting Outside Air Temperature"
@@ -33,7 +61,7 @@ class PythonInterface:
     # ----------------------------------------------------------------------
     # UI builder (moved out of XPluginEnable)
     # ----------------------------------------------------------------------
-    def _build_ui(self):
+    def _build_ui(self) -> None:
         # Window
         self.win = xp.createWidget(
             100, 500, 650, 100,
@@ -142,7 +170,7 @@ class PythonInterface:
         xp.setWidgetProperty(self.quit_btn, xp.Property_ButtonType, xp.PushButton)
 
     # ----------------------------------------------------------------------
-    def XPluginEnable(self):
+    def XPluginEnable(self) -> int:
 
         # Datarefs
         self.oat_handle = xp.findDataRef("sim/cockpit2/temperature/outside_air_temp_degc")
@@ -156,7 +184,12 @@ class PythonInterface:
         self._build_ui()
 
         # ---------------- WINDOW HANDLER ----------------
-        def window_handler(msg: int, widget: int, param1: Any, param2: Any):
+        def window_handler(
+            msg: XPWidgetMessage,
+            widget: XPWidgetID,
+            param1: Any,
+            param2: Any,
+        ) -> int:
 
             if msg == xp.Message_CloseButtonPushed and widget == self.win:
                 xp.hideWidget(self.win)
@@ -197,7 +230,12 @@ class PythonInterface:
         xp.addWidgetCallback(self.win, self._win_handler_cb)
 
         # ---------------- FLIGHTLOOP: refresh Current OAT every second ----------------
-        def flightloop_cb(elapsed, elapsed2, counter, refcon):
+        def flightloop_cb(
+            since: float,
+            elapsed: float,
+            counter: int,
+            refcon: Any,
+        ) -> float:
             if self.win and self.current_oat_label and self.oat_handle:
                 try:
                     real_oat = xp.getDataf(self.oat_handle)
@@ -212,7 +250,7 @@ class PythonInterface:
         return 1
 
     # ----------------------------------------------------------------------
-    def XPluginDisable(self):
+    def XPluginDisable(self) -> None:
         if self.win:
             xp.destroyWidget(self.win, 1)
             self.win = None
@@ -224,5 +262,5 @@ class PythonInterface:
                 pass
             self._fl_id = None
 
-    def XPluginStop(self):
+    def XPluginStop(self) -> None:
         pass

@@ -1,5 +1,5 @@
 # ===========================================================================
-# fake_xp_loader.py — INTERNAL FakeXP plugin loader
+# fake_xp_loader.py — INTERNAL FakeXP plugin loader (fully typed)
 #
 # Not exposed to user code. Used exclusively by FakeXPRunner.
 #
@@ -10,20 +10,49 @@
 #   • Hard‑fail (raise RuntimeError) on ANY error
 # ===========================================================================
 
+from __future__ import annotations
+
 import importlib
 import inspect
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Protocol, TypedDict, TYPE_CHECKING, List
 
+if TYPE_CHECKING:
+    from .fake_xp import FakeXP
+
+
+# ---------------------------------------------------------------------------
+# PythonInterface Protocol (production‑authentic)
+# ---------------------------------------------------------------------------
+
+class PythonInterfaceProto(Protocol):
+    """
+    Structural type for plugin PythonInterface classes.
+    FakeXP never imports plugin internals, so we use a Protocol.
+    """
+
+    def XPluginStart(self) -> tuple[str, str, str]:
+        ...
+
+    def XPluginEnable(self) -> int:
+        ...
+
+    def XPluginDisable(self) -> None:
+        ...
+
+    def XPluginStop(self) -> None:
+        ...
+
+
+# ---------------------------------------------------------------------------
+# LoadedPlugin — strongly typed plugin wrapper
+# ---------------------------------------------------------------------------
 
 class LoadedPlugin:
     """
-    Strongly-typed wrapper around a PythonInterface-based plugin.
-    - module: the imported plugin module
-    - instance: the PythonInterface instance
-    - one plugin = one instance
+    Strongly‑typed wrapper around a PythonInterface‑based plugin.
     """
     _next_id: int = 1
 
@@ -33,14 +62,14 @@ class LoadedPlugin:
         sig: str,
         desc: str,
         module: ModuleType,
-        instance: Any,
+        instance: PythonInterfaceProto,
     ) -> None:
         self.name: str = name
         self.signature: str = sig
         self.description: str = desc
 
         self.module: ModuleType = module
-        self.instance: Any = instance
+        self.instance: PythonInterfaceProto = instance
 
         self.plugin_id: int = LoadedPlugin._next_id
         LoadedPlugin._next_id += 1
@@ -49,17 +78,19 @@ class LoadedPlugin:
         return f"<LoadedPlugin id={self.plugin_id} name={self.name}>"
 
 
+# ---------------------------------------------------------------------------
+# FakeXPPluginLoader — internal loader used only by FakeXPRunner
+# ---------------------------------------------------------------------------
+
 class FakeXPPluginLoader:
-    """Internal loader used only by FakeXPRunner."""
-
-    def __init__(self, xp: Any) -> None:
+    def __init__(self, xp: FakeXP) -> None:
         # Project root → plugins/
-        self.root = Path(__file__).resolve().parents[2] / "plugins"
-        self.xp = xp
+        self.root: Path = Path(__file__).resolve().parents[2] / "plugins"
+        self.xp: FakeXP = xp
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Helpers
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
 
     def _ensure_sys_path(self) -> None:
         """
@@ -78,15 +109,15 @@ class FakeXPPluginLoader:
         if not (self.root / f"{name}.py").exists():
             raise RuntimeError(f"[Loader] Plugin '{name}' not found in plugins/")
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Public API (internal to runner)
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
 
-    def load_plugins(self, module_names: list[str]) -> list[LoadedPlugin]:
+    def load_plugins(self, module_names: List[str]) -> List[LoadedPlugin]:
         """Load and instantiate plugins. Hard‑fail on ANY error."""
         self._ensure_sys_path()
 
-        plugins: list[LoadedPlugin] = []
+        plugins: List[LoadedPlugin] = []
 
         for name in module_names:
             self._validate(name)
@@ -96,9 +127,9 @@ class FakeXPPluginLoader:
 
         return plugins
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Single plugin load
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
 
     def _load_single(self, full_name: str) -> LoadedPlugin:
         """
@@ -108,7 +139,7 @@ class FakeXPPluginLoader:
 
         # Import module
         try:
-            module = importlib.import_module(full_name)
+            module: ModuleType = importlib.import_module(full_name)
         except Exception as exc:
             raise RuntimeError(f"[Loader] Import failed for {full_name}: {exc!r}")
 
@@ -119,7 +150,7 @@ class FakeXPPluginLoader:
 
         # Instantiate plugin
         try:
-            instance = iface_cls()
+            instance: PythonInterfaceProto = iface_cls()
         except Exception as exc:
             raise RuntimeError(f"[Loader] Failed to instantiate PythonInterface: {exc!r}")
 

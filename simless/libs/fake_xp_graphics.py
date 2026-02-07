@@ -1,204 +1,167 @@
 # ===========================================================================
-# FakeXPGraphics — DearPyGui‑backed drawing facade
+# FakeXPGraphics — DearPyGui-backed XPLMGraphics emulator (prod-compatible)
 #
-# Provides a minimal, deterministic emulation of X‑Plane’s XPLMGraphics
-# overlay drawing API. Plugins register draw callbacks, and FakeXPGraphics
-# executes them once per frame inside a persistent DearPyGui overlay.
-#
-# Responsibilities:
-#   • Maintain a single DPG draw‑layer used for all plugin rendering
-#   • Execute plugin draw callbacks every frame in registration order
-#   • Provide simple drawing primitives (text, lines, rectangles, circles)
-#   • Track FPS, draw‑call count, and callback count for debug HUD mode
-#   • Integrate with FakeXP’s debug logging for high‑signal instrumentation
-#
-# Non‑Responsibilities:
-#   • DearPyGui context/viewport lifecycle (handled by FakeXPRunner)
-#   • Any 3D rendering, OpenGL state, or X‑Plane texture management
-#
-# Design notes:
-#   • Overlay is created lazily and persists for the entire run
-#   • All drawing is stateless; each frame clears and redraws the overlay
-#   • Debug HUD is optional and rendered on top of plugin output
+# Minimal, safe, simless implementation of the subset of XPLMGraphics used by
+# XPPython3 plugins. DearPyGui context/viewport are initialized exactly once
+# using the non-deprecated is_* APIs to avoid native crashes.
 # ===========================================================================
 
 from __future__ import annotations
-
-import time
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 import dearpygui.dearpygui as dpg
 
 
-ColorRGBA = Tuple[int, int, int, int]
-
-
 class FakeXPGraphics:
     """
-    Dear PyGui–backed graphics facade for FakeXP.
-
-    Responsibilities:
-      • Maintain a persistent overlay for draw calls
-      • Provide simple text/number/shape drawing primitives
-      • Provide optional debug HUD (FPS, draw calls, callback count)
-      • Execute plugin draw callbacks each frame
-      • Integrate with FakeXP debug logging
-
-    NOTE:
-      This class assumes DearPyGui context + viewport are already created
-      and running by the harness (FakeXPRunner). It does NOT manage DPG
-      lifecycle itself.
+    Minimal DearPyGui-backed graphics layer that emulates the subset of
+    XPLMGraphics used by XPPython3 plugins. This is NOT a full renderer —
+    it only provides the API surface needed for simless GUI plugin testing.
     """
 
     def __init__(self, fakexp) -> None:
         self.xp = fakexp
 
-        # Draw callbacks
-        self._draw_callbacks: List[Callable[[], None]] = []
+        self._draw_callbacks: list[tuple[Callable, int, int]] = []
+        self._next_tex_id: int = 1
+        self._textures: dict[int, Any] = {}
 
-        # Overlay window
-        self._overlay: Optional[int] = None
-        self._overlay_created: bool = False
+        self._mouse_x: int = 0
+        self._mouse_y: int = 0
+        self._screen_w: int = 1920
+        self._screen_h: int = 1080
 
-        # Debug HUD state
-        self._debug_enabled: bool = False
-        self._last_frame_time: float = time.time()
-        self._fps: float = 0.0
-        self._draw_count: int = 0
-
-    # ----------------------------------------------------------------------
-    # Public API
-    # ----------------------------------------------------------------------
-    def enableDebug(self, enabled: bool) -> None:
-        self._debug_enabled = enabled
-        self.xp._dbg(f"[Graphics] Debug HUD {'enabled' if enabled else 'disabled'}")
-
-    def registerDrawCallback(self, callback: Callable[[], None]) -> None:
-        self._draw_callbacks.append(callback)
-        self.xp._dbg(f"[Graphics] Registered draw callback: {callback}")
-
-    def run_draw_callbacks(self) -> None:
-        """Run all draw callbacks once per frame."""
-        self._update_fps()
-        self._ensure_overlay()
-
-        # Clear overlay contents
-        if self._overlay_created and dpg.does_item_exist(self._overlay):
-            dpg.delete_item(self._overlay, children_only=True)
-
-        self._draw_count = 0
-
-        # Execute plugin draw callbacks
-        for cb in list(self._draw_callbacks):
-            try:
-                self.xp._dbg(f"[Graphics] Running draw callback: {cb}")
-                cb()
-            except Exception as e:
-                self.xp._dbg(f"[Graphics] Draw callback error: {e!r}")
-
-        # Draw debug HUD
-        if self._debug_enabled:
-            self._draw_debug_hud()
+        # Minimal, robust DearPyGui init: assume single graphics instance
+        dpg.create_context()
+        dpg.create_viewport(
+            title="FakeXP Graphics",
+            width=self._screen_w,
+            height=self._screen_h,
+        )
+        dpg.setup_dearpygui()
+        dpg.show_viewport()
 
     # ----------------------------------------------------------------------
-    # Drawing primitives
+    # Draw callback registration
     # ----------------------------------------------------------------------
-    def drawString(self, x: int, y: int, text: str) -> None:
-        self._ensure_overlay()
-        self._draw_count += 1
-        self.xp._dbg(f"[Graphics] drawString: '{text}' at ({x}, {y})")
-        dpg.draw_text(pos=(x, y), text=text, parent=self._overlay)
+    def registerDrawCallback(self, cb: Callable, phase: int, wantsBefore: int) -> None:
+        self._draw_callbacks.append((cb, phase, wantsBefore))
 
-    def drawNumber(self, x: int, y: int, number: float) -> None:
-        self.drawString(x, y, f"{number}")
-
-    def drawLine(
-        self,
-        x1: int,
-        y1: int,
-        x2: int,
-        y2: int,
-        color: ColorRGBA = (255, 255, 255, 255),
-    ) -> None:
-        self._ensure_overlay()
-        self._draw_count += 1
-        dpg.draw_line((x1, y1), (x2, y2), color=color, parent=self._overlay)
-
-    def drawRect(
-        self,
-        x: int,
-        y: int,
-        w: int,
-        h: int,
-        color: ColorRGBA = (255, 255, 255, 255),
-    ) -> None:
-        self._ensure_overlay()
-        self._draw_count += 1
-        dpg.draw_rectangle((x, y), (x + w, y + h), color=color, parent=self._overlay)
-
-    def drawCircle(
-        self,
-        x: int,
-        y: int,
-        radius: int,
-        color: ColorRGBA = (255, 255, 255, 255),
-    ) -> None:
-        self._ensure_overlay()
-        self._draw_count += 1
-        dpg.draw_circle((x, y), radius, color=color, parent=self._overlay)
-
-    # ----------------------------------------------------------------------
-    # Private helpers
-    # ----------------------------------------------------------------------
-    def _ensure_overlay(self) -> None:
-        """Create the persistent overlay window once."""
-        if self._overlay_created and dpg.does_item_exist(self._overlay):
-            return
-
-        self.xp._dbg("[Graphics] Creating overlay window")
-
-        with dpg.window(
-            label="FakeXP Draw Overlay",
-            no_title_bar=True,
-            no_resize=True,
-            no_move=True,
-            no_close=True,
-            no_background=True,
-            pos=(0, 0),
-        ) as overlay:
-            self._overlay = overlay
-
-        self._overlay_created = True
-        self.xp._dbg("[Graphics] Overlay created")
-
-    def _update_fps(self) -> None:
-        now = time.time()
-        dt = now - self._last_frame_time
-        self._last_frame_time = now
-
-        if dt > 0:
-            self._fps = 1.0 / dt
-
-        if self._debug_enabled:
-            self.xp._dbg(f"[Graphics] Updated FPS: {self._fps:.2f}")
-
-    def _draw_debug_hud(self) -> None:
-        self._ensure_overlay()
-
-        lines = [
-            f"FPS: {self._fps:6.2f}",
-            f"Draw calls: {self._draw_count}",
-            f"Callbacks: {len(self._draw_callbacks)}",
+    def unregisterDrawCallback(self, cb: Callable, phase: int, wantsBefore: int) -> None:
+        self._draw_callbacks = [
+            entry for entry in self._draw_callbacks
+            if not (entry[0] is cb and entry[1] == phase and entry[2] == wantsBefore)
         ]
 
-        y = 10
-        for line in lines:
-            dpg.draw_text(
-                pos=(10, y),
-                text=line,
-                color=(255, 255, 0, 255),
-                parent=self._overlay,
-            )
-            y += 18
+    # ----------------------------------------------------------------------
+    # Text drawing
+    # ----------------------------------------------------------------------
+    def drawString(
+        self,
+        color: List[float],
+        x: int,
+        y: int,
+        text: str,
+        wordWrapWidth: int,
+    ) -> None:
+        try:
+            with dpg.draw_layer():
+                dpg.draw_text(
+                    pos=(x, y),
+                    text=text,
+                    color=(
+                        int(color[0] * 255),
+                        int(color[1] * 255),
+                        int(color[2] * 255),
+                        255,
+                    ),
+                )
+        except Exception as exc:
+            self.xp.log(f"[Graphics] drawString error: {exc!r}")
 
-        self.xp._dbg("[Graphics] Debug HUD drawn")
+    def drawNumber(
+        self,
+        color: List[float],
+        x: int,
+        y: int,
+        number: float,
+        digits: int,
+        decimals: int,
+    ) -> None:
+        fmt = f"{{:{digits}.{decimals}f}}"
+        self.drawString(color, x, y, fmt.format(number), 0)
+
+    # ----------------------------------------------------------------------
+    # Graphics state (stub)
+    # ----------------------------------------------------------------------
+    def setGraphicsState(
+        self,
+        fog: int,
+        lighting: int,
+        alpha: int,
+        smooth: int,
+        texUnits: int,
+        texMode: int,
+        depth: int,
+    ) -> None:
+        # No-op; included for API compatibility
+        pass
+
+    # ----------------------------------------------------------------------
+    # Texture API
+    # ----------------------------------------------------------------------
+    def generateTextureNumbers(self, count: int) -> List[int]:
+        ids = []
+        for _ in range(count):
+            tid = self._next_tex_id
+            self._next_tex_id += 1
+            self._textures[tid] = None
+            ids.append(tid)
+        return ids
+
+    def bindTexture2d(self, textureID: int, unit: int) -> None:
+        # No real texture binding — stubbed for compatibility
+        pass
+
+    def deleteTexture(self, textureID: int) -> None:
+        self._textures.pop(textureID, None)
+
+    # ----------------------------------------------------------------------
+    # Screen + mouse
+    # ----------------------------------------------------------------------
+    def getScreenSize(self) -> Tuple[int, int]:
+        return (self._screen_w, self._screen_h)
+
+    def getMouseLocation(self) -> Tuple[int, int]:
+        return (self._mouse_x, self._mouse_y)
+
+    def _update_mouse(self) -> None:
+        try:
+            if dpg.is_viewport_ok():
+                pos = dpg.get_mouse_pos()
+                self._mouse_x, self._mouse_y = int(pos[0]), int(pos[1])
+        except Exception as exc:
+            self.xp.log(f"[Graphics] mouse update error: {exc!r}")
+
+    # ----------------------------------------------------------------------
+    # Frame rendering
+    # ----------------------------------------------------------------------
+    def _draw_frame(self) -> None:
+        """
+        Called by FakeXPRunner once per frame.
+        Executes all registered draw callbacks and renders DearPyGui.
+        """
+        self._update_mouse()
+
+        # Execute draw callbacks
+        for cb, phase, wantsBefore in self._draw_callbacks:
+            try:
+                cb(phase, wantsBefore)
+            except Exception as exc:
+                self.xp.log(f"[Graphics] draw callback error: {exc!r}")
+
+        # Render DPG frame
+        try:
+            dpg.render_dearpygui_frame()
+        except Exception as exc:
+            self.xp.log(f"[Graphics] frame render error: {exc!r}")

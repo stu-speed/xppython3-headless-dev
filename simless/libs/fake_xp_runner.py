@@ -7,19 +7,18 @@
 #   • Execute lifecycle: Start → Enable → frame loop → Disable → Stop
 #   • Maintain deterministic 60 Hz pacing
 #   • Own ALL flightloop scheduling (FakeXP holds no scheduler state)
-#   • Integrate DearPyGui when GUI mode is enabled
+#   • Defer DearPyGui context/viewport to FakeXPGraphics
 # ===========================================================================
 
-import time
-from typing import Any, Dict
+from __future__ import annotations
 
-import dearpygui.dearpygui as dpg
+import time
+from typing import Any, Dict, List
 
 from .fake_xp_loader import FakeXPPluginLoader, LoadedPlugin
 
 
 class FakeXPRunner:
-
     def __init__(
         self,
         xp: Any,
@@ -40,9 +39,9 @@ class FakeXPRunner:
         # ------------------------------------------------------------------
         # Flightloop state (runner-owned)
         # ------------------------------------------------------------------
-        self._next_flightloop_id = 1
+        self._next_flightloop_id: int = 1
         self._flightloops: Dict[int, Dict[str, Any]] = {}
-        self._sim_time = 0.0  # single source of sim time
+        self._sim_time: float = 0.0  # single source of sim time
 
     # ----------------------------------------------------------------------
     # Public API for FakeXP to forward scheduling calls
@@ -84,7 +83,7 @@ class FakeXPRunner:
         self._flightloops.pop(loop_id, None)
 
     # ------------------------------------------------------------------
-    # Stop loop (called by plugins via xp.end_run_loop())
+    # Stop loop (called by plugins via xp._quit() / xp.end_run_loop())
     # ------------------------------------------------------------------
     def end_run_loop(self) -> None:
         """Stop the main loop immediately."""
@@ -92,18 +91,15 @@ class FakeXPRunner:
         self.xp.log("[Runner] end_run_loop() called — stopping main loop")
 
     # ------------------------------------------------------------------
-    # GUI lifecycle
+    # GUI lifecycle (graphics owns DearPyGui)
     # ------------------------------------------------------------------
     def init_gui(self) -> None:
-        self.xp.log("[Runner] Initializing DearPyGui")
-        dpg.create_context()
-        dpg.create_viewport(title="FakeXP", width=900, height=700)
-        dpg.setup_dearpygui()
-        dpg.show_viewport()
+        # FakeXPGraphics creates context/viewport if needed.
+        self.xp.log("[Runner] GUI enabled (FakeXPGraphics manages DearPyGui)")
 
     def shutdown_gui(self) -> None:
-        self.xp.log("[Runner] Shutting down DearPyGui")
-        dpg.destroy_context()
+        # FakeXPGraphics will be torn down when process exits.
+        self.xp.log("[Runner] GUI shutdown requested (no-op for runner)")
 
     # ------------------------------------------------------------------
     # Unified per-frame execution
@@ -114,6 +110,7 @@ class FakeXPRunner:
         # 1. Advance sim time (60 Hz)
         dt = 1.0 / 60.0
         self._sim_time += dt
+        xp._sim_time = self._sim_time
         sim_time = self._sim_time
 
         # 2. Flightloops (modern API)
@@ -144,23 +141,15 @@ class FakeXPRunner:
                     fl["interval"] = float(next_interval)
                     fl["next_call"] = sim_time + float(next_interval)
 
-        # 3. Draw callbacks
+        # 3. Graphics + widgets
         try:
-            xp.graphics.run_draw_callbacks()
-        except Exception as exc:
-            xp.log(f"[Runner] draw callback error: {exc!r}")
-
-        # 4. GUI path
-        if self.enable_gui:
-            try:
+            if self.enable_gui:
+                # Widgets draw into DearPyGui; graphics handles draw callbacks + frame
                 xp.widgets._draw_all_widgets()
-                dpg.render_dearpygui_frame()
-
-                if not dpg.is_dearpygui_running():
-                    return False
-            except Exception as exc:
-                xp.log(f"[Runner] GUI frame error: {exc!r}")
-                return False
+            xp.graphics._draw_frame()
+        except Exception as exc:
+            xp.log(f"[Runner] graphics/frame error: {exc!r}")
+            return False
 
         return True
 
@@ -172,7 +161,7 @@ class FakeXPRunner:
         plugins = loader.load_plugins(plugin_names)
         self.run_lifecycle(plugins)
 
-    def run_lifecycle(self, plugins: list[LoadedPlugin]) -> None:
+    def run_lifecycle(self, plugins: List[LoadedPlugin]) -> None:
         xp = self.xp
 
         if not plugins:
@@ -184,7 +173,7 @@ class FakeXPRunner:
 
         # Enable
         xp.log("[Runner] === XPluginEnable BEGIN ===")
-        disabled = set()
+        disabled: set[int] = set()
         setattr(xp, "_disabled_plugins", disabled)
 
         for p in plugins:
