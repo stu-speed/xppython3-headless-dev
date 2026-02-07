@@ -7,9 +7,12 @@
 # ===========================================================================
 
 from __future__ import annotations
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple, TYPE_CHECKING
 
 import dearpygui.dearpygui as dpg
+
+if TYPE_CHECKING:
+    from simless.libs.fake_xp.fakexp import FakeXP
 
 
 class FakeXPGraphics:
@@ -19,8 +22,8 @@ class FakeXPGraphics:
     it only provides the API surface needed for simless GUI plugin testing.
     """
 
-    def __init__(self, fakexp) -> None:
-        self.xp = fakexp
+    def __init__(self, xp: FakeXP) -> None:
+        self.xp = xp
 
         self._draw_callbacks: list[tuple[Callable, int, int]] = []
         self._next_tex_id: int = 1

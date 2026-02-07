@@ -20,7 +20,7 @@ from types import ModuleType
 from typing import Any, Protocol, TypedDict, TYPE_CHECKING, List
 
 if TYPE_CHECKING:
-    from .fake_xp import FakeXP
+    from simless.libs.fake_xp.fakexp import FakeXP
 
 
 # ---------------------------------------------------------------------------

@@ -63,8 +63,6 @@ class FakeXPInterface(Protocol):
         self,
         plugin_names: list[str],
         *,
-        debug: bool = False,
-        enable_gui: bool = True,
         run_time: float = -1.0,
     ) -> None:
         """

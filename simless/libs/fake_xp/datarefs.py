@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Sequence, TYPE_CHECKING
 
 from plugins.sshd_extensions.datarefs import DRefType, DataRefManager  # type: ignore[import]
+if TYPE_CHECKING:
+    from simless.libs.fake_xp.fakexp import FakeXP
 
 
 @dataclass(slots=True)
@@ -47,8 +49,8 @@ class DataRefAPI:
         "registerDataRef",
     ]
 
-    def __init__(self, fakexp: Any) -> None:
-        self.xp = fakexp
+    def __init__(self, xp: FakeXP) -> None:
+        self.xp = xp
         self._handles: Dict[str, FakeDataRefInfo] = {}
         self._dummy_refs: Dict[str, FakeDataRefInfo] = {}
         self._values: Dict[str, Any] = {}

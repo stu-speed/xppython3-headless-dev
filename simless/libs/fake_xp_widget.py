@@ -8,11 +8,11 @@
 # ===========================================================================
 
 from __future__ import annotations
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 import dearpygui.dearpygui as dpg
 
-# Safe: xp_typing contains no runtime imports
+import XPPython3
 from XPPython3.xp_typing import (
     XPWidgetID,
     XPWidgetClass,
@@ -20,11 +20,8 @@ from XPPython3.xp_typing import (
     XPWidgetMessage,
     XPWidgetGeometry,
 )
-
-# IMPORTANT:
-# We do NOT import from XPPython3.xp (the stub). Instead, we import the module
-# and access xp.* dynamically after FakeXP binds itself into XPPython3.xp.
-import XPPython3
+if TYPE_CHECKING:
+    from simless.libs.fake_xp.fakexp import FakeXP
 
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
 WidgetCallback = XPWidgetCallback
@@ -32,8 +29,8 @@ WidgetGeometry = XPWidgetGeometry
 
 
 class FakeXPWidgets:
-    def __init__(self, fakexp) -> None:
-        self.xp = fakexp
+    def __init__(self, xp: FakeXP) -> None:
+        self.xp = xp
 
         self._widgets: Dict[int, Dict[str, Any]] = {}
         self._callbacks: Dict[int, List[WidgetCallback]] = {}
@@ -77,8 +74,6 @@ class FakeXPWidgets:
         w = right - left
         h = top - bottom
 
-        self._dbg(f"CREATE wid={wid} class={widget_class} desc={descriptor!r} geom={(x,y,w,h)} parent={parent}")
-
         self._widgets[wid] = {
             "geometry": (x, y, w, h),
             "properties": {},
@@ -93,8 +88,6 @@ class FakeXPWidgets:
         return XPWidgetID(wid)
 
     def killWidget(self, wid: XPWidgetID) -> None:
-        self._dbg(f"KILL wid={wid}")
-
         self._widgets.pop(wid, None)
         self._callbacks.pop(wid, None)
         self._parent.pop(wid, None)
@@ -115,7 +108,6 @@ class FakeXPWidgets:
     # GEOMETRY
     # ----------------------------------------------------------------------
     def setWidgetGeometry(self, wid: XPWidgetID, x: int, y: int, w: int, h: int) -> None:
-        self._dbg(f"SET GEOMETRY wid={wid} → {(x,y,w,h)}")
         if wid in self._widgets:
             self._widgets[wid]["geometry"] = (x, y, w, h)
             if wid in self._dpg_ids:
@@ -131,14 +123,12 @@ class FakeXPWidgets:
     # VISIBILITY
     # ----------------------------------------------------------------------
     def showWidget(self, wid: XPWidgetID) -> None:
-        self._dbg(f"SHOW wid={wid}")
         if wid in self._widgets:
             self._widgets[wid]["visible"] = True
             if wid in self._dpg_ids:
                 dpg.configure_item(self._dpg_ids[wid], show=True)
 
     def hideWidget(self, wid: XPWidgetID) -> None:
-        self._dbg(f"HIDE wid={wid}")
         if wid in self._widgets:
             self._widgets[wid]["visible"] = False
             if wid in self._dpg_ids:
@@ -154,13 +144,11 @@ class FakeXPWidgets:
         return self._z_order and self._z_order[-1] == wid
 
     def bringWidgetToFront(self, wid: XPWidgetID) -> None:
-        self._dbg(f"BRING FRONT wid={wid}")
         if wid in self._z_order:
             self._z_order.remove(wid)
             self._z_order.append(wid)
 
     def pushWidgetBehind(self, wid: XPWidgetID) -> None:
-        self._dbg(f"PUSH BEHIND wid={wid}")
         if wid in self._z_order:
             self._z_order.remove(wid)
             self._z_order.insert(0, wid)
@@ -179,7 +167,6 @@ class FakeXPWidgets:
         return 0
 
     def setWidgetDescriptor(self, wid: XPWidgetID, text: str) -> None:
-        self._dbg(f"SET DESCRIPTOR wid={wid} text={text!r}")
         self._descriptor[wid] = text
 
         if wid in self._dpg_ids:
@@ -195,7 +182,6 @@ class FakeXPWidgets:
     # ----------------------------------------------------------------------
     def setWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID, value: Any) -> None:
         xp = XPPython3.xp
-        self._dbg(f"SET PROPERTY wid={wid} prop={prop} value={value}")
 
         if wid not in self._widgets:
             return
@@ -221,7 +207,6 @@ class FakeXPWidgets:
     # CALLBACKS + MESSAGE DISPATCH
     # ----------------------------------------------------------------------
     def addWidgetCallback(self, wid: XPWidgetID, callback: WidgetCallback) -> None:
-        self._dbg(f"ADD CALLBACK wid={wid}")
         self._callbacks.setdefault(wid, []).append(callback)
 
     def sendWidgetMessage(
@@ -232,19 +217,16 @@ class FakeXPWidgets:
         param2: Any,
     ) -> None:
 
-        self._dbg(f"SEND MSG wid={wid} msg={msg} param1={param1} param2={param2}")
-
         current = wid
         visited = set()
 
         while current and current not in visited:
             visited.add(current)
-            self._dbg(f" → dispatching to wid={current}")
             for cb in self._callbacks.get(current, []):
                 try:
                     cb(msg, current, param1, param2)
                 except Exception as exc:
-                    self._dbg(f"  callback error in {cb.__name__}: {exc!r}")
+                    self.xp.log(f"  callback error in {cb.__name__}: {exc!r}")
             current = self._parent.get(current, 0)
 
     # ----------------------------------------------------------------------
@@ -257,21 +239,17 @@ class FakeXPWidgets:
                 continue
             gx, gy, gw, gh = w["geometry"]
             if gx <= x <= gx + gw and gy <= y <= gy + gh:
-                self._dbg(f"HIT wid={wid}")
                 return XPWidgetID(wid)
-        self._dbg("HIT none")
         return None
 
     # ----------------------------------------------------------------------
     # KEYBOARD FOCUS
     # ----------------------------------------------------------------------
     def setKeyboardFocus(self, wid: XPWidgetID) -> None:
-        self._dbg(f"FOCUS wid={wid}")
         self._focused_widget = wid
 
     def loseKeyboardFocus(self, wid: XPWidgetID) -> None:
         if self._focused_widget == wid:
-            self._dbg(f"LOSE FOCUS wid={wid}")
             self._focused_widget = None
 
     # ----------------------------------------------------------------------
@@ -281,8 +259,6 @@ class FakeXPWidgets:
         xp = XPPython3.xp
         parent = self._parent.get(wid, 0)
         wclass = self._classes.get(wid)
-
-        self._dbg(f"RESOLVE PARENT wid={wid} class={wclass} xp_parent={parent}")
 
         if wclass == xp.WidgetClass_MainWindow:
             return 0

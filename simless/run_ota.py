@@ -27,7 +27,7 @@ def run_simless_ota_gui() -> None:
         "PI_sshd_dev_ota_gui",
     ]
 
-    xp._run_plugin_lifecycle(plugins, debug=True)
+    xp._run_plugin_lifecycle(plugins)
 
 
 if __name__ == "__main__":

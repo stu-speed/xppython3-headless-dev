@@ -13,24 +13,22 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TYPE_CHECKING
 
-from .fake_xp_loader import FakeXPPluginLoader, LoadedPlugin
+from simless.libs.fake_xp_loader import FakeXPPluginLoader, LoadedPlugin
+if TYPE_CHECKING:
+    from simless.libs.fake_xp.fakexp import FakeXP
 
 
 class FakeXPRunner:
     def __init__(
         self,
-        xp: Any,
+        xp: FakeXP,
         *,
-        enable_gui: bool = True,
         run_time: float = -1.0,
-        debug: bool = False,
     ) -> None:
         self.xp = xp
-        self.enable_gui = enable_gui
         self.run_time = run_time
-        self.debug = debug
         self._running = False
 
         # Allow FakeXP to call back into us
@@ -143,7 +141,7 @@ class FakeXPRunner:
 
         # 3. Graphics + widgets
         try:
-            if self.enable_gui:
+            if self.xp.enable_gui:
                 # Widgets draw into DearPyGui; graphics handles draw callbacks + frame
                 xp.widgets._draw_all_widgets()
             xp.graphics._draw_frame()
@@ -168,7 +166,7 @@ class FakeXPRunner:
             xp.log("[Runner] No plugins to run")
             return
 
-        if self.enable_gui:
+        if self.xp.debug:
             self.init_gui()
 
         # Enable
@@ -236,5 +234,5 @@ class FakeXPRunner:
                 raise RuntimeError(f"[Runner] XPluginStop failed for {p.name}: {exc!r}")
         xp.log("[Runner] === XPluginStop END ===")
 
-        if self.enable_gui:
+        if self.xp.enable_gui:
             self.shutdown_gui()

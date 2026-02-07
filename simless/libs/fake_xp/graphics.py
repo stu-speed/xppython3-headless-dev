@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Sequence
+from typing import Any, List, Sequence, TYPE_CHECKING
 
 from simless.libs.fake_xp_graphics import FakeXPGraphics as _CoreGraphics  # existing implementation
+if TYPE_CHECKING:
+    from simless.libs.fake_xp.fakexp import FakeXP
 
 
 class FakeXPGraphics(_CoreGraphics):
@@ -27,5 +29,5 @@ class FakeXPGraphics(_CoreGraphics):
         "deleteTexture",
     ]
 
-    def __init__(self, fakexp: Any) -> None:
-        super().__init__(fakexp)
+    def __init__(self, xp: FakeXP) -> None:
+        super().__init__(xp)

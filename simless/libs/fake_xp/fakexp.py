@@ -28,7 +28,7 @@ from simless.libs.fake_xp_runner import FakeXPRunner
 
 class FakeXP(XPInterface, FakeXPInterface):
     def __init__(self, *, debug: bool = False, enable_gui: bool = True) -> None:
-        self.debug_enabled: bool = debug
+        self.debug: bool = debug
         self.enable_gui: bool = enable_gui
 
         # Core tables / state
@@ -89,7 +89,7 @@ class FakeXP(XPInterface, FakeXPInterface):
     # Debug helper
     # ----------------------------------------------------------------------
     def _dbg(self, msg: str) -> None:
-        if self.debug_enabled:
+        if self.debug:
             print(f"[FakeXP] {msg}")
 
     # ----------------------------------------------------------------------
@@ -99,14 +99,11 @@ class FakeXP(XPInterface, FakeXPInterface):
         self,
         plugin_names: list[str],
         *,
-        debug: bool = False,
         run_time: float = -1.0,
     ) -> None:
         runner = FakeXPRunner(
             self,
-            enable_gui=self.enable_gui,
             run_time=run_time,
-            debug=debug,
         )
         self._runner = runner
         runner.run_plugin_lifecycle(plugin_names)

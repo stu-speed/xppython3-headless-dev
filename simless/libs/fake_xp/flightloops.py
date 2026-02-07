@@ -5,9 +5,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, TYPE_CHECKING
 
 from XPPython3.xp_typing import XPLMFlightLoopID  # type: ignore[import]
+
+if TYPE_CHECKING:
+    from simless.libs.fake_xp.fakexp import FakeXP
 
 
 class FlightLoopAPI:
@@ -17,8 +20,8 @@ class FlightLoopAPI:
         "destroyFlightLoop",
     ]
 
-    def __init__(self, fakexp: Any) -> None:
-        self.xp = fakexp
+    def __init__(self, xp: FakeXP) -> None:
+        self.xp = xp
 
     def createFlightLoop(
         self,

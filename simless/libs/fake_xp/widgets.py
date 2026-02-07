@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, List, TYPE_CHECKING
 
 from simless.libs.fake_xp_widget import FakeXPWidgets as _CoreWidgets  # existing implementation
+if TYPE_CHECKING:
+    from simless.libs.fake_xp.fakexp import FakeXP
 
 
 class FakeXPWidgets(_CoreWidgets):
@@ -42,5 +44,5 @@ class FakeXPWidgets(_CoreWidgets):
         "sendWidgetMessage",
     ]
 
-    def __init__(self, fakexp: Any) -> None:
-        super().__init__(fakexp)
+    def __init__(self, xp: FakeXP) -> None:
+        super().__init__(xp)
