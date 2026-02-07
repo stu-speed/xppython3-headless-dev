@@ -8,7 +8,7 @@
 import sys
 
 import XPPython3
-from simless.libs.fake_xp import FakeXP
+from simless.libs.fake_xp.fakexp import FakeXP
 from pathlib import Path
 
 

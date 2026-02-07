@@ -1,9 +1,8 @@
-# test_fakexp.py
-
 import sys
 import types
 import XPPython3
-from simless.libs.fake_xp import FakeXP
+
+from simless.libs.fake_xp.fakexp import FakeXP
 from simless.libs.fake_xp_runner import FakeXPRunner
 
 
@@ -43,20 +42,13 @@ class DummyPlugin:
 
     def XPluginStart(self):
         self.calls.append("start")
-        return "Dummy", "dummy", "dummy", "dummy"
+        return "Dummy", "dummy", "dummy"
 
     def XPluginEnable(self):
         self.calls.append("enable")
-
-        # Step 1: request a missing dataref → returns dummy FakeRefInfo
         self.handle = XPPython3.xp.findDataRef("sim/test/auto_float")
-
-        # BEFORE promotion, dummy=True
         assert self.handle.dummy is True
-
-        # Step 2: use the dummy handle → triggers promotion
         self.promoted_value = XPPython3.xp.getDataf(self.handle)
-
         return 1
 
     def XPluginDisable(self):
@@ -67,7 +59,7 @@ class DummyPlugin:
 
 
 def test_dummy_promotion():
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug=True, enable_gui=False)
     runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
@@ -75,22 +67,15 @@ def test_dummy_promotion():
     plugin = DummyPlugin()
     module_name = register_inline_plugin("dummy_plugin", plugin)
 
-    runner.load_plugin(module_name)
-    runner.run_plugin_lifecycle()
+    runner.run_plugin_lifecycle([module_name])
 
-    # Lifecycle assertions
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
-    # Dataref should now exist in the real table
-    assert "sim/test/auto_float" in xp._handles
+    assert "sim/test/auto_float" in xp.datarefs._handles
+    real = xp.datarefs._handles["sim/test/auto_float"]
 
-    real_handle = xp._handles["sim/test/auto_float"]
-
-    # After promotion, dummy=False
-    assert real_handle.dummy is False
-
-    # Default value for float promotion is 0.0
-    assert xp._values[real_handle] == 0.0
+    assert real.dummy is False
+    assert xp.datarefs._values[real.path] == 0.0
     assert plugin.promoted_value == 0.0
 
 
@@ -99,7 +84,7 @@ def test_dummy_promotion():
 # ===========================================================================
 
 def test_cross_plugin_read_write():
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug=True, enable_gui=False)
     runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
@@ -110,7 +95,7 @@ def test_cross_plugin_read_write():
 
         def XPluginStart(self):
             self.calls.append("start")
-            return "Writer", "writer", "writer", "writer"
+            return "Writer", "writer", "writer"
 
         def XPluginEnable(self):
             self.calls.append("enable")
@@ -131,7 +116,7 @@ def test_cross_plugin_read_write():
 
         def XPluginStart(self):
             self.calls.append("start")
-            return "Reader", "reader", "reader", "reader"
+            return "Reader", "reader", "reader"
 
         def XPluginEnable(self):
             self.calls.append("enable")
@@ -151,17 +136,13 @@ def test_cross_plugin_read_write():
     mod_writer = register_inline_plugin("writer_plugin", writer)
     mod_reader = register_inline_plugin("reader_plugin", reader)
 
-    runner.load_plugin(mod_writer)
-    runner.load_plugin(mod_reader)
-    runner.run_plugin_lifecycle()
+    runner.run_plugin_lifecycle([mod_writer, mod_reader])
 
     assert writer.calls == ["start", "enable", "disable", "stop"]
     assert reader.calls == ["start", "enable", "disable", "stop"]
 
-    assert "sim/test/shared" in xp._handles
-    real = xp._handles["sim/test/shared"]
-
-    assert xp._values[real] == 123.456
+    real = xp.datarefs._handles["sim/test/shared"]
+    assert xp.datarefs._values[real.path] == 123.456
     assert reader.value == 123.456
 
 
@@ -170,7 +151,7 @@ def test_cross_plugin_read_write():
 # ===========================================================================
 
 def test_managed_dataref_notification():
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug=True, enable_gui=False)
     runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
@@ -182,8 +163,7 @@ def test_managed_dataref_notification():
         def _notify_dataref_changed(self, handle):
             self.notifications.append(handle)
 
-    manager = MockManager()
-    xp._dataref_manager = manager
+    xp._dataref_manager = MockManager()
 
     class Plugin:
         def __init__(self):
@@ -191,7 +171,7 @@ def test_managed_dataref_notification():
 
         def XPluginStart(self):
             self.calls.append("start")
-            return "P", "p", "p", "p"
+            return "P", "p", "p"
 
         def XPluginEnable(self):
             self.calls.append("enable")
@@ -208,26 +188,22 @@ def test_managed_dataref_notification():
     plugin = Plugin()
     mod = register_inline_plugin("managed_plugin", plugin)
 
-    runner.load_plugin(mod)
-    runner.run_plugin_lifecycle()
+    runner.run_plugin_lifecycle([mod])
 
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
-    assert "sim/test/managed" in xp._handles
-    real = xp._handles["sim/test/managed"]
+    real = xp.datarefs._handles["sim/test/managed"]
 
-    # Promotion + write = 2 notifications
-    assert manager.notifications == [real, real]
-
-    assert xp._values[real] == 9.99
+    assert xp._dataref_manager.notifications == [real, real]
+    assert xp.datarefs._values[real.path] == 9.99
 
 
 # ===========================================================================
-# GUI example test
+# GUI example test (headless)
 # ===========================================================================
 
 def test_example_gui():
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug=True, enable_gui=False)
     runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
@@ -238,7 +214,6 @@ def test_example_gui():
             self.win = None
             self.slider = None
             self.quit_btn = None
-            self.oat_handle = None
 
         def XPluginStart(self):
             self.calls.append("start")
@@ -247,7 +222,7 @@ def test_example_gui():
         def XPluginEnable(self):
             self.calls.append("enable")
 
-            self.oat_handle = xp.registerDataRef(
+            xp.registerDataRef(
                 "sim/cockpit2/temperature/outside_air_temp_degc",
                 xpType=2,
                 isArray=False,
@@ -255,25 +230,33 @@ def test_example_gui():
                 defaultValue=0.0,
             )
 
-            self.win = xp.createWidget(100, 500, 500, 100, 1,
-                                       "Simless OTA Control", 1, 0,
-                                       xp.WidgetClass_MainWindow)
+            self.win = xp.createWidget(
+                100, 500, 500, 100, 1,
+                "Simless OTA Control", 1, 0,
+                xp.WidgetClass_MainWindow
+            )
 
-            xp.createWidget(120, 460, 480, 430, 1,
-                            "Adjust Outside Air Temperature (°C)",
-                            0, self.win, xp.WidgetClass_Caption)
+            xp.createWidget(
+                120, 460, 480, 430, 1,
+                "Adjust Outside Air Temperature (°C)",
+                0, self.win, xp.WidgetClass_Caption
+            )
 
-            self.slider = xp.createWidget(120, 420, 480, 380, 1,
-                                          "OAT Slider", 0, self.win,
-                                          xp.WidgetClass_ScrollBar)
+            self.slider = xp.createWidget(
+                120, 420, 480, 380, 1,
+                "OAT Slider", 0, self.win,
+                xp.WidgetClass_ScrollBar
+            )
 
-            xp.setWidgetProperty(self.slider, xp.Property_ScrollMin, -50)
-            xp.setWidgetProperty(self.slider, xp.Property_ScrollMax, 50)
-            xp.setWidgetProperty(self.slider, xp.Property_ScrollValue, 0)
+            xp.setWidgetProperty(self.slider, xp.Property_ScrollBarMin, -50)
+            xp.setWidgetProperty(self.slider, xp.Property_ScrollBarMax, 50)
+            xp.setWidgetProperty(self.slider, xp.Property_ScrollBarSliderPosition, 0)
 
-            self.quit_btn = xp.createWidget(120, 340, 260, 300, 1,
-                                            "Close", 0, self.win,
-                                            xp.WidgetClass_Button)
+            self.quit_btn = xp.createWidget(
+                120, 340, 260, 300, 1,
+                "Close", 0, self.win,
+                xp.WidgetClass_Button
+            )
 
             return 1
 
@@ -289,17 +272,13 @@ def test_example_gui():
     plugin = DevOTAGUIPlugin()
     module_name = register_inline_plugin("dev_ota_gui_register_plugin", plugin)
 
-    runner.load_plugin(module_name)
-    runner.run_plugin_lifecycle()
+    runner.run_plugin_lifecycle([module_name])
 
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
-    assert "sim/cockpit2/temperature/outside_air_temp_degc" in xp._handles
-    real = xp._handles["sim/cockpit2/temperature/outside_air_temp_degc"]
-
-    assert xp._values[real] == 0.0
+    real = xp.datarefs._handles["sim/cockpit2/temperature/outside_air_temp_degc"]
+    assert xp.datarefs._values[real.path] == 0.0
 
     assert plugin.slider is not None
     assert plugin.quit_btn is not None
-
     assert plugin.win is None
