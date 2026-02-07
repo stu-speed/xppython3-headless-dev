@@ -60,7 +60,7 @@ class DummyPlugin:
 
 def test_dummy_promotion():
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
+    runner = FakeXPRunner(xp, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
@@ -85,7 +85,7 @@ def test_dummy_promotion():
 
 def test_cross_plugin_read_write():
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
+    runner = FakeXPRunner(xp, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
@@ -152,7 +152,7 @@ def test_cross_plugin_read_write():
 
 def test_managed_dataref_notification():
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
+    runner = FakeXPRunner(xp, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
@@ -204,7 +204,7 @@ def test_managed_dataref_notification():
 
 def test_example_gui():
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = FakeXPRunner(xp, enable_gui=False, run_time=0.1)
+    runner = FakeXPRunner(xp, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
