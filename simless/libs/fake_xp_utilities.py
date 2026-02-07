@@ -1,39 +1,45 @@
+# simless/libs/fake_xp_utilities.py
+# ===========================================================================
+# FakeXPUtilities — XPUtilities-like subsystem for FakeXP
+# ===========================================================================
+
 from __future__ import annotations
 
 import os
-from typing import Any
 
 
 class FakeXPUtilities:
     """
-    Miscellaneous utility functions to mimic X-Plane's XPUtilities API.
+    Utility subsystem mixin for FakeXP.
+    Provides XPUtilities-like helper functions.
     """
 
-    def speakString(self, text: str) -> None:
-        """
-        Simulate speaking a string.
+    # Only include methods actually defined in this file
+    public_api_names = [
+        "speakString",
+        "getSystemPath",
+        "getPrefsPath",
+        "getDirectorySeparator",
+    ]
 
-        Currently implemented as a simple print; could be extended to use
-        OS TTS facilities if desired.
-        """
+    def _init_utilities(self) -> None:
+        # Stateless subsystem
+        pass
+
+    # ------------------------------------------------------------------
+    # SPEAK
+    # ------------------------------------------------------------------
+    def speakString(self, text: str) -> None:
         print(f"[FakeXP speak] {text}")
 
+    # ------------------------------------------------------------------
+    # PATHS
+    # ------------------------------------------------------------------
     def getSystemPath(self) -> str:
-        """
-        Return a fake 'system path' for X-Plane.
-
-        For testing, this is just the current working directory.
-        """
         return os.getcwd()
 
     def getPrefsPath(self) -> str:
-        """
-        Return a fake preferences path.
-
-        For testing, this is a 'prefs' directory under the current working directory.
-        """
         return os.path.join(os.getcwd(), "prefs")
 
     def getDirectorySeparator(self) -> str:
-        """Return the OS-specific directory separator."""
         return os.sep

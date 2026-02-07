@@ -1,40 +1,62 @@
-# ===========================================================================
-# FakeXPGraphics — DearPyGui-backed XPLMGraphics emulator (prod-compatible)
-#
-# Minimal, safe, simless implementation of the subset of XPLMGraphics used by
-# XPPython3 plugins. DearPyGui context/viewport are initialized exactly once
-# using the non-deprecated is_* APIs to avoid native crashes.
-# ===========================================================================
+# simless/libs/fake_xp_graphics.py
 
 from __future__ import annotations
-from typing import Any, Callable, Dict, List, Tuple, TYPE_CHECKING
+from typing import Any, Callable, List, Tuple
 
 import dearpygui.dearpygui as dpg
-
-if TYPE_CHECKING:
-    from simless.libs.fake_xp.fakexp import FakeXP
 
 
 class FakeXPGraphics:
     """
-    Minimal DearPyGui-backed graphics layer that emulates the subset of
-    XPLMGraphics used by XPPython3 plugins. This is NOT a full renderer —
-    it only provides the API surface needed for simless GUI plugin testing.
+    DearPyGui-backed graphics subsystem mixin for FakeXP.
+    Provides a minimal XPLMGraphics-like API surface for simless GUI testing.
     """
 
-    def __init__(self, xp: FakeXP) -> None:
-        self.xp = xp
+    public_api_names = [
+        # Drawing callbacks
+        "registerDrawCallback",
+        "unregisterDrawCallback",
 
-        self._draw_callbacks: list[tuple[Callable, int, int]] = []
+        # Screen + mouse queries
+        "getScreenSize",
+        "getMouseLocation",
+
+        # Drawing primitives
+        "drawString",
+        "drawNumber",
+
+        # Graphics state
+        "setGraphicsState",
+    ]
+
+    def _init_graphics(self) -> None:
+        # Draw callbacks: (callback, phase, before)
+        self._draw_callbacks: List[tuple[Callable, int, int]] = []
+
+        # Texture bookkeeping (stub)
         self._next_tex_id: int = 1
         self._textures: dict[int, Any] = {}
 
+        # Screen + mouse state
         self._mouse_x: int = 0
         self._mouse_y: int = 0
         self._screen_w: int = 1920
         self._screen_h: int = 1080
 
-        # Minimal, robust DearPyGui init: assume single graphics instance
+        # DearPyGui context is created lazily when GUI is enabled
+        self._dpg_initialized: bool = False
+
+    # ----------------------------------------------------------------------
+    # DPG INITIALIZATION
+    # ----------------------------------------------------------------------
+    def _ensure_dpg(self) -> None:
+        """
+        Initialize DearPyGui exactly once.
+        Called automatically when GUI mode is enabled.
+        """
+        if self._dpg_initialized:
+            return
+
         dpg.create_context()
         dpg.create_viewport(
             title="FakeXP Graphics",
@@ -43,6 +65,8 @@ class FakeXPGraphics:
         )
         dpg.setup_dearpygui()
         dpg.show_viewport()
+
+        self._dpg_initialized = True
 
     # ----------------------------------------------------------------------
     # Draw callback registration
@@ -67,6 +91,9 @@ class FakeXPGraphics:
         text: str,
         wordWrapWidth: int,
     ) -> None:
+        if not self._dpg_initialized:
+            return
+
         try:
             with dpg.draw_layer():
                 dpg.draw_text(
@@ -80,7 +107,8 @@ class FakeXPGraphics:
                     ),
                 )
         except Exception as exc:
-            self.xp.log(f"[Graphics] drawString error: {exc!r}")
+            if hasattr(self, "log"):
+                self.log(f"[Graphics] drawString error: {exc!r}")
 
     def drawNumber(
         self,
@@ -107,11 +135,10 @@ class FakeXPGraphics:
         texMode: int,
         depth: int,
     ) -> None:
-        # No-op; included for API compatibility
         pass
 
     # ----------------------------------------------------------------------
-    # Texture API
+    # Texture API (stub)
     # ----------------------------------------------------------------------
     def generateTextureNumbers(self, count: int) -> List[int]:
         ids = []
@@ -123,7 +150,6 @@ class FakeXPGraphics:
         return ids
 
     def bindTexture2d(self, textureID: int, unit: int) -> None:
-        # No real texture binding — stubbed for compatibility
         pass
 
     def deleteTexture(self, textureID: int) -> None:
@@ -139,32 +165,48 @@ class FakeXPGraphics:
         return (self._mouse_x, self._mouse_y)
 
     def _update_mouse(self) -> None:
+        if not self._dpg_initialized:
+            return
+
         try:
-            if dpg.is_viewport_ok():
-                pos = dpg.get_mouse_pos()
-                self._mouse_x, self._mouse_y = int(pos[0]), int(pos[1])
-        except Exception as exc:
-            self.xp.log(f"[Graphics] mouse update error: {exc!r}")
+            pos = dpg.get_mouse_pos()
+            self._mouse_x, self._mouse_y = int(pos[0]), int(pos[1])
+        except Exception:
+            pass
 
     # ----------------------------------------------------------------------
     # Frame rendering
     # ----------------------------------------------------------------------
     def _draw_frame(self) -> None:
         """
-        Called by FakeXPRunner once per frame.
-        Executes all registered draw callbacks and renders DearPyGui.
+        Called by SimlessRunner once per frame.
+        Executes draw callbacks, renders widgets, and renders DearPyGui.
         """
+        if getattr(self, "enable_gui", False):
+            self._ensure_dpg()
+
         self._update_mouse()
 
         # Execute draw callbacks
-        for cb, phase, wantsBefore in self._draw_callbacks:
+        for cb, phase, wantsBefore in list(self._draw_callbacks):
             try:
                 cb(phase, wantsBefore)
             except Exception as exc:
-                self.xp.log(f"[Graphics] draw callback error: {exc!r}")
+                if hasattr(self, "log"):
+                    self.log(f"[Graphics] draw callback error: {exc!r}")
+
+        # Render X-Plane-style widgets into DearPyGui, if the widget subsystem is present
+        if hasattr(self, "_draw_all_widgets"):
+            try:
+                self._draw_all_widgets()
+            except Exception as exc:
+                if hasattr(self, "log"):
+                    self.log(f"[Graphics] widget render error: {exc!r}")
 
         # Render DPG frame
-        try:
-            dpg.render_dearpygui_frame()
-        except Exception as exc:
-            self.xp.log(f"[Graphics] frame render error: {exc!r}")
+        if self._dpg_initialized:
+            try:
+                dpg.render_dearpygui_frame()
+            except Exception as exc:
+                if hasattr(self, "log"):
+                    self.log(f"[Graphics] frame render error: {exc!r}")

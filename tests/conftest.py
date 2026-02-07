@@ -3,7 +3,7 @@
 import pytest
 import sys
 import inspect
-import simless.libs.fake_xp_loader as loader
+import simless.libs.loader as loader
 
 
 @pytest.fixture(autouse=True)
@@ -15,7 +15,7 @@ def bypass_plugin_loader(monkeypatch):
 
     # 1. Disable filesystem validation
     monkeypatch.setattr(
-        loader.FakeXPPluginLoader,
+        loader.SimlessPluginLoader,
         "_validate",
         lambda self, name: True
     )
@@ -54,7 +54,7 @@ def bypass_plugin_loader(monkeypatch):
         )
 
     monkeypatch.setattr(
-        loader.FakeXPPluginLoader,
+        loader.SimlessPluginLoader,
         "_load_single",
         _load_single_inline
     )

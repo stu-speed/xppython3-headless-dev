@@ -1,16 +1,14 @@
-# simless/libs/fake_xp/datarefs.py
+# simless/libs/fake_xp_dataref.py
 # ===========================================================================
-# DataRef subsystem — tables, FakeDataRefInfo, and xp.* DataRef API.
+# DataRef subsystem — FakeDataRefInfo + xp.* DataRef API (cooperative mixin)
 # ===========================================================================
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence, TYPE_CHECKING
+from typing import Any, Dict, List, Sequence
 
 from plugins.sshd_extensions.datarefs import DRefType, DataRefManager  # type: ignore[import]
-if TYPE_CHECKING:
-    from simless.libs.fake_xp.fakexp import FakeXP
 
 
 @dataclass(slots=True)
@@ -29,7 +27,12 @@ class FakeDataRefInfo:
         return f"<FakeDataRefInfo {self.path} ({kind}, type={self.xp_type}, size={self.size}{dummy})>"
 
 
-class DataRefAPI:
+class FakeXPDataRef:
+    """
+    Cooperative‑mixin version of your full DataRef subsystem.
+    No __init__ — FakeXP calls _init_dataref().
+    """
+
     public_api_names = [
         "fake_register_dataref",
         "findDataRef",
@@ -49,8 +52,10 @@ class DataRefAPI:
         "registerDataRef",
     ]
 
-    def __init__(self, xp: FakeXP) -> None:
-        self.xp = xp
+    # ------------------------------------------------------------------ #
+    # Cooperative initializer                                            #
+    # ------------------------------------------------------------------ #
+    def _init_dataref(self) -> None:
         self._handles: Dict[str, FakeDataRefInfo] = {}
         self._dummy_refs: Dict[str, FakeDataRefInfo] = {}
         self._values: Dict[str, Any] = {}
@@ -97,7 +102,7 @@ class DataRefAPI:
 
         self._handles[path] = ref
         self._values[path] = value
-        self.xp._dbg(f"fake_register_dataref('{path}', type={int(dtype)}, array={is_array}, size={size})")
+        self._dbg(f"fake_register_dataref('{path}', type={int(dtype)}, array={is_array}, size={size})")
         return ref
 
     # ------------------------------------------------------------------ #
@@ -105,7 +110,7 @@ class DataRefAPI:
     # ------------------------------------------------------------------ #
     def findDataRef(self, name: str) -> FakeDataRefInfo | None:
         if "[" in name or "]" in name:
-            self.xp._dbg(f"findDataRef rejected invalid array element syntax: '{name}'")
+            self._dbg(f"findDataRef rejected invalid array element syntax: '{name}'")
             return None
 
         if name in self._handles:
@@ -121,12 +126,12 @@ class DataRefAPI:
             dtype = DRefType.FLOAT_ARRAY
             value: Any = [0.0] * 8
             size = 8
-            self.xp._dbg(f"Promoted '{name}' to dummy float array dataref")
+            self._dbg(f"Promoted '{name}' to dummy float array dataref")
         else:
             dtype = DRefType.FLOAT
             value = 0.0
             size = 1
-            self.xp._dbg(f"Promoted '{name}' to dummy scalar dataref")
+            self._dbg(f"Promoted '{name}' to dummy scalar dataref")
 
         ref = FakeDataRefInfo(
             path=name,
@@ -149,23 +154,16 @@ class DataRefAPI:
     # Internal helpers                                                   #
     # ------------------------------------------------------------------ #
     def _promote_if_dummy(self, ref: FakeDataRefInfo) -> FakeDataRefInfo:
-        """
-        If this is a dummy dataref, flip it to real and notify manager.
-        Called on first read/write through the xp.* API.
-        """
         if not ref.dummy:
             return ref
 
-        # Flip dummy → real
         ref.dummy = False
 
-        # Ensure value storage exists
         if ref.path not in self._values:
             self._values[ref.path] = ref.value
 
-        # Notify promotion
-        if self.xp._dataref_manager:
-            self.xp._dataref_manager._notify_dataref_changed(ref)
+        if self._dataref_manager:
+            self._dataref_manager._notify_dataref_changed(ref)
 
         return ref
 
@@ -187,7 +185,6 @@ class DataRefAPI:
         else:
             ref = handle
 
-        # Promotion happens on first access
         return self._promote_if_dummy(ref)
 
     # ------------------------------------------------------------------ #
@@ -202,8 +199,8 @@ class DataRefAPI:
         v = int(value)
         self._values[ref.path] = v
         ref.value = v
-        if self.xp._dataref_manager:
-            self.xp._dataref_manager._notify_dataref_changed(ref)
+        if self._dataref_manager:
+            self._dataref_manager._notify_dataref_changed(ref)
 
     # ------------------------------------------------------------------ #
     # Dataf                                                              #
@@ -217,8 +214,8 @@ class DataRefAPI:
         v = float(value)
         self._values[ref.path] = v
         ref.value = v
-        if self.xp._dataref_manager:
-            self.xp._dataref_manager._notify_dataref_changed(ref)
+        if self._dataref_manager:
+            self._dataref_manager._notify_dataref_changed(ref)
 
     # ------------------------------------------------------------------ #
     # Datad                                                              #
@@ -262,8 +259,8 @@ class DataRefAPI:
         for i in range(count):
             arr[offset + i] = float(values[i])
         ref.value = arr
-        if self.xp._dataref_manager:
-            self.xp._dataref_manager._notify_dataref_changed(ref)
+        if self._dataref_manager:
+            self._dataref_manager._notify_dataref_changed(ref)
 
     # ------------------------------------------------------------------ #
     # Datvi                                                             #
@@ -298,8 +295,8 @@ class DataRefAPI:
         for i in range(count):
             arr[offset + i] = int(values[i])
         ref.value = arr
-        if self.xp._dataref_manager:
-            self.xp._dataref_manager._notify_dataref_changed(ref)
+        if self._dataref_manager:
+            self._dataref_manager._notify_dataref_changed(ref)
 
     # ------------------------------------------------------------------ #
     # Datab                                                             #
@@ -334,8 +331,8 @@ class DataRefAPI:
         for i in range(count):
             arr[offset + i] = int(values[i]) & 0xFF
         ref.value = arr
-        if self.xp._dataref_manager:
-            self.xp._dataref_manager._notify_dataref_changed(ref)
+        if self._dataref_manager:
+            self._dataref_manager._notify_dataref_changed(ref)
 
     # ------------------------------------------------------------------ #
     # registerDataRef                                                   #
@@ -363,9 +360,9 @@ class DataRefAPI:
 
         self._handles[path] = ref
         self._values[path] = defaultValue
-        self.xp._dbg(f"registerDataRef('{path}')")
+        self._dbg(f"registerDataRef('{path}')")
 
-        if self.xp._dataref_manager is not None:
-            self.xp._dataref_manager._notify_dataref_changed(ref)
+        if self._dataref_manager:
+            self._dataref_manager._notify_dataref_changed(ref)
 
         return ref

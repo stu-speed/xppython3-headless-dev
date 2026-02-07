@@ -1,5 +1,5 @@
 # ===========================================================================
-# fake_xp_runner.py — deterministic simless execution harness
+# runner.py — deterministic simless execution harness
 #
 # Responsibilities:
 #   • Load plugins via FakeXPPluginLoader
@@ -15,12 +15,12 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, TYPE_CHECKING
 
-from simless.libs.fake_xp_loader import FakeXPPluginLoader, LoadedPlugin
+from simless.libs.loader import SimlessPluginLoader, LoadedPlugin
 if TYPE_CHECKING:
-    from simless.libs.fake_xp.fakexp import FakeXP
+    from simless.libs.fake_xp import FakeXP
 
 
-class FakeXPRunner:
+class SimlessRunner:
     def __init__(
         self,
         xp: FakeXP,
@@ -139,14 +139,12 @@ class FakeXPRunner:
                     fl["interval"] = float(next_interval)
                     fl["next_call"] = sim_time + float(next_interval)
 
-        # 3. Graphics + widgets
+        # 3. Graphics frame
         try:
             if self.xp.enable_gui:
-                # Widgets draw into DearPyGui; graphics handles draw callbacks + frame
-                xp.widgets._draw_all_widgets()
-            xp.graphics._draw_frame()
+                self.xp._draw_frame()
         except Exception as exc:
-            xp.log(f"[Runner] graphics/frame error: {exc!r}")
+            self.xp.log(f"[Runner] graphics/frame error: {exc!r}")
             return False
 
         return True
@@ -155,7 +153,7 @@ class FakeXPRunner:
     # Lifecycle execution
     # ------------------------------------------------------------------
     def run_plugin_lifecycle(self, plugin_names: list[str]) -> None:
-        loader = FakeXPPluginLoader(self.xp)
+        loader = SimlessPluginLoader(self.xp)
         plugins = loader.load_plugins(plugin_names)
         self.run_lifecycle(plugins)
 

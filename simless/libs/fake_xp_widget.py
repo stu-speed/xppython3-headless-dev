@@ -1,15 +1,5 @@
-# ===========================================================================
-# FakeXPWidgets — DearPyGui-backed XPWidget emulator (prod-compatible)
-#
-# Strong typing via xp_typing, safe symbol-level imports, and full compatibility
-# with real XPPython3 (no nonexistent symbols). All widget constants/messages/
-# properties are accessed dynamically through XPPython3.xp to avoid importing
-# the stub xp.py (which imports XPLMCamera and crashes in simless mode).
-# ===========================================================================
-
 from __future__ import annotations
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
-
+from typing import Any, Dict, List, Optional, Callable
 import dearpygui.dearpygui as dpg
 
 import XPPython3
@@ -20,18 +10,34 @@ from XPPython3.xp_typing import (
     XPWidgetMessage,
     XPWidgetGeometry,
 )
-if TYPE_CHECKING:
-    from simless.libs.fake_xp.fakexp import FakeXP
 
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
 WidgetCallback = XPWidgetCallback
 WidgetGeometry = XPWidgetGeometry
 
 
-class FakeXPWidgets:
-    def __init__(self, xp: FakeXP) -> None:
-        self.xp = xp
+class FakeXPWidget:
+    """
+    Widget subsystem mixin for FakeXP.
+    No __init__ — FakeXP calls _init_widgets() during construction.
+    """
 
+    public_api_names = [
+        "createWidget",
+        "killWidget",
+        "getWidgetProperty",
+        "setWidgetProperty",
+        "getWidgetGeometry",
+        "setWidgetGeometry",
+        "showWidget",
+        "hideWidget",
+        "isWidgetVisible",
+        "sendMessageToWidget",
+        "getWidgetForLocation",
+        "getParentWidget",
+    ]
+
+    def _init_widgets(self) -> None:
         self._widgets: Dict[int, Dict[str, Any]] = {}
         self._callbacks: Dict[int, List[WidgetCallback]] = {}
         self._next_id: int = 1
@@ -47,7 +53,7 @@ class FakeXPWidgets:
 
     # ----------------------------------------------------------------------
     def _dbg(self, msg: str) -> None:
-        if getattr(self.xp, "debug_enabled", False):
+        if getattr(self, "debug", False):
             print(f"[FakeXPWidgets] {msg}")
 
     # ----------------------------------------------------------------------
@@ -209,7 +215,7 @@ class FakeXPWidgets:
     def addWidgetCallback(self, wid: XPWidgetID, callback: WidgetCallback) -> None:
         self._callbacks.setdefault(wid, []).append(callback)
 
-    def sendWidgetMessage(
+    def sendMessageToWidget(
         self,
         wid: XPWidgetID,
         msg: XPWidgetMessage,
@@ -226,7 +232,7 @@ class FakeXPWidgets:
                 try:
                     cb(msg, current, param1, param2)
                 except Exception as exc:
-                    self.xp.log(f"  callback error in {cb.__name__}: {exc!r}")
+                    self.log(f"  callback error in {cb.__name__}: {exc!r}")
             current = self._parent.get(current, 0)
 
     # ----------------------------------------------------------------------
@@ -253,7 +259,7 @@ class FakeXPWidgets:
             self._focused_widget = None
 
     # ----------------------------------------------------------------------
-    # PARENT RESOLUTION
+    # DPG PARENT RESOLUTION
     # ----------------------------------------------------------------------
     def _resolve_dpg_parent(self, wid: XPWidgetID) -> int:
         xp = XPPython3.xp
@@ -304,7 +310,7 @@ class FakeXPWidgets:
 
             def _on_slider(sender, app_data, user_data):
                 self.setWidgetProperty(user_data, xp.Property_ScrollBarSliderPosition, int(app_data))
-                self.sendWidgetMessage(user_data, xp.Msg_ScrollBarSliderPositionChanged, user_data, None)
+                self.sendMessageToWidget(user_data, xp.Msg_ScrollBarSliderPositionChanged, user_data, None)
 
             dpg_id = dpg.add_slider_int(
                 label=desc or "Slider",
@@ -319,7 +325,7 @@ class FakeXPWidgets:
 
         elif wclass == xp.WidgetClass_Button:
             def _on_button(sender, app_data, user_data):
-                self.sendWidgetMessage(user_data, xp.Msg_PushButtonPressed, user_data, None)
+                self.sendMessageToWidget(user_data, xp.Msg_PushButtonPressed, user_data, None)
 
             dpg_id = dpg.add_button(
                 label=desc or "Button",

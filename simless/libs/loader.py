@@ -1,5 +1,5 @@
 # ===========================================================================
-# fake_xp_loader.py — INTERNAL FakeXP plugin loader (fully typed)
+# loader.py — INTERNAL FakeXP plugin loader (fully typed)
 #
 # Not exposed to user code. Used exclusively by FakeXPRunner.
 #
@@ -20,7 +20,7 @@ from types import ModuleType
 from typing import Any, Protocol, TypedDict, TYPE_CHECKING, List
 
 if TYPE_CHECKING:
-    from simless.libs.fake_xp.fakexp import FakeXP
+    from simless.libs.fake_xp import FakeXP
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +82,7 @@ class LoadedPlugin:
 # FakeXPPluginLoader — internal loader used only by FakeXPRunner
 # ---------------------------------------------------------------------------
 
-class FakeXPPluginLoader:
+class SimlessPluginLoader:
     def __init__(self, xp: FakeXP) -> None:
         # Project root → plugins/
         self.root: Path = Path(__file__).resolve().parents[2] / "plugins"

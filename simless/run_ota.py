@@ -8,7 +8,7 @@
 import sys
 
 import XPPython3
-from simless.libs.fake_xp.fakexp import FakeXP
+from simless.libs.fake_xp import FakeXP
 from pathlib import Path
 
 
@@ -19,7 +19,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 
 def run_simless_ota_gui() -> None:
-    xp = FakeXP(debug=True, enable_gui=True)
+    xp = FakeXP(debug=True, enable_gui=True, run_time=-1)
     XPPython3.xp = xp
 
     plugins = [

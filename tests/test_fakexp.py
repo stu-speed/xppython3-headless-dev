@@ -2,8 +2,8 @@ import sys
 import types
 import XPPython3
 
-from simless.libs.fake_xp.fakexp import FakeXP
-from simless.libs.fake_xp_runner import FakeXPRunner
+from simless.libs.fake_xp import FakeXP
+from simless.libs.runner import SimlessRunner
 
 
 def register_inline_plugin(name: str, plugin_obj) -> str:
@@ -60,7 +60,7 @@ class DummyPlugin:
 
 def test_dummy_promotion():
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = FakeXPRunner(xp, run_time=0.1)
+    runner = SimlessRunner(xp, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
@@ -71,11 +71,11 @@ def test_dummy_promotion():
 
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
-    assert "sim/test/auto_float" in xp.datarefs._handles
-    real = xp.datarefs._handles["sim/test/auto_float"]
+    assert "sim/test/auto_float" in xp._handles
+    real = xp._handles["sim/test/auto_float"]
 
     assert real.dummy is False
-    assert xp.datarefs._values[real.path] == 0.0
+    assert xp._values[real.path] == 0.0
     assert plugin.promoted_value == 0.0
 
 
@@ -85,7 +85,7 @@ def test_dummy_promotion():
 
 def test_cross_plugin_read_write():
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = FakeXPRunner(xp, run_time=0.1)
+    runner = SimlessRunner(xp, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
@@ -141,8 +141,8 @@ def test_cross_plugin_read_write():
     assert writer.calls == ["start", "enable", "disable", "stop"]
     assert reader.calls == ["start", "enable", "disable", "stop"]
 
-    real = xp.datarefs._handles["sim/test/shared"]
-    assert xp.datarefs._values[real.path] == 123.456
+    real = xp._handles["sim/test/shared"]
+    assert xp._values[real.path] == 123.456
     assert reader.value == 123.456
 
 
@@ -152,7 +152,7 @@ def test_cross_plugin_read_write():
 
 def test_managed_dataref_notification():
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = FakeXPRunner(xp, run_time=0.1)
+    runner = SimlessRunner(xp, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
@@ -192,10 +192,10 @@ def test_managed_dataref_notification():
 
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
-    real = xp.datarefs._handles["sim/test/managed"]
+    real = xp._handles["sim/test/managed"]
 
     assert xp._dataref_manager.notifications == [real, real]
-    assert xp.datarefs._values[real.path] == 9.99
+    assert xp._values[real.path] == 9.99
 
 
 # ===========================================================================
@@ -204,7 +204,7 @@ def test_managed_dataref_notification():
 
 def test_example_gui():
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = FakeXPRunner(xp, run_time=0.1)
+    runner = SimlessRunner(xp, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
@@ -276,8 +276,8 @@ def test_example_gui():
 
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
-    real = xp.datarefs._handles["sim/cockpit2/temperature/outside_air_temp_degc"]
-    assert xp.datarefs._values[real.path] == 0.0
+    handle = xp.findDataRef("sim/cockpit2/temperature/outside_air_temp_degc")
+    assert xp.getDataf(handle) == 0.0
 
     assert plugin.slider is not None
     assert plugin.quit_btn is not None
