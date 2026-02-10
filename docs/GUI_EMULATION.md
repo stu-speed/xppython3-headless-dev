@@ -57,7 +57,7 @@ FakeXPRunner (Simulation Engine)
   - DearPyGui Lifecycle (sole owner)  
         │  
         ▼  
-DearPyGui Backend (optional)  
+DearPyGui Backend
   - Viewport  
   - Rendering  
   - Input Events  
@@ -142,7 +142,7 @@ The loop ends when:
 - the plugin calls xp.end_run_loop(), or  
 - the user closes the viewport (GUI mode only)  
 
-This matches real X‑Plane behavior.
+This matches real X‑Plane environment.
 
 ---
 

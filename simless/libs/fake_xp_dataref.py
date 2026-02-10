@@ -1,6 +1,6 @@
 # simless/libs/fake_xp_dataref.py
 # ===========================================================================
-# FakeXP DataRef subsystem — auto‑generation honoring plugin defaults
+# FakeXP DataRef subsystem — mirrors XPPython3/X-Plane DataRefInfo fields
 # ===========================================================================
 
 from __future__ import annotations
@@ -13,12 +13,17 @@ from plugins.sshd_extensions.datarefs import DRefType
 
 # ===========================================================================
 # FakeDataRef — handle + metadata + value
+#   Mirrors XPLMDataRefInfo_t field names:
+#   - type
+#   - writable
+#   - is_array
+#   - size
 # ===========================================================================
 
 @dataclass(slots=True)
 class FakeDataRef:
     path: str
-    xp_type: int
+    type: int          # XPLMDataRefTypes
     writable: bool
     is_array: bool
     size: int
@@ -27,7 +32,7 @@ class FakeDataRef:
 
 
 # ===========================================================================
-# FakeXPDataRef — auto‑generation using DataRefManager defaults + heuristics
+# FakeXPDataRef — auto-generation using DataRefManager defaults + heuristics
 # ===========================================================================
 
 class FakeXPDataRef:
@@ -56,7 +61,7 @@ class FakeXPDataRef:
         self._values: Dict[str, Any] = {}
 
     # ----------------------------------------------------------------------
-    # Explicit registration
+    # Explicit registration (test helpers / XPPython3 compatibility)
     # ----------------------------------------------------------------------
 
     def fake_register_dataref(
@@ -88,7 +93,7 @@ class FakeXPDataRef:
 
         ref = FakeDataRef(
             path=path,
-            xp_type=int(dtype),
+            type=int(dtype),
             writable=writable,
             is_array=is_array,
             size=size,
@@ -101,7 +106,7 @@ class FakeXPDataRef:
         return ref
 
     # ----------------------------------------------------------------------
-    # Auto‑generation honoring DataRefManager defaults
+    # Auto-generation honoring DataRefManager defaults
     # ----------------------------------------------------------------------
 
     def _infer_from_manager(self, name: str):
@@ -146,6 +151,10 @@ class FakeXPDataRef:
             "value": 0.0,
         }
 
+    # ----------------------------------------------------------------------
+    # Lookup
+    # ----------------------------------------------------------------------
+
     def findDataRef(self, name: str) -> FakeDataRef | None:
         if name in self._handles:
             return self._handles[name]
@@ -156,7 +165,7 @@ class FakeXPDataRef:
 
         ref = FakeDataRef(
             path=name,
-            xp_type=int(inferred["dtype"]),
+            type=int(inferred["dtype"]),
             writable=True,
             is_array=inferred["is_array"],
             size=inferred["size"],
@@ -168,6 +177,14 @@ class FakeXPDataRef:
         return ref
 
     def getDataRefInfo(self, handle: FakeDataRef) -> FakeDataRef:
+        """
+        Mirror XPPython3: return an object with attributes:
+          - type
+          - writable
+          - is_array
+          - size
+        FakeDataRef already exposes these fields.
+        """
         return handle
 
     # ----------------------------------------------------------------------
@@ -185,7 +202,7 @@ class FakeXPDataRef:
 
             ref = FakeDataRef(
                 path=handle,
-                xp_type=int(inferred["dtype"]),
+                type=int(inferred["dtype"]),
                 writable=True,
                 is_array=inferred["is_array"],
                 size=inferred["size"],
@@ -202,14 +219,23 @@ class FakeXPDataRef:
     # Scalar + array accessors
     # ----------------------------------------------------------------------
 
-    def getDatai(self, handle): return int(self._resolve_value_ref(handle).value)
-    def setDatai(self, handle, v): self._resolve_value_ref(handle).value = int(v)
+    def getDatai(self, handle):
+        return int(self._resolve_value_ref(handle).value)
 
-    def getDataf(self, handle): return float(self._resolve_value_ref(handle).value)
-    def setDataf(self, handle, v): self._resolve_value_ref(handle).value = float(v)
+    def setDatai(self, handle, v):
+        self._resolve_value_ref(handle).value = int(v)
 
-    def getDatad(self, handle): return self.getDataf(handle)
-    def setDatad(self, handle, v): self.setDataf(handle, v)
+    def getDataf(self, handle):
+        return float(self._resolve_value_ref(handle).value)
+
+    def setDataf(self, handle, v):
+        self._resolve_value_ref(handle).value = float(v)
+
+    def getDatad(self, handle):
+        return self.getDataf(handle)
+
+    def setDatad(self, handle, v):
+        self.setDataf(handle, v)
 
     def getDatavf(self, handle, out, offset, count):
         ref = self._resolve_value_ref(handle)
@@ -258,15 +284,29 @@ class FakeXPDataRef:
     # ----------------------------------------------------------------------
 
     def registerDataRef(self, path, xpType, isArray, writable, defaultValue):
+        """
+        Mirror XPPython3's registerDataRef signature, but store metadata
+        using the same field names as XPLMDataRefInfo_t.
+        """
         if path in self._handles:
             return self._handles[path]
 
+        dtype = DRefType(xpType)
+        is_array = bool(isArray)
+
+        if isinstance(defaultValue, list):
+            size = len(defaultValue)
+        elif isinstance(defaultValue, (bytes, bytearray)):
+            size = len(defaultValue)
+        else:
+            size = 1
+
         ref = FakeDataRef(
             path=path,
-            xp_type=xpType,
-            writable=writable,
-            is_array=isArray,
-            size=len(defaultValue) if isinstance(defaultValue, list) else 1,
+            type=int(dtype),
+            writable=bool(writable),
+            is_array=is_array,
+            size=size,
             value=defaultValue,
             auto_generated=False,
         )

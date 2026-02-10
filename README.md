@@ -1,9 +1,10 @@
 # 📘 xppython3-headless-dev
-### Multi‑Plugin Workspace • Sim‑less Execution • Unified FakeXP API • Deterministic Headless Runner
+### IDE workflow • Sim‑less execution and debugging • Live X-Plane dataref injection
 
-A clean, scalable development environment for building multiple XPPython3 plugins **without launching X‑Plane**.
+A structured development environment for building and debugging XPPython3 plugins natively in
+an IDE (Pycharm) though runtime emulation.  Plugins can run outside of X-plane.
 
-This workspace provides:
+This project provides:
 
 • A real X‑Plane‑compatible plugin folder structure  
 • A unified FakeXP API surface that mirrors xp.*  
@@ -17,92 +18,67 @@ The goal is **fast, maintainable plugin development** with behavior identical in
 
 ---
 
-# 📦 Requirements
-
-Runtime dependencies are intentionally minimal:
-
-• python 3.12+  
-• dearpygui (only required when GUI mode is enabled)
-
-All dependencies are declared in pyproject.toml.
-
----
-
 # 📁 Directory Structure
-
 ```
-xplane-python-dev/
+xppython3-headless-dev/
 │
-├── plugins/                               # All XPPython3 plugins (production-style)
-│   ├── PI_ss_ota.py                        # Example hardware plugin (serial OTA)
-│   ├── dev_ota_gui.py                      # Example XPWidget GUI plugin (DPG-backed)
+├── plugins/                                # All XPPython3 plugins (production-style)
+│   ├── PI_sshd_ota.py                      # Example plugin with managed datarefs
+│   ├── PI_sshd_dev_ota_gui                 # Example XPWidget GUI plugin
 │   │
 │   ├── sshd_extlibs/                       # Shared modules
-│   │   ├── ss_serial_device.py             # Serial hardware driver
-│   │   └── ...                             
+│   │   ├── ss_serial_device.py
+│   │   └── ...
 │   │
 │   └── sshd_extensions/                    # Shared plugin architecture (namespaced)
 │       ├── xp_interface.py                 # Protocol describing xp.* API surface
-│       ├── datarefs.py                     # DataRefSpec, TypedAccessor, Registry, Manager
-│       └── ...                             
+│       ├── datarefs.py                     # DataRefSpec, TypedAccessor, Manager
+│       └── ...
 │
-├── simless/                                # Sim-less execution harnesses (no X‑Plane required)
+├── simless/                                # Sim-less execution harnesses
 │   ├── run_ota.py                          # Example runner: FakeXP + multiple plugins
 │   │
-│   └── libs/                               # Fake X‑Plane runtime (drop‑in xp module)
-│       ├── fake_xp.py                      # FakeXP: public API surface
-│       ├── fake_xp_runner.py               # Lifecycle, plugin loading, GUI, timing
+│   └── libs/
+│       ├── fake_xp.py                      # FakeXP: public xp.* API façade
+│       ├── fake_xp_runner.py               # Lifecycle, plugin loading, timing
 │       ├── fake_xp_widget.py               # XPWidget emulation (DearPyGui-backed)
 │       ├── fake_xp_graphics.py             # XPLMDisplay/XPLMGraphics simulation
-│       └── fake_xp_utilities.py            # Misc XPLM utility shims (menus, commands, etc.)
+│       ├── fake_xp_dataref.py              # DataRef engine (managed-spec consumer + inference)
+│       └── fake_xp_utilities.py            # Commands, menus, misc XPLM shims
 │
 ├── stubs/
-│   └── XPPython3/                           # XPPython3 .pyi stubs for IDE type checking
+│   └── XPPython3/                          # XPPython3 .pyi stubs for IDE type checking
 │
-├── tests/                                   # Unit tests for FakeXP + plugin lifecycle
+├── tests/                                  # Unit tests for FakeXP + plugin lifecycle
 │
-└── README.md
+└── pyproject.toml                          # Poetry package management  
 ```
+---
+
+## 🧩 IDE (PyCharm) Development Workflow
+
+Development workflow features:
+
+• **Strong datatyping and code inspection with xp_typing.pyi**  
+• **Debug plugins with simless runners**  
+• **Run with live X-plane datarefs through the dataref_bridge**
+
+See **[PYCHARM CONFIGURATION GUIDE](docs/PYCHARM_CONFIGURATION.md)** for full setup instructions, including how to enable XPPython3 stubs, configure Sources Roots, and run sim‑less scripts from the project root.
+
+See **[DEVELOPER NOTES](docs/DEVELOPER_NOTES.md)** for special considerations for running python in X-Plane.
 
 ---
 
-# 🧩 DataRef Model
+# 🧩 Managed DataRefs (XPPython3 extension)
 
-FakeXP supports three interoperable dataref creation paths.
+Managed DataRefs provide these features:
 
-## 1. Managed DataRefs (recommended)
+• **Automatic waiting for required DataRefs** during startup  
+• **All other datarefs use defaults used until X‑Plane provides real values**  
+• **Automatic retrieval of handle and info**  
+• **Generalized get/set access**
 
-Defined using DataRefSpec and accessed via TypedAccessor.
-
-Benefits:  
-• Strong typing using common get/set method 
-• Defaults for headless mode and easier testing  
-• Required/optional semantics with readiness checking 
-• Clean error handling  
-
-## 2. Registered DataRefs (explicit)
-
-Created by FakeXPRunner during plugin load or manually.
-
-Benefits:  
-• All the benefits above but only good for headless 
-
-## 3. Auto‑Created DataRefs (fallback)
-
-If a plugin accesses a missing dataref:
-
-• FakeXPRunner promotes the dummy handle  
-• Type inferred from accessor  
-• Default value assigned  
-• Stored globally  
-
-All plugins share a single global dataref table.
-
----
-
-## 🧩 IDE (PyCharm) Configuration
-
-See **[docs/PYCHARM_CONFIGURATION.md](docs/PYCHARM_CONFIGURATION.md)** for full setup instructions, including how to enable XPPython3 stubs, configure Sources Roots, and run sim‑less scripts from the project root.
+See **[DATAREF MODEL](docs/DATAREF_MODEL.md)** for more details.
 
 ---
 
@@ -132,13 +108,12 @@ xp._run_plugin_lifecycle(plugins, debug=True, enable_gui=True)
 
 This runner:
 
-• Boots FakeXP  
-• Replaces the real X‑Plane xp module  
-• Loads any number of plugins  
+• Boots FakeXP which emulates the X‑Plane xp module  
+• Loads any number of plugins that will share the same dataref namespace
 • Executes the full lifecycle (start/enable/flight_loop/disable/stop)   
 • Runs in GUI or headless mode  
 
-For details on GUI behavior, see GUI_EMULATION.md.
+For details on GUI behavior, see **[GUI EMULATION NOTES](docs/GUI_EMULATION.md)**.
 
 ---
 

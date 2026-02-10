@@ -207,7 +207,8 @@ class FakeXPWidget:
                 dpg.set_value(dpg_id, int(value))
 
     def getWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID) -> Any:
-        return self._widgets.get(wid, {}).get("properties", {}).get_value(prop)
+        props = self._widgets.get(wid, {}).get("properties", {})
+        return props.get(prop)
 
     # ----------------------------------------------------------------------
     # CALLBACKS + MESSAGE DISPATCH

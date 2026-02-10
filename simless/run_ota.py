@@ -19,7 +19,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 
 def run_simless_ota_gui() -> None:
-    xp = FakeXP(debug=True, enable_gui=True, run_time=-1)
+    xp = FakeXP(debug=True, enable_gui=True)
     XPPython3.xp = xp
 
     plugins = [

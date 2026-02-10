@@ -23,10 +23,15 @@ class DRefType(IntEnum):
 
 @dataclass(slots=True)
 class DataRefSpec:
+    """
+    Production-authentic description of a DataRef, plus plugin-side defaults.
+
+    Fields are intentionally aligned with what XPPython3/X-Plane expose via
+    XPLMDataRefInfo_t: type, writable, is_array (derived), size/count.
+    """
     name: str
     type: int
     writable: bool
-    owner: int
 
     required: bool = False
     default: Any = None
@@ -34,67 +39,122 @@ class DataRefSpec:
     handle: Optional[XPLMDataRef] = None
     is_dummy: bool = False
 
-    dtype: int = 0
     is_array: bool = False
     count: int = 1
 
     @classmethod
     def from_info(
         cls,
+        path: str,
         info: XPLMDataRefInfo_t,
         required: bool,
         default: Any,
         handle: Optional[XPLMDataRef] = None,
         is_dummy: bool = False,
     ) -> "DataRefSpec":
+        """
+        Build a spec from a real XPLMDataRefInfo_t.
+
+        XPPython3/X-Plane provide:
+          - info.type
+          - info.writable
+          - info.is_array (may be None)
+          - info.size (may be None)
+        """
+        # size may be None in some environments; fall back to default shape
+        size = getattr(info, "size", None)
+        if size is None:
+            if isinstance(default, (list, bytes, bytearray)):
+                size = len(default)
+            else:
+                size = 1
+
+        is_array = getattr(info, "is_array", None)
+        if is_array is None:
+            is_array = size > 1
+
         return cls(
-            name=info.name,
-            type=info.xp_type,
+            name=path,
+            type=info.type,
             writable=info.writable,
-            owner=info.owner,
             required=required,
             default=default,
             handle=handle,
             is_dummy=is_dummy,
-            dtype=info.xp_type,
-            is_array=info.size > 1,
-            count=info.size,
+            is_array=bool(is_array),
+            count=int(size),
         )
 
     @classmethod
     def dummy(cls, path: str, *, required: bool, default: Any) -> "DataRefSpec":
+        """
+        Dummy spec used before X-Plane provides the real DataRef.
+        Type/shape are inferred from defaults; later promoted via promote().
+        """
+        if isinstance(default, list):
+            is_array = True
+            count = len(default)
+        elif isinstance(default, (bytes, bytearray)):
+            is_array = True
+            count = len(default)
+        else:
+            is_array = False
+            count = 1
+
         return cls(
             name=path,
             type=int(DRefType.FLOAT),
             writable=False,
-            owner=0,
             required=required,
             default=default,
             handle=None,
             is_dummy=True,
-            dtype=int(DRefType.FLOAT),
-            is_array=isinstance(default, list),
-            count=len(default) if isinstance(default, list) else 1,
+            is_array=is_array,
+            count=count,
         )
 
-    def promote(self, handle, info) -> None:
+    def promote(self, handle: XPLMDataRef, info: XPLMDataRefInfo_t) -> None:
+        """
+        Promote a dummy spec to a real, bound DataRef using XPLMDataRefInfo_t.
+
+        This is called once, from DataRefManager.ready(), when X-Plane (or
+        FakeXP) finally provides the real DataRef.
+        """
         self.handle = handle
         self.is_dummy = False
 
-        self.type = info.xp_type
-        self.dtype = info.xp_type
-        self.is_array = info.size > 1
-        self.count = info.size
+        # Mirror X-Plane/XPPython3 field names
+        self.type = info.type
         self.writable = info.writable
 
-        # XP initializes DataRefs to zero
+        size = getattr(info, "size", None)
+        if size is None:
+            # Preserve existing count if X-Plane doesn't report size
+            size = self.count or 1
+
+        is_array = getattr(info, "is_array", None)
+        if is_array is None:
+            is_array = size > 1
+
+        self.count = int(size)
+        self.is_array = bool(is_array)
+
+        # XP initializes DataRefs to zero; align defaults with that behavior
         if self.is_array:
-            self.default = [0.0] * info.size
+            self.default = [0.0] * self.count
         else:
             self.default = 0.0
 
 
 class DataRefManager:
+    """
+    Unified DataRef manager for production and simless.
+
+    - In production (X-Plane), it binds to real DataRefs via xp.findDataRef()
+      and xp.getDataRefInfo(), then uses xp.get*/set* for access.
+    - In simless, FakeXP implements the same xp.* API and DataRefInfo fields,
+      so this class runs unchanged.
+    """
 
     def __init__(
         self,
@@ -174,12 +234,20 @@ class DataRefManager:
     def clear(self) -> None:
         self.specs.clear()
         self._start_counter = None
+        self._all_real = True
 
     # ------------------------------------------------------------------
     # Startup resolution
     # ------------------------------------------------------------------
 
     def ready(self, counter: int) -> bool:
+        """
+        Bind all declared DataRefs once, using xp.findDataRef + xp.getDataRefInfo.
+
+        Returns True only when:
+          - all required DataRefs have real handles, or
+          - timeout has elapsed and plugin has been disabled (for missing required).
+        """
         if self._all_real:
             return True
 
