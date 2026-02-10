@@ -84,6 +84,7 @@ This avoids:
 - mismatched xp objects  
 - FakeXP/real‑XP divergence  
 - double‑import masking  
+- logs disappearing
 
 Every subsystem uses the exact same xp object the plugin instance received.
 

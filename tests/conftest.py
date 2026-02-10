@@ -4,12 +4,19 @@ import pytest
 import sys
 import inspect
 import simless.libs.loader as loader
+import XPPython3
+
+
+@pytest.fixture(autouse=True)
+def reset_xp():
+    # Ensure each test starts with a clean FakeXP binding
+    XPPython3.xp = None
 
 
 @pytest.fixture(autouse=True)
 def bypass_plugin_loader(monkeypatch):
     """
-    Forces FakeXPPluginLoader to load inline plugins from sys.modules
+    Forces SimlessPluginLoader to load inline plugins from sys.modules
     instead of requiring real files in plugins/.
     """
 
@@ -20,7 +27,7 @@ def bypass_plugin_loader(monkeypatch):
         lambda self, name: True
     )
 
-    # 2. Override _load_single to load inline modules
+    # 2. Override _load_single to load inline modules from sys.modules
     def _load_single_inline(self, full_name: str):
         # full_name is "plugins.<name>"
         short_name = full_name.split(".", 1)[1]
@@ -44,8 +51,13 @@ def bypass_plugin_loader(monkeypatch):
         # Call XPluginStart() and normalize return tuple
         name, sig, desc = iface.XPluginStart()
 
-        # Construct LoadedPlugin using your CURRENT loader signature
+        # Assign plugin_id using the loader’s per-instance counter
+        plugin_id = self._next_id
+        self._next_id += 1
+
+        # Construct LoadedPlugin using the NEW signature
         return loader.LoadedPlugin(
+            plugin_id=plugin_id,
             name=name,
             sig=sig,
             desc=desc,

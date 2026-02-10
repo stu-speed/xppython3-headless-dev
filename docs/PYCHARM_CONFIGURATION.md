@@ -16,21 +16,19 @@ Do not open PyCharm inside `plugins/` or `simless/`.
 
 ---
 
-## 2. Configure the `plugins/` directory
-X‑Plane treats the plugin directory as the import root.  
+## 2. Configure plugins to run as under PythonPlugins
+XPPython treats the plugin directory as the import root.  
 PyCharm must mirror this behavior.
+
+### 2.1 Exclude the `plugins/` directory
+Right‑click stubs/ → Mark Directory As → Excluded
 
 ### 2.1 Mark `plugins/` as a Source
 Right‑click: plugins/ → Mark Directory As → Sources Root
 
-This enables absolute imports such as:
-    import PI_sshd_OTA
+This enables headless absolute imports in plugins such as:
     import sshd_extensions.datarefs
     import sshd_extlibs.ss_serial_device
-
-### 2.2 Exclude plugin build artifacts (optional)
-If you generate logs, cache files, or compiled artifacts under plugins/,
-mark those subdirectories as Excluded.
 
 ---
 
@@ -51,7 +49,7 @@ Settings → Project Structure → Add Content Root → stubs/
 ### 3.3 Mark `stubs/XPPython3` as a Source
 Right‑click stubs/XPPython3 → Mark Directory As → Sources Root
 
-![Structure](docs/structure.png)
+![Structure](structure.png)
 
 This enables:
 • xp.* autocomplete  

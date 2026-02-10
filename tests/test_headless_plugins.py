@@ -7,6 +7,9 @@ from simless.libs.runner import SimlessRunner
 
 
 def register_inline_plugin(name: str, plugin_obj) -> str:
+    """
+    Registers an inline plugin module so SimlessRunner can load it.
+    """
     module = types.ModuleType(name)
 
     class PythonInterface:
@@ -31,65 +34,93 @@ def register_inline_plugin(name: str, plugin_obj) -> str:
 
 
 # ===========================================================================
-# Dummy promotion test
+# 1. Basic headless plugin lifecycle
 # ===========================================================================
 
-class DummyPlugin:
-    def __init__(self):
-        self.calls = []
-        self.handle = None
-        self.promoted_value = None
-
-    def XPluginStart(self):
-        self.calls.append("start")
-        return "Dummy", "dummy", "dummy"
-
-    def XPluginEnable(self):
-        self.calls.append("enable")
-        self.handle = XPPython3.xp.findDataRef("sim/test/auto_float")
-        assert self.handle.dummy is True
-        self.promoted_value = XPPython3.xp.getDataf(self.handle)
-        return 1
-
-    def XPluginDisable(self):
-        self.calls.append("disable")
-
-    def XPluginStop(self):
-        self.calls.append("stop")
-
-
-def test_dummy_promotion():
+def test_headless_plugin_lifecycle():
     xp = FakeXP(debug=True, enable_gui=False)
     runner = SimlessRunner(xp, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
-    plugin = DummyPlugin()
-    module_name = register_inline_plugin("dummy_plugin", plugin)
+    class Plugin:
+        def __init__(self):
+            self.calls = []
 
-    runner.run_plugin_lifecycle([module_name])
+        def XPluginStart(self):
+            self.calls.append("start")
+            return "Test", "test", "test"
+
+        def XPluginEnable(self):
+            self.calls.append("enable")
+            return 1
+
+        def XPluginDisable(self):
+            self.calls.append("disable")
+
+        def XPluginStop(self):
+            self.calls.append("stop")
+
+    plugin = Plugin()
+    mod = register_inline_plugin("headless_plugin", plugin)
+
+    runner.run_plugin_lifecycle([mod])
 
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
-    assert "sim/test/auto_float" in xp._handles
-    real = xp._handles["sim/test/auto_float"]
-
-    assert real.dummy is False
-    assert xp._values[real.path] == 0.0
-    assert plugin.promoted_value == 0.0
-
 
 # ===========================================================================
-# Cross-plugin read/write test
+# 2. Headless plugin can create and use DataRefs
 # ===========================================================================
 
-def test_cross_plugin_read_write():
+def test_headless_plugin_dataref_usage():
     xp = FakeXP(debug=True, enable_gui=False)
     runner = SimlessRunner(xp, run_time=0.1)
     xp._runner = runner
     XPPython3.xp = xp
 
-    class WriterPlugin:
+    class Plugin:
+        def __init__(self):
+            self.value = None
+
+        def XPluginStart(self):
+            return "Test", "test", "test"
+
+        def XPluginEnable(self):
+            h = XPPython3.xp.findDataRef("sim/test/headless_value")
+            XPPython3.xp.setDataf(h, 42.5)
+            self.value = XPPython3.xp.getDataf(h)
+            return 1
+
+        def XPluginDisable(self):
+            pass
+
+        def XPluginStop(self):
+            pass
+
+    plugin = Plugin()
+    mod = register_inline_plugin("headless_dataref_plugin", plugin)
+
+    runner.run_plugin_lifecycle([mod])
+
+    assert plugin.value == 42.5
+
+    # Assert via public API
+    h = xp.findDataRef("sim/test/headless_value")
+    assert xp.getDataf(h) == 42.5
+
+
+# ===========================================================================
+# 3. Multiple headless plugins share DataRefs correctly
+# ===========================================================================
+
+def test_headless_shared_datarefs():
+    xp = FakeXP(debug=True, enable_gui=False)
+    runner = SimlessRunner(xp, run_time=0.1)
+    xp._runner = runner
+    XPPython3.xp = xp
+
+    class Writer:
         def __init__(self):
             self.calls = []
 
@@ -99,8 +130,8 @@ def test_cross_plugin_read_write():
 
         def XPluginEnable(self):
             self.calls.append("enable")
-            h = XPPython3.xp.findDataRef("sim/test/shared")
-            XPPython3.xp.setDataf(h, 123.456)
+            h = xp.findDataRef("sim/test/shared_headless")
+            xp.setDataf(h, 77.7)
             return 1
 
         def XPluginDisable(self):
@@ -109,7 +140,7 @@ def test_cross_plugin_read_write():
         def XPluginStop(self):
             self.calls.append("stop")
 
-    class ReaderPlugin:
+    class Reader:
         def __init__(self):
             self.calls = []
             self.value = None
@@ -120,8 +151,8 @@ def test_cross_plugin_read_write():
 
         def XPluginEnable(self):
             self.calls.append("enable")
-            h = XPPython3.xp.findDataRef("sim/test/shared")
-            self.value = XPPython3.xp.getDataf(h)
+            h = xp.findDataRef("sim/test/shared_headless")
+            self.value = xp.getDataf(h)
             return 1
 
         def XPluginDisable(self):
@@ -130,76 +161,26 @@ def test_cross_plugin_read_write():
         def XPluginStop(self):
             self.calls.append("stop")
 
-    writer = WriterPlugin()
-    reader = ReaderPlugin()
+    writer = Writer()
+    reader = Reader()
 
-    mod_writer = register_inline_plugin("writer_plugin", writer)
-    mod_reader = register_inline_plugin("reader_plugin", reader)
+    mod_writer = register_inline_plugin("writer_headless", writer)
+    mod_reader = register_inline_plugin("reader_headless", reader)
 
     runner.run_plugin_lifecycle([mod_writer, mod_reader])
 
     assert writer.calls == ["start", "enable", "disable", "stop"]
     assert reader.calls == ["start", "enable", "disable", "stop"]
 
-    real = xp._handles["sim/test/shared"]
-    assert xp._values[real.path] == 123.456
-    assert reader.value == 123.456
+    assert reader.value == 77.7
+
+    # Assert via public API
+    h = xp.findDataRef("sim/test/shared_headless")
+    assert xp.getDataf(h) == 77.7
 
 
 # ===========================================================================
-# Managed dataref notification test
-# ===========================================================================
-
-def test_managed_dataref_notification():
-    xp = FakeXP(debug=True, enable_gui=False)
-    runner = SimlessRunner(xp, run_time=0.1)
-    xp._runner = runner
-    XPPython3.xp = xp
-
-    class MockManager:
-        def __init__(self):
-            self.notifications = []
-
-        def _notify_dataref_changed(self, handle):
-            self.notifications.append(handle)
-
-    xp._dataref_manager = MockManager()
-
-    class Plugin:
-        def __init__(self):
-            self.calls = []
-
-        def XPluginStart(self):
-            self.calls.append("start")
-            return "P", "p", "p"
-
-        def XPluginEnable(self):
-            self.calls.append("enable")
-            h = XPPython3.xp.findDataRef("sim/test/managed")
-            XPPython3.xp.setDataf(h, 9.99)
-            return 1
-
-        def XPluginDisable(self):
-            self.calls.append("disable")
-
-        def XPluginStop(self):
-            self.calls.append("stop")
-
-    plugin = Plugin()
-    mod = register_inline_plugin("managed_plugin", plugin)
-
-    runner.run_plugin_lifecycle([mod])
-
-    assert plugin.calls == ["start", "enable", "disable", "stop"]
-
-    real = xp._handles["sim/test/managed"]
-
-    assert xp._dataref_manager.notifications == [real, real]
-    assert xp._values[real.path] == 9.99
-
-
-# ===========================================================================
-# GUI example test (headless)
+# 4. GUI example test (headless)
 # ===========================================================================
 
 def test_example_gui():

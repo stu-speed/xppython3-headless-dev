@@ -1,37 +1,36 @@
 # simless/libs/fake_xp_dataref.py
 # ===========================================================================
-# DataRef subsystem — FakeDataRefInfo + xp.* DataRef API (cooperative mixin)
+# FakeXP DataRef subsystem — auto‑generation honoring plugin defaults
 # ===========================================================================
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict
 
-from plugins.sshd_extensions.datarefs import DRefType, DataRefManager  # type: ignore[import]
+from plugins.sshd_extensions.datarefs import DRefType
 
+
+# ===========================================================================
+# FakeDataRef — handle + metadata + value
+# ===========================================================================
 
 @dataclass(slots=True)
-class FakeDataRefInfo:
+class FakeDataRef:
     path: str
     xp_type: int
     writable: bool
     is_array: bool
     size: int
-    dummy: bool
     value: Any
+    auto_generated: bool
 
-    def __repr__(self) -> str:
-        kind = "array" if self.is_array else "scalar"
-        dummy = " dummy" if self.dummy else ""
-        return f"<FakeDataRefInfo {self.path} ({kind}, type={self.xp_type}, size={self.size}{dummy})>"
 
+# ===========================================================================
+# FakeXPDataRef — auto‑generation using DataRefManager defaults + heuristics
+# ===========================================================================
 
 class FakeXPDataRef:
-    """
-    Cooperative‑mixin version of your full DataRef subsystem.
-    No __init__ — FakeXP calls _init_dataref().
-    """
 
     public_api_names = [
         "fake_register_dataref",
@@ -52,18 +51,14 @@ class FakeXPDataRef:
         "registerDataRef",
     ]
 
-    # ------------------------------------------------------------------ #
-    # Cooperative initializer                                            #
-    # ------------------------------------------------------------------ #
     def _init_dataref(self) -> None:
-        self._handles: Dict[str, FakeDataRefInfo] = {}
-        self._dummy_refs: Dict[str, FakeDataRefInfo] = {}
+        self._handles: Dict[str, FakeDataRef] = {}
         self._values: Dict[str, Any] = {}
-        self._datarefs: Dict[str, Dict[str, Any]] = {}
 
-    # ------------------------------------------------------------------ #
-    # Simless auto-registration                                          #
-    # ------------------------------------------------------------------ #
+    # ----------------------------------------------------------------------
+    # Explicit registration
+    # ----------------------------------------------------------------------
+
     def fake_register_dataref(
         self,
         path: str,
@@ -72,11 +67,12 @@ class FakeXPDataRef:
         is_array: bool = False,
         size: int = 1,
         writable: bool = True,
-    ) -> FakeDataRefInfo:
+    ) -> FakeDataRef:
+
         dtype = DRefType(xp_type)
 
         if dtype == DRefType.FLOAT_ARRAY:
-            value: Any = [0.0] * size
+            value = [0.0] * size
         elif dtype == DRefType.INT_ARRAY:
             value = [0] * size
         elif dtype == DRefType.BYTE_ARRAY:
@@ -88,281 +84,193 @@ class FakeXPDataRef:
         elif dtype == DRefType.DOUBLE:
             value = 0.0
         else:
-            raise TypeError(f"Unsupported dtype {dtype} for {path}")
+            raise TypeError(f"Unsupported dtype {dtype}")
 
-        ref = FakeDataRefInfo(
+        ref = FakeDataRef(
             path=path,
             xp_type=int(dtype),
             writable=writable,
             is_array=is_array,
             size=size,
-            dummy=False,
             value=value,
+            auto_generated=False,
         )
 
         self._handles[path] = ref
         self._values[path] = value
-        self._dbg(f"fake_register_dataref('{path}', type={int(dtype)}, array={is_array}, size={size})")
         return ref
 
-    # ------------------------------------------------------------------ #
-    # DataRef API                                                        #
-    # ------------------------------------------------------------------ #
-    def findDataRef(self, name: str) -> FakeDataRefInfo | None:
-        if "[" in name or "]" in name:
-            self._dbg(f"findDataRef rejected invalid array element syntax: '{name}'")
+    # ----------------------------------------------------------------------
+    # Auto‑generation honoring DataRefManager defaults
+    # ----------------------------------------------------------------------
+
+    def _infer_from_manager(self, name: str):
+        mgr = getattr(self, "_dataref_manager", None)
+        if mgr is None:
             return None
 
+        spec = mgr.specs.get(name)
+        if spec is None:
+            return None
+
+        default = spec.default
+
+        if isinstance(default, list):
+            return {
+                "dtype": DRefType.FLOAT_ARRAY,
+                "is_array": True,
+                "size": len(default),
+                "value": [0.0] * len(default),
+            }
+
+        return {
+            "dtype": DRefType.FLOAT,
+            "is_array": False,
+            "size": 1,
+            "value": 0.0,
+        }
+
+    def _infer_unmanaged(self, name: str):
+        is_array = name.endswith("s") or "array" in name.lower()
+        if is_array:
+            return {
+                "dtype": DRefType.FLOAT_ARRAY,
+                "is_array": True,
+                "size": 8,
+                "value": [0.0] * 8,
+            }
+        return {
+            "dtype": DRefType.FLOAT,
+            "is_array": False,
+            "size": 1,
+            "value": 0.0,
+        }
+
+    def findDataRef(self, name: str) -> FakeDataRef | None:
         if name in self._handles:
             return self._handles[name]
 
-        if name in self._datarefs:
-            ref_dict = self._datarefs[name]
-            return ref_dict.get("handle")  # type: ignore[return-value]
+        inferred = self._infer_from_manager(name)
+        if inferred is None:
+            inferred = self._infer_unmanaged(name)
 
-        is_array = name.endswith("s") or "array" in name.lower()
-
-        if is_array:
-            dtype = DRefType.FLOAT_ARRAY
-            value: Any = [0.0] * 8
-            size = 8
-            self._dbg(f"Promoted '{name}' to dummy float array dataref")
-        else:
-            dtype = DRefType.FLOAT
-            value = 0.0
-            size = 1
-            self._dbg(f"Promoted '{name}' to dummy scalar dataref")
-
-        ref = FakeDataRefInfo(
+        ref = FakeDataRef(
             path=name,
-            xp_type=int(dtype),
+            xp_type=int(inferred["dtype"]),
             writable=True,
-            is_array=is_array,
-            size=size,
-            dummy=True,
-            value=value,
+            is_array=inferred["is_array"],
+            size=inferred["size"],
+            value=inferred["value"],
+            auto_generated=True,
         )
-
         self._handles[name] = ref
-        self._values[name] = value
+        self._values[name] = ref.value
         return ref
 
-    def getDataRefInfo(self, handle: FakeDataRefInfo) -> FakeDataRefInfo:
+    def getDataRefInfo(self, handle: FakeDataRef) -> FakeDataRef:
         return handle
 
-    # ------------------------------------------------------------------ #
-    # Internal helpers                                                   #
-    # ------------------------------------------------------------------ #
-    def _promote_if_dummy(self, ref: FakeDataRefInfo) -> FakeDataRefInfo:
-        if not ref.dummy:
+    # ----------------------------------------------------------------------
+    # Value resolution helper
+    # ----------------------------------------------------------------------
+
+    def _resolve_value_ref(self, handle: FakeDataRef | str) -> FakeDataRef:
+        if isinstance(handle, FakeDataRef):
+            return handle
+
+        if handle not in self._handles:
+            inferred = self._infer_from_manager(handle)
+            if inferred is None:
+                inferred = self._infer_unmanaged(handle)
+
+            ref = FakeDataRef(
+                path=handle,
+                xp_type=int(inferred["dtype"]),
+                writable=True,
+                is_array=inferred["is_array"],
+                size=inferred["size"],
+                value=inferred["value"],
+                auto_generated=True,
+            )
+            self._handles[handle] = ref
+            self._values[handle] = ref.value
             return ref
 
-        ref.dummy = False
+        return self._handles[handle]
 
-        if ref.path not in self._values:
-            self._values[ref.path] = ref.value
+    # ----------------------------------------------------------------------
+    # Scalar + array accessors
+    # ----------------------------------------------------------------------
 
-        if self._dataref_manager:
-            self._dataref_manager._notify_dataref_changed(ref)
+    def getDatai(self, handle): return int(self._resolve_value_ref(handle).value)
+    def setDatai(self, handle, v): self._resolve_value_ref(handle).value = int(v)
 
-        return ref
+    def getDataf(self, handle): return float(self._resolve_value_ref(handle).value)
+    def setDataf(self, handle, v): self._resolve_value_ref(handle).value = float(v)
 
-    def _resolve_value_ref(self, handle: FakeDataRefInfo | str) -> FakeDataRefInfo:
-        if isinstance(handle, str):
-            ref = self._handles.get(handle)
-            if ref is None:
-                ref = FakeDataRefInfo(
-                    path=handle,
-                    xp_type=1,
-                    writable=True,
-                    is_array=False,
-                    size=1,
-                    dummy=True,
-                    value=0.0,
-                )
-                self._handles[handle] = ref
-                self._values[handle] = 0.0
-        else:
-            ref = handle
+    def getDatad(self, handle): return self.getDataf(handle)
+    def setDatad(self, handle, v): self.setDataf(handle, v)
 
-        return self._promote_if_dummy(ref)
-
-    # ------------------------------------------------------------------ #
-    # Datai                                                              #
-    # ------------------------------------------------------------------ #
-    def getDatai(self, handle: FakeDataRefInfo | str) -> int:
+    def getDatavf(self, handle, out, offset, count):
         ref = self._resolve_value_ref(handle)
-        return int(self._values.get(ref.path, ref.value))
-
-    def setDatai(self, handle: FakeDataRefInfo | str, value: int) -> None:
-        ref = self._resolve_value_ref(handle)
-        v = int(value)
-        self._values[ref.path] = v
-        ref.value = v
-        if self._dataref_manager:
-            self._dataref_manager._notify_dataref_changed(ref)
-
-    # ------------------------------------------------------------------ #
-    # Dataf                                                              #
-    # ------------------------------------------------------------------ #
-    def getDataf(self, handle: FakeDataRefInfo | str) -> float:
-        ref = self._resolve_value_ref(handle)
-        return float(self._values.get(ref.path, ref.value))
-
-    def setDataf(self, handle: FakeDataRefInfo | str, value: float) -> None:
-        ref = self._resolve_value_ref(handle)
-        v = float(value)
-        self._values[ref.path] = v
-        ref.value = v
-        if self._dataref_manager:
-            self._dataref_manager._notify_dataref_changed(ref)
-
-    # ------------------------------------------------------------------ #
-    # Datad                                                              #
-    # ------------------------------------------------------------------ #
-    def getDatad(self, handle: FakeDataRefInfo | str) -> float:
-        return self.getDataf(handle)
-
-    def setDatad(self, handle: FakeDataRefInfo | str, value: float) -> None:
-        self.setDataf(handle, value)
-
-    # ------------------------------------------------------------------ #
-    # Datavf                                                             #
-    # ------------------------------------------------------------------ #
-    def getDatavf(
-        self,
-        handle: FakeDataRefInfo | str,
-        out: List[float] | None,
-        offset: int,
-        count: int,
-    ) -> int | None:
-        ref = self._resolve_value_ref(handle)
-        arr = self._values.get(ref.path, ref.value)
+        arr = ref.value
         if out is None:
             return len(arr)
         for i in range(count):
             out[i] = float(arr[offset + i])
-        return None
 
-    def setDatavf(
-        self,
-        handle: FakeDataRefInfo | str,
-        values: Sequence[float],
-        offset: int,
-        count: int,
-    ) -> None:
+    def setDatavf(self, handle, values, offset, count):
         ref = self._resolve_value_ref(handle)
-        arr = self._values.setdefault(ref.path, ref.value or [])
-        end = offset + count
-        if end > len(arr):
-            arr.extend([0.0] * (end - len(arr)))
+        arr = ref.value
         for i in range(count):
             arr[offset + i] = float(values[i])
-        ref.value = arr
-        if self._dataref_manager:
-            self._dataref_manager._notify_dataref_changed(ref)
 
-    # ------------------------------------------------------------------ #
-    # Datvi                                                             #
-    # ------------------------------------------------------------------ #
-    def getDatvi(
-        self,
-        handle: FakeDataRefInfo | str,
-        out: List[int] | None,
-        offset: int,
-        count: int,
-    ) -> int | None:
+    def getDatvi(self, handle, out, offset, count):
         ref = self._resolve_value_ref(handle)
-        arr = self._values.get(ref.path, ref.value)
+        arr = ref.value
         if out is None:
             return len(arr)
         for i in range(count):
             out[i] = int(arr[offset + i])
-        return None
 
-    def setDatvi(
-        self,
-        handle: FakeDataRefInfo | str,
-        values: Sequence[int],
-        offset: int,
-        count: int,
-    ) -> None:
+    def setDatvi(self, handle, values, offset, count):
         ref = self._resolve_value_ref(handle)
-        arr = self._values.setdefault(ref.path, ref.value or [])
-        end = offset + count
-        if end > len(arr):
-            arr.extend([0] * (end - len(arr)))
+        arr = ref.value
         for i in range(count):
             arr[offset + i] = int(values[i])
-        ref.value = arr
-        if self._dataref_manager:
-            self._dataref_manager._notify_dataref_changed(ref)
 
-    # ------------------------------------------------------------------ #
-    # Datab                                                             #
-    # ------------------------------------------------------------------ #
-    def getDatab(
-        self,
-        handle: FakeDataRefInfo | str,
-        out: bytearray | None,
-        offset: int,
-        count: int,
-    ) -> int | None:
+    def getDatab(self, handle, out, offset, count):
         ref = self._resolve_value_ref(handle)
-        arr: bytearray = self._values.get(ref.path, ref.value)
+        arr = ref.value
         if out is None:
             return len(arr)
         for i in range(count):
             out[i] = arr[offset + i]
-        return None
 
-    def setDatab(
-        self,
-        handle: FakeDataRefInfo | str,
-        values: Sequence[int],
-        offset: int,
-        count: int,
-    ) -> None:
+    def setDatab(self, handle, values, offset, count):
         ref = self._resolve_value_ref(handle)
-        arr: bytearray = self._values.setdefault(ref.path, ref.value or bytearray())
-        end = offset + count
-        if end > len(arr):
-            arr.extend([0] * (end - len(arr)))
+        arr = ref.value
         for i in range(count):
             arr[offset + i] = int(values[i]) & 0xFF
-        ref.value = arr
-        if self._dataref_manager:
-            self._dataref_manager._notify_dataref_changed(ref)
 
-    # ------------------------------------------------------------------ #
-    # registerDataRef                                                   #
-    # ------------------------------------------------------------------ #
-    def registerDataRef(
-        self,
-        path: str,
-        xpType: int,
-        isArray: bool,
-        writable: bool,
-        defaultValue: Any,
-    ) -> FakeDataRefInfo:
+    # ----------------------------------------------------------------------
+    # registerDataRef (XPPython3 compatibility)
+    # ----------------------------------------------------------------------
+
+    def registerDataRef(self, path, xpType, isArray, writable, defaultValue):
         if path in self._handles:
             return self._handles[path]
 
-        ref = FakeDataRefInfo(
+        ref = FakeDataRef(
             path=path,
             xp_type=xpType,
             writable=writable,
             is_array=isArray,
-            size=0,
-            dummy=False,
+            size=len(defaultValue) if isinstance(defaultValue, list) else 1,
             value=defaultValue,
+            auto_generated=False,
         )
 
         self._handles[path] = ref
         self._values[path] = defaultValue
-        self._dbg(f"registerDataRef('{path}')")
-
-        if self._dataref_manager:
-            self._dataref_manager._notify_dataref_changed(ref)
-
         return ref

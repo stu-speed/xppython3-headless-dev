@@ -7,6 +7,7 @@
 #   • Load PI_*.py modules from ./plugins/
 #   • Instantiate PythonInterface
 #   • Call XPluginStart() to retrieve (Name, Sig, Desc)
+#   • Maintain plugin registry for FakeXP (ID, signature, path)
 #   • Hard‑fail (raise RuntimeError) on ANY error
 # ===========================================================================
 
@@ -17,7 +18,7 @@ import inspect
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Protocol, TypedDict, TYPE_CHECKING, List
+from typing import Protocol, TYPE_CHECKING, List
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
@@ -28,20 +29,12 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 class PythonInterfaceProto(Protocol):
-    """
-    Structural type for plugin PythonInterface classes.
-    FakeXP never imports plugin internals, so we use a Protocol.
-    """
-
     def XPluginStart(self) -> tuple[str, str, str]:
         ...
-
     def XPluginEnable(self) -> int:
         ...
-
     def XPluginDisable(self) -> None:
         ...
-
     def XPluginStop(self) -> None:
         ...
 
@@ -53,33 +46,31 @@ class PythonInterfaceProto(Protocol):
 class LoadedPlugin:
     """
     Strongly‑typed wrapper around a PythonInterface‑based plugin.
+    Plugin IDs are assigned by SimlessPluginLoader (per‑loader, not global).
     """
-    _next_id: int = 1
 
     def __init__(
         self,
+        plugin_id: int,
         name: str,
         sig: str,
         desc: str,
         module: ModuleType,
         instance: PythonInterfaceProto,
     ) -> None:
-        self.name: str = name
-        self.signature: str = sig
-        self.description: str = desc
-
-        self.module: ModuleType = module
-        self.instance: PythonInterfaceProto = instance
-
-        self.plugin_id: int = LoadedPlugin._next_id
-        LoadedPlugin._next_id += 1
+        self.plugin_id = plugin_id
+        self.name = name
+        self.signature = sig
+        self.description = desc
+        self.module = module
+        self.instance = instance
 
     def __repr__(self) -> str:
         return f"<LoadedPlugin id={self.plugin_id} name={self.name}>"
 
 
 # ---------------------------------------------------------------------------
-# FakeXPPluginLoader — internal loader used only by FakeXPRunner
+# SimlessPluginLoader — internal loader used only by FakeXPRunner
 # ---------------------------------------------------------------------------
 
 class SimlessPluginLoader:
@@ -88,24 +79,23 @@ class SimlessPluginLoader:
         self.root: Path = Path(__file__).resolve().parents[2] / "plugins"
         self.xp: FakeXP = xp
 
+        # Registry of LoadedPlugin objects
+        self._loaded_plugins: List[LoadedPlugin] = []
+
+        # Per‑loader plugin ID counter (Pythonic, test‑safe)
+        self._next_id: int = 1
+
     # ----------------------------------------------------------------------
     # Helpers
     # ----------------------------------------------------------------------
 
     def _ensure_sys_path(self) -> None:
-        """
-        Ensure plugins/ is on sys.path so imports like:
-            import PI_sshd_OTA
-            import sshd_extensions.datarefs
-        resolve exactly like X‑Plane.
-        """
         root_str = str(self.root)
         if root_str not in sys.path:
             sys.path.insert(0, root_str)
             self.xp.log(f"[Loader] Added to sys.path: {root_str}")
 
     def _validate(self, name: str) -> None:
-        """Ensure plugins/<name>.py exists, else raise."""
         if not (self.root / f"{name}.py").exists():
             raise RuntimeError(f"[Loader] Plugin '{name}' not found in plugins/")
 
@@ -114,7 +104,6 @@ class SimlessPluginLoader:
     # ----------------------------------------------------------------------
 
     def load_plugins(self, module_names: List[str]) -> List[LoadedPlugin]:
-        """Load and instantiate plugins. Hard‑fail on ANY error."""
         self._ensure_sys_path()
 
         plugins: List[LoadedPlugin] = []
@@ -125,16 +114,37 @@ class SimlessPluginLoader:
             plugin = self._load_single(full_name)
             plugins.append(plugin)
 
+        self._loaded_plugins = plugins
         return plugins
+
+    # ----------------------------------------------------------------------
+    # Plugin lookup APIs (X‑Plane authentic)
+    # ----------------------------------------------------------------------
+
+    def get_plugin(self, plugin_id: int) -> LoadedPlugin | None:
+        for plugin in self._loaded_plugins:
+            if plugin.plugin_id == plugin_id:
+                return plugin
+        return None
+
+    def find_plugin_by_signature(self, signature: str) -> int:
+        for plugin in self._loaded_plugins:
+            if plugin.signature == signature:
+                return plugin.plugin_id
+        return -1
+
+    def find_plugin_by_path(self, path: str) -> int:
+        for plugin in self._loaded_plugins:
+            module_path = getattr(plugin.module, "__file__", None)
+            if module_path and module_path == path:
+                return plugin.plugin_id
+        return -1
 
     # ----------------------------------------------------------------------
     # Single plugin load
     # ----------------------------------------------------------------------
 
     def _load_single(self, full_name: str) -> LoadedPlugin:
-        """
-        Import module, instantiate PythonInterface, call XPluginStart.
-        """
         self.xp.log(f"[Loader] Loading module {full_name}")
 
         # Import module
@@ -162,7 +172,12 @@ class SimlessPluginLoader:
 
         self.xp.log(f"[Loader] Loaded plugin {name} ({sig}) — {desc}")
 
+        # Assign plugin ID (per‑loader, not global)
+        plugin_id = self._next_id
+        self._next_id += 1
+
         return LoadedPlugin(
+            plugin_id=plugin_id,
             name=name,
             sig=sig,
             desc=desc,

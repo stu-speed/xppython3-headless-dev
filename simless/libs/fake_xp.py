@@ -48,7 +48,10 @@ class FakeXP(
         # Core state
         self._dataref_manager: DataRefManager | None = None
         self._plugins: list[Any] = []
+
+        # Track disabled plugins (XPLMDisablePlugin)
         self._disabled_plugins: set[int] = set()
+
         self._sim_time: float = 0.0
         self._keyboard_focus: int | None = None
 
@@ -77,7 +80,7 @@ class FakeXP(
 
         bind_xp_constants(xp)
 
-        # Bind subsystem public APIs
+        # Bind subsystem public APIs into xp.* ONLY
         for subsystem in (
             FakeXPDataRef,
             FakeXPWidget,
@@ -88,14 +91,12 @@ class FakeXP(
             for name in getattr(subsystem, "public_api_names", []):
                 fn = getattr(self, name)
                 setattr(xp, name, fn)
-                setattr(self, name, fn)
 
         # destroyWidget wrapper (XPPython3-style)
         def destroyWidget(self_: FakeXP, wid: XPWidgetID, destroy_children: int = 1) -> None:
             self_.killWidget(wid)
 
         xp.destroyWidget = destroyWidget.__get__(self)
-        self.destroyWidget = destroyWidget.__get__(self)
 
     # ----------------------------------------------------------------------
     # Debug helper
@@ -132,14 +133,69 @@ class FakeXP(
             self._runner.end_run_loop()
 
     # ----------------------------------------------------------------------
-    # Base xp methods
+    # Base xp methods (XPPython3-compatible)
     # ----------------------------------------------------------------------
     def getMyID(self) -> int:
+        """
+        XPLMGetMyID()
+        In this simless environment we treat the current plugin as ID 1.
+        """
         return 1
 
     def disablePlugin(self, plugin_id: int) -> None:
+        """
+        XPLMDisablePlugin(plugin_id)
+        Marks the plugin as disabled.
+        """
         self._disabled_plugins.add(plugin_id)
         self._dbg(f"disablePlugin({plugin_id})")
+
+    def isPluginEnabled(self, plugin_id: int) -> int:
+        """
+        XPLMIsPluginEnabled(plugin_id)
+        Returns 1 if enabled, 0 if disabled.
+        """
+        return 0 if plugin_id in self._disabled_plugins else 1
+
+    def findPluginBySignature(self, signature: str) -> int:
+        """
+        XPLMFindPluginBySignature(signature)
+        Returns plugin ID or -1.
+        """
+        if self._runner is None or self._runner.loader is None:
+            return -1
+        return self._runner.loader.find_plugin_by_signature(signature)
+
+    def findPluginByPath(self, path: str) -> int:
+        """
+        XPLMFindPluginByPath(path)
+        Returns plugin ID or -1.
+        """
+        if self._runner is None or self._runner.loader is None:
+            return -1
+        return self._runner.loader.find_plugin_by_path(path)
+
+    def getPluginInfo(self, plugin_id: int) -> tuple[str, str, str, str]:
+        """
+        XPLMGetPluginInfo(plugin_id)
+        Returns (name, signature, description, path).
+        Raises RuntimeError if plugin_id is invalid.
+        """
+        if self._runner is None or self._runner.loader is None:
+            raise RuntimeError("FakeXP: getPluginInfo called before runner initialized")
+
+        plugin = self._runner.loader.get_plugin(plugin_id)
+        if plugin is None:
+            raise RuntimeError(f"FakeXP: No plugin with ID {plugin_id}")
+
+        module_path = getattr(plugin.module, "__file__", "<inline>")
+
+        return (
+            plugin.name,
+            plugin.signature,
+            plugin.description,
+            module_path,
+        )
 
     def log(self, msg: str) -> None:
         print(f"[FakeXP] {msg}")
@@ -173,7 +229,50 @@ class FakeXP(
             self._dbg("Keyboard focus cleared")
 
     # ----------------------------------------------------------------------
-    # Plugin info
+    # Flightloop forwarding to SimlessRunner
     # ----------------------------------------------------------------------
-    def getPluginInfo(self, plugin_id: int) -> tuple[str, str, str, str]:
-        return ("Fake Plugin", "1.0", "FakeXP", "Simless")
+    def createFlightLoop(self, struct_or_callback, refcon: Any | None = None) -> int:
+        """
+        XPPython3-style createFlightLoop wrapper.
+
+        Accepts either:
+          • a bare callback: xp.createFlightLoop(callback)
+          • a struct dict:   xp.createFlightLoop({"callback": cb, "phase": 0, ...})
+        """
+        if self._runner is None:
+            raise RuntimeError("FakeXP._runner must exist before createFlightLoop")
+
+        if callable(struct_or_callback):
+            params = {
+                "callback": struct_or_callback,
+                "refcon": refcon,
+                "phase": 0,
+                "structSize": 1,
+            }
+        else:
+            params = dict(struct_or_callback)
+            params.setdefault("refcon", refcon)
+            params.setdefault("phase", 0)
+            params.setdefault("structSize", 1)
+
+        return self._runner.create_flightloop(2, params)
+
+    def scheduleFlightLoop(self, fid: int, interval: float, relativeToNow: int = 1) -> None:
+        """
+        XPPython3-style scheduleFlightLoop wrapper.
+
+        The runner owns all real scheduling; FakeXP just forwards.
+        """
+        if self._runner is None:
+            raise RuntimeError("FakeXP._runner must exist before scheduleFlightLoop")
+        self._runner.schedule_flightloop(fid, interval)
+
+    def destroyFlightLoop(self, fid: int) -> None:
+        """
+        XPPython3-style destroyFlightLoop wrapper.
+
+        The runner owns the registry of active flightloops.
+        """
+        if self._runner is None:
+            raise RuntimeError("FakeXP._runner must exist before destroyFlightLoop")
+        self._runner.destroy_flightloop(fid)

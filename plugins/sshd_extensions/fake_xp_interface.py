@@ -1,5 +1,6 @@
+# plugins/sshd_extensions/fake_xp_interface.py
 # ===========================================================================
-# FakeXPProtocol — simless‑only extensions to XPInterface
+# FakeXPInterface — simless‑only extensions to XPInterface
 #
 # FakeXP implements XPInterface (the production‑safe API) plus a small set of
 # simless‑only helpers used by DataRefManager, the simless runner, and test
@@ -19,6 +20,7 @@ from __future__ import annotations
 from typing import Protocol, Any
 
 from sshd_extensions.datarefs import DataRefManager
+from plugins.sshd_extensions.xp_interface import XPInterface
 
 
 class FakeXPInterface(Protocol):
@@ -75,3 +77,19 @@ class FakeXPInterface(Protocol):
         Stop the simless run loop. No production equivalent.
         """
         ...
+
+
+# ===========================================================================
+# FakeXP detection helper
+# ===========================================================================
+
+def is_fake_xp(xp: XPInterface) -> bool:
+    """
+    Detect whether the provided xp object is a FakeXP instance.
+
+    FakeXP implements simless‑only helpers such as fake_register_dataref().
+    Real XPPython3 xp.* does not.
+
+    This is the *only* supported and mypy‑safe way to detect FakeXP.
+    """
+    return hasattr(xp, "fake_register_dataref")

@@ -2,7 +2,7 @@
 # runner.py — deterministic simless execution harness
 #
 # Responsibilities:
-#   • Load plugins via FakeXPPluginLoader
+#   • Load plugins via SimlessPluginLoader
 #   • Inject xp.* namespace into plugin instances (XPPython3‑authentic)
 #   • Execute lifecycle: Start → Enable → frame loop → Disable → Stop
 #   • Maintain deterministic 60 Hz pacing
@@ -33,6 +33,11 @@ class SimlessRunner:
 
         # Allow FakeXP to call back into us
         setattr(self.xp, "_runner", self)
+
+        # ------------------------------------------------------------------
+        # Plugin loader (authoritative registry)
+        # ------------------------------------------------------------------
+        self.loader: SimlessPluginLoader = SimlessPluginLoader(self.xp)
 
         # ------------------------------------------------------------------
         # Flightloop state (runner-owned)
@@ -72,7 +77,6 @@ class SimlessRunner:
         fl["interval"] = float(interval)
 
         if interval < 0:
-            # schedule immediately
             fl["next_call"] = self._sim_time
         else:
             fl["next_call"] = self._sim_time + float(interval)
@@ -80,28 +84,26 @@ class SimlessRunner:
     def destroy_flightloop(self, loop_id: int) -> None:
         self._flightloops.pop(loop_id, None)
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Stop loop (called by plugins via xp._quit() / xp.end_run_loop())
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def end_run_loop(self) -> None:
         """Stop the main loop immediately."""
         self._running = False
         self.xp.log("[Runner] end_run_loop() called — stopping main loop")
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # GUI lifecycle (graphics owns DearPyGui)
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def init_gui(self) -> None:
-        # FakeXPGraphics creates context/viewport if needed.
         self.xp.log("[Runner] GUI enabled (FakeXPGraphics manages DearPyGui)")
 
     def shutdown_gui(self) -> None:
-        # FakeXPGraphics will be torn down when process exits.
         self.xp.log("[Runner] GUI shutdown requested (no-op for runner)")
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Unified per-frame execution
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def run_one_frame(self) -> bool:
         xp = self.xp
 
@@ -111,7 +113,7 @@ class SimlessRunner:
         xp._sim_time = self._sim_time
         sim_time = self._sim_time
 
-        # 2. Flightloops (modern API)
+        # 2. Flightloops
         for fl in list(self._flightloops.values()):
             if sim_time >= fl["next_call"]:
                 since = sim_time - fl["last_call"]
@@ -128,11 +130,9 @@ class SimlessRunner:
                 fl["last_call"] = sim_time
                 fl["counter"] += 1
 
-                # If callback returns None or negative, keep previous interval
                 if next_interval is None or next_interval < 0:
                     next_interval = fl["interval"]
 
-                # X-Plane semantics: 0 means "do not reschedule"
                 if next_interval == 0:
                     fl["next_call"] = float("inf")
                 else:
@@ -141,20 +141,22 @@ class SimlessRunner:
 
         # 3. Graphics frame
         try:
-            if self.xp.enable_gui:
-                self.xp._draw_frame()
+            if xp.enable_gui:
+                xp._draw_frame()
         except Exception as exc:
-            self.xp.log(f"[Runner] graphics/frame error: {exc!r}")
+            xp.log(f"[Runner] graphics/frame error: {exc!r}")
             return False
 
         return True
 
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Lifecycle execution
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def run_plugin_lifecycle(self, plugin_names: list[str]) -> None:
-        loader = SimlessPluginLoader(self.xp)
-        plugins = loader.load_plugins(plugin_names)
+        """
+        Load plugins via loader, then run full lifecycle.
+        """
+        plugins = self.loader.load_plugins(plugin_names)
         self.run_lifecycle(plugins)
 
     def run_lifecycle(self, plugins: List[LoadedPlugin]) -> None:
@@ -164,7 +166,7 @@ class SimlessRunner:
             xp.log("[Runner] No plugins to run")
             return
 
-        if self.xp.debug:
+        if xp.debug:
             self.init_gui()
 
         # Enable
@@ -181,7 +183,6 @@ class SimlessRunner:
             except Exception as exc:
                 raise RuntimeError(f"[Runner] XPluginEnable failed for {p.name}: {exc!r}")
 
-            # X-Plane semantics: 1 = enabled, 0 = disabled
             if not result:
                 xp.log(f"[Runner] Plugin disabled by XPluginEnable: {p.name}")
                 disabled.add(p.plugin_id)
@@ -232,5 +233,5 @@ class SimlessRunner:
                 raise RuntimeError(f"[Runner] XPluginStop failed for {p.name}: {exc!r}")
         xp.log("[Runner] === XPluginStop END ===")
 
-        if self.xp.enable_gui:
+        if xp.enable_gui:
             self.shutdown_gui()
