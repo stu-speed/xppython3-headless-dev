@@ -5,13 +5,14 @@
 # ROLE
 #   Provide a deterministic, minimal, X‑Plane‑authentic façade for simless
 #   execution. FakeXP must mirror the public API surface of the real
-#   XPPython3 XPInterface without adding behavior, inference, or hidden
-#   state. It enables plugin code to run identically in headless mode.
+#   XPPython3 xp.* API (as described by SimlessXPInterface) without adding
+#   behavior, inference, or hidden state. It enables plugin code to run
+#   identically in headless mode.
 #
 # CORE INVARIANTS
 #   - Will use the Public API as much as possible
-#   - FakeXP must match real XPInterface method names, signatures, and
-#     return types exactly.
+#   - FakeXP must match real xp.* method names, signatures, and return
+#     types as defined by SimlessXPInterface.
 #   - FakeXP must never mutate XPLMDataRefInfo_t or any SDK‑shaped object.
 #   - FakeXP must not introduce fields, flags, or attributes not present in
 #     the real X‑Plane API.
@@ -42,16 +43,19 @@
 #     the responsibility of DataRefSpec/DataRefManager.
 # ===========================================================================
 
-
-
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import XPPython3
-from XPPython3.xp_typing import XPWidgetID
+from XPPython3.xp_typing import (
+    XPLMFlightLoopID,
+    XPLMFlightLoopPhaseType,
+    XPWidgetID,
+)
 
-from plugins.sshd_extensions.datarefs import DataRefManager
+from sshd_extensions.datarefs import DataRefManager
+from simless.libs.runner import SimlessRunner
 
 from .constants import bind_xp_constants
 from .fake_xp_dataref import FakeXPDataRef
@@ -59,7 +63,10 @@ from .fake_xp_widget import FakeXPWidget
 from .fake_xp_graphics import FakeXPGraphics
 from .fake_xp_flightloop import FakeXPFlightLoop
 from .fake_xp_utilities import FakeXPUtilities
-from simless.libs.runner import SimlessRunner
+
+
+# For alignment with SimlessXPInterface
+FlightLoopCallback = Callable[[float, float, int, Any], float]
 
 
 class FakeXP(
@@ -71,8 +78,13 @@ class FakeXP(
 ):
     """
     Unified xp.* façade for simless plugin execution.
+
     Subsystems are cooperative mixins with _init_*() initializers.
     FakeXP automatically creates and owns a SimlessRunner.
+
+    This class is intended to satisfy:
+      • SimlessXPInterface
+      • FakeXPInterface
     """
 
     def __init__(
@@ -82,7 +94,6 @@ class FakeXP(
         enable_gui: bool = True,
         run_time: float = -1.0,
     ) -> None:
-
         self.debug = debug
         self.enable_gui = enable_gui
 
@@ -94,7 +105,7 @@ class FakeXP(
         self._disabled_plugins: set[int] = set()
 
         self._sim_time: float = 0.0
-        self._keyboard_focus: int | None = None
+        self._keyboard_focus: XPWidgetID | None = None
 
         # Runner will be created after subsystems initialize
         self._runner: SimlessRunner | None = None
@@ -135,6 +146,7 @@ class FakeXP(
 
         # destroyWidget wrapper (XPPython3-style)
         def destroyWidget(self_: FakeXP, wid: XPWidgetID, destroy_children: int = 1) -> None:
+            # XPPython3's xp.destroyWidget delegates to killWidget; we mirror that.
             self_.killWidget(wid)
 
         xp.destroyWidget = destroyWidget.__get__(self)
@@ -147,7 +159,7 @@ class FakeXP(
             print(f"[FakeXP] {msg}")
 
     # ----------------------------------------------------------------------
-    # Lifecycle helpers
+    # Lifecycle helpers (FakeXPInterface)
     # ----------------------------------------------------------------------
     def _run_plugin_lifecycle(
         self,
@@ -174,7 +186,7 @@ class FakeXP(
             self._runner.end_run_loop()
 
     # ----------------------------------------------------------------------
-    # Base xp methods (XPPython3-compatible)
+    # Base xp methods (XPPython3-compatible, SimlessXPInterface)
     # ----------------------------------------------------------------------
     def getMyID(self) -> int:
         """
@@ -242,63 +254,95 @@ class FakeXP(
         print(f"[FakeXP] {msg}")
 
     # ----------------------------------------------------------------------
-    # DataRefManager binding
+    # DataRefManager binding (FakeXPInterface)
     # ----------------------------------------------------------------------
     def bind_dataref_manager(self, mgr: DataRefManager) -> None:
         self._dataref_manager = mgr
         self._dbg("[DataRef] DataRefManager bound to FakeXP")
 
     # ----------------------------------------------------------------------
-    # Time
+    # Time (SimlessXPInterface)
     # ----------------------------------------------------------------------
     def getElapsedTime(self) -> float:
         return self._sim_time
 
     # ----------------------------------------------------------------------
-    # Keyboard focus
+    # Keyboard focus (SimlessXPInterface-compatible)
     # ----------------------------------------------------------------------
-    def getKeyboardFocus(self) -> int | None:
+    def getKeyboardFocus(self) -> XPWidgetID | None:
         return self._keyboard_focus
 
-    def setKeyboardFocus(self, widget_id: XPWidgetID) -> None:
-        self._keyboard_focus = widget_id
-        self._dbg(f"Keyboard focus → {widget_id}")
+    def setKeyboardFocus(self, wid: XPWidgetID | None) -> None:
+        """
+        SimlessXPInterface: setKeyboardFocus(self, wid: XPWidgetID | None) -> None
+        """
+        self._keyboard_focus = wid
+        self._dbg(f"Keyboard focus → {wid}")
 
-    def loseKeyboardFocus(self, widget_id: XPWidgetID) -> None:
-        if self._keyboard_focus == widget_id:
+    def loseKeyboardFocus(self, wid: XPWidgetID) -> None:
+        """
+        SimlessXPInterface: loseKeyboardFocus(self, wid: XPWidgetID) -> None
+        """
+        if self._keyboard_focus == wid:
             self._keyboard_focus = None
             self._dbg("Keyboard focus cleared")
 
     # ----------------------------------------------------------------------
-    # Flightloop forwarding to SimlessRunner
+    # Flightloop forwarding to SimlessRunner (SimlessXPInterface)
     # ----------------------------------------------------------------------
-    def createFlightLoop(self, struct_or_callback, refcon: Any | None = None) -> int:
+    def createFlightLoop(
+        self,
+        callback: FlightLoopCallback
+        | tuple[int, FlightLoopCallback, Any]
+        | list[Any],
+        phase: XPLMFlightLoopPhaseType = XPLMFlightLoopPhaseType(0),
+        refCon: Any | None = None,
+    ) -> XPLMFlightLoopID:
         """
         XPPython3-style createFlightLoop wrapper.
 
         Accepts either:
           • a bare callback: xp.createFlightLoop(callback)
-          • a struct dict:   xp.createFlightLoop({"callback": cb, "phase": 0, ...})
+          • a tuple:        xp.createFlightLoop((phase, callback, refCon))
+          • a list:         xp.createFlightLoop([phase, callback, refCon])
         """
         if self._runner is None:
             raise RuntimeError("FakeXP._runner must exist before createFlightLoop")
 
-        if callable(struct_or_callback):
+        # Normalize into the internal struct dict expected by SimlessRunner.
+        if callable(callback):
             params = {
-                "callback": struct_or_callback,
-                "refcon": refcon,
-                "phase": 0,
+                "callback": callback,
+                "refcon": refCon,
+                "phase": int(phase),
+                "structSize": 1,
+            }
+        elif isinstance(callback, (tuple, list)) and len(callback) >= 2:
+            cb_phase = int(callback[0])
+            cb_func = callback[1]
+            cb_refcon = callback[2] if len(callback) > 2 else refCon
+            params = {
+                "callback": cb_func,
+                "refcon": cb_refcon,
+                "phase": cb_phase,
                 "structSize": 1,
             }
         else:
-            params = dict(struct_or_callback)
-            params.setdefault("refcon", refcon)
-            params.setdefault("phase", 0)
+            # Fallback: treat as a dict-like struct if someone passes that in.
+            params = dict(callback)  # type: ignore[arg-type]
+            params.setdefault("refcon", refCon)
+            params.setdefault("phase", int(phase))
             params.setdefault("structSize", 1)
 
-        return self._runner.create_flightloop(2, params)
+        fid = self._runner.create_flightloop(2, params)
+        return XPLMFlightLoopID(fid)
 
-    def scheduleFlightLoop(self, fid: int, interval: float, relativeToNow: int = 1) -> None:
+    def scheduleFlightLoop(
+        self,
+        loop_id: XPLMFlightLoopID,
+        interval: float,
+        relativeToNow: int = 1,
+    ) -> None:
         """
         XPPython3-style scheduleFlightLoop wrapper.
 
@@ -306,9 +350,10 @@ class FakeXP(
         """
         if self._runner is None:
             raise RuntimeError("FakeXP._runner must exist before scheduleFlightLoop")
-        self._runner.schedule_flightloop(fid, interval)
+        # relativeToNow is ignored in simless mode; runner controls timing.
+        self._runner.schedule_flightloop(int(loop_id), interval)
 
-    def destroyFlightLoop(self, fid: int) -> None:
+    def destroyFlightLoop(self, loop_id: XPLMFlightLoopID) -> None:
         """
         XPPython3-style destroyFlightLoop wrapper.
 
@@ -316,4 +361,4 @@ class FakeXP(
         """
         if self._runner is None:
             raise RuntimeError("FakeXP._runner must exist before destroyFlightLoop")
-        self._runner.destroy_flightloop(fid)
+        self._runner.destroy_flightloop(int(loop_id))

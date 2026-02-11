@@ -1,15 +1,14 @@
 # 📘 xppython3-headless-dev
-### IDE workflow • Sim‑less execution and debugging • Live X-Plane dataref injection
+### IDE and AI friendly workflow • Sim‑less execution and debugging • Live X-Plane dataref injection
 
 A structured development environment for building and debugging XPPython3 plugins natively in
-an IDE (Pycharm) though runtime emulation.  Plugins can run outside of X-plane.
+an IDE (Pycharm) though runtime emulation of the XPPython3 API.
 
 This project provides:
 
 • A real X‑Plane‑compatible plugin folder structure  
-• A unified FakeXP API surface that mirrors xp.*  
-• A standalone FakeXPRunner that simulates the full plugin lifecycle  
-• Deterministic 60 Hz execution in headless or GUI mode  
+• Sim-less execution/debugging of plugins with a runner simulates the full plugin lifecycle  
+• Live X-plane dataref streaming through a bridge plugin  
 • A complete XPWidget + XPLMGraphics emulation layer (DearPyGui‑backed)  
 • Auto‑creating, registered, and managed DataRefs  
 • A multi‑plugin environment for integration testing  
@@ -31,27 +30,37 @@ xppython3-headless-dev/
 │   │   └── ...
 │   │
 │   └── sshd_extensions/                    # Shared plugin architecture (namespaced)
-│       ├── xp_interface.py                 # Protocol describing xp.* API surface
-│       ├── datarefs.py                     # DataRefSpec, TypedAccessor, Manager
-│       └── ...
+│       ├── datarefs.py                     # Managed datarefs
+│       └── ...                             
 │
 ├── simless/                                # Sim-less execution harnesses
+│   ├── __init__.pyi                        # Declares xp: FakeXPInterface for IDE/mypy visibility
+│   │
 │   ├── run_ota.py                          # Example runner: FakeXP + multiple plugins
 │   │
-│   └── libs/
+│   └── libs/                               # Simless-only runtime + typing contracts
 │       ├── fake_xp.py                      # FakeXP: public xp.* API façade
 │       ├── fake_xp_runner.py               # Lifecycle, plugin loading, timing
 │       ├── fake_xp_widget.py               # XPWidget emulation (DearPyGui-backed)
 │       ├── fake_xp_graphics.py             # XPLMDisplay/XPLMGraphics simulation
 │       ├── fake_xp_dataref.py              # DataRef engine (managed-spec consumer + inference)
-│       └── fake_xp_utilities.py            # Commands, menus, misc XPLM shims
+│       ├── fake_xp_utilities.py            # Commands, menus, misc XPLM shims
+│       └── fake_xp_interface.py            # Runtime shim (TYPE_CHECKING guard)
 │
-├── stubs/
-│   └── XPPython3/                          # XPPython3 .pyi stubs for IDE type checking
+├── stubs/                                  # IDE-visible stubs for real XPPython3 + simless Protocols
+│   ├── simless/
+│   │   └── libs/
+│   │       ├── simless_xp_interface.pyi    # Subset of xp API implemented for simless
+│   │       └── fake_xp_interface.pyi       # FakeXPInterface + FakeRefInfo (simless-only typing)
+│   │
+│   └── XPPython3/
+│       ├── xp.pyi                          # Full XPPython3 API surface
+│       ├── xp_types.pyi                    # XPLM typedefs, enums, structs
+│       └── ...                             # Other XPPython3-provided stubs
 │
 ├── tests/                                  # Unit tests for FakeXP + plugin lifecycle
 │
-└── pyproject.toml                          # Poetry package management  
+└── pyproject.toml                          # Poetry package management
 ```
 ---
 
@@ -59,13 +68,16 @@ xppython3-headless-dev/
 
 Development workflow features:
 
-• **Strong datatyping and code inspection with xp_typing.pyi**  
-• **Debug plugins with simless runners**  
-• **Run with live X-plane datarefs through the dataref_bridge**
+• **Strong datatyping and code inspection with xp.pyi and xp_typing.pyi**  
+• **Structured to generate and validate AI generated code**  
+• **Debug plugins in the IDE debugger using a simless runner**  
+• **Run with live X-plane datarefs through a dataref bridge**
 
 See **[PYCHARM CONFIGURATION GUIDE](docs/PYCHARM_CONFIGURATION.md)** for full setup instructions, including how to enable XPPython3 stubs, configure Sources Roots, and run sim‑less scripts from the project root.
 
 See **[DEVELOPER NOTES](docs/DEVELOPER_NOTES.md)** for special considerations for running python in X-Plane.
+
+See **[AI CODING GUIDE](docs/AI_CODING_GUIDE.md)** for generating AI code within this project structure.
 
 ---
 

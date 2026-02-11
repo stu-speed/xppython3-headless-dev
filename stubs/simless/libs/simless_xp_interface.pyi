@@ -1,21 +1,36 @@
+# stubs/simless/libs/simless_xp_interface.pyi
 # ===========================================================================
-# XPInterface — typed, minimal API contract for xp.*
+# SimlessXPInterface — typed, minimal API contract for xp.* in simless mode
 #
-# This Protocol defines the small, stable subset of the XPPython3 xp.* API
-# that shared libraries depend on. It is *not* required by production
-# plugins at runtime — XPPython3 provides the real xp module — but it allows
-# IDE to type‑check and validate all code that interacts with xp.*.
+# PURPOSE
+#   Defines the production‑safe xp.* API surface that FakeXP must implement.
+#   This Protocol exists solely for strong typing, IDE support, and
+#   architectural clarity during simless development.
 #
-# In short:
-#   XPInterface is a design‑time contract. It is not required by production
-#   plugins, but it ensures that all library code using xp.* is typed,
-#   validated, and portable between real X‑Plane and the simless FakeXP
-#   environment.
+# CONTRACT REQUIREMENT
+#   SimlessXPInterface MUST match the real XPPython3 xp.* contract EXACTLY
+#   as defined in the production xp.pyi file.
+#
+#   • No simless‑only helpers may appear here.
+#   • No additional parameters, overloads, or behaviors may be added.
+#   • No methods may be removed or renamed.
+#   • Signatures, return types, and semantics must remain identical.
+#
+# RELATIONSHIP TO FakeXPInterface
+#   FakeXPInterface extends this Protocol with simless‑only helpers such as
+#   fake_register_dataref() and bind_dataref_manager(). Those extensions MUST
+#   NOT appear here, and production plugins MUST NEVER see them.
+#
+# PRODUCTION SAFETY
+#   Production plugins NEVER import this file. They import the real
+#   XPPython3 xp.* module. This file is strictly for simless development,
+#   FakeXP implementation, DataRefManager, and test harnesses.
 # ===========================================================================
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol, Sequence, Union, runtime_checkable
+from typing import Any, Callable, Protocol, Sequence, runtime_checkable
+from dataclasses import dataclass
 
 from XPPython3.xp_typing import (
     XPLMDataRef,
@@ -32,15 +47,11 @@ from XPPython3.xp_typing import (
 )
 
 
-# ======================================================================
-# Shared DataRef handle / info types
-# ======================================================================
-
-class FakeRefInfoProto(Protocol):
-    """
-    Minimal shape of FakeXP's FakeDataRefInfo, so code can type against
-    a common interface without importing FakeXP internals.
-    """
+# ===========================================================================
+# Simless-only DataRef metadata (used when FakeXP auto-generates DataRefs)
+# ===========================================================================
+@dataclass(slots=True)
+class FakeRefInfo:
     path: str
     xp_type: int
     writable: bool
@@ -50,23 +61,24 @@ class FakeRefInfoProto(Protocol):
     value: Any
 
 
-DataRefHandle = Union[XPLMDataRef, FakeRefInfoProto, Any]
-DataRefInfo = Union[XPLMDataRefInfo_t, FakeRefInfoProto, Any]
+# ===========================================================================
+# DataRef handle / info types
+# ===========================================================================
+DataRefHandle = XPLMDataRef | FakeRefInfo
+DataRefInfo = XPLMDataRefInfo_t | FakeRefInfo
 
 
-# ======================================================================
-# Flight loop callback type
-# ======================================================================
-
+# ===========================================================================
+# Flight loop callback type (XP11 legacy signature)
+# ===========================================================================
 FlightLoopCallback = Callable[[float, float, int, Any], float]
 
 
-# ======================================================================
-# XPInterface Protocol
-# ======================================================================
-
+# ===========================================================================
+# SimlessXPInterface Protocol
+# ===========================================================================
 @runtime_checkable
-class XPInterface(Protocol):
+class SimlessXPInterface(Protocol):
     # ------------------------------------------------------------------
     # Logging / lifecycle
     # ------------------------------------------------------------------
@@ -80,7 +92,7 @@ class XPInterface(Protocol):
     def getElapsedTime(self) -> float: ...
 
     # ------------------------------------------------------------------
-    # DataRef API (XPLMDataAccess + FakeXP)
+    # DataRef API (real XPPython3 contract)
     # ------------------------------------------------------------------
     def findDataRef(self, name: str) -> DataRefHandle | None: ...
     def getDataRefInfo(self, handle: DataRefHandle) -> DataRefInfo | None: ...
@@ -95,8 +107,7 @@ class XPInterface(Protocol):
     def getDatad(self, handle: DataRefHandle) -> float: ...
     def setDatad(self, handle: DataRefHandle, value: float) -> None: ...
 
-    # Array get/set — XPPython3-compatible buffer API
-    # When out is None and count == 0, return length (int).
+    # Array get/set
     def getDatavf(
         self,
         handle: DataRefHandle,
@@ -146,20 +157,16 @@ class XPInterface(Protocol):
     ) -> None: ...
 
     # ------------------------------------------------------------------
-    # Flight loops (XPLMProcessing / XPPython3 Python API)
+    # Flight loops (XP11 legacy signature)
     # ------------------------------------------------------------------
     def createFlightLoop(
         self,
-        callback: FlightLoopCallback | tuple[int, FlightLoopCallback, Any] | list[Any],
+        callback: FlightLoopCallback
+        | tuple[int, FlightLoopCallback, Any]
+        | list[Any],
         phase: XPLMFlightLoopPhaseType = XPLMFlightLoopPhaseType(0),
         refCon: Any | None = None,
     ) -> XPLMFlightLoopID: ...
-    """
-    XPPython3 supports:
-        createFlightLoop(callback, phase=0, refCon=None)
-        createFlightLoop((phase, callback, refCon))
-    FakeXP mirrors this behavior.
-    """
 
     def scheduleFlightLoop(
         self,
@@ -171,7 +178,7 @@ class XPInterface(Protocol):
     def destroyFlightLoop(self, loop_id: XPLMFlightLoopID) -> None: ...
 
     # ------------------------------------------------------------------
-    # Widgets (XPStandardWidgets / FakeXPWidgets)
+    # Widgets
     # ------------------------------------------------------------------
     def createWidget(
         self,
@@ -187,7 +194,6 @@ class XPInterface(Protocol):
     ) -> XPWidgetID: ...
 
     def killWidget(self, wid: XPWidgetID) -> None: ...
-
     def destroyWidget(self, wid: XPWidgetID, destroy_children: int = 1) -> None: ...
 
     def setWidgetGeometry(
@@ -200,7 +206,6 @@ class XPInterface(Protocol):
     ) -> None: ...
 
     def getWidgetGeometry(self, wid: XPWidgetID) -> tuple[int, int, int, int]: ...
-
     def getWidgetExposedGeometry(self, wid: XPWidgetID) -> tuple[int, int, int, int]: ...
 
     def showWidget(self, wid: XPWidgetID) -> None: ...
@@ -255,7 +260,7 @@ class XPInterface(Protocol):
     ) -> None: ...
 
     # ------------------------------------------------------------------
-    # Graphics (XPLMGraphics / XPLMDisplay / FakeXPGraphics)
+    # Graphics
     # ------------------------------------------------------------------
     def registerDrawCallback(
         self,
@@ -312,7 +317,7 @@ class XPInterface(Protocol):
     def getMouseLocation(self) -> tuple[int, int]: ...
 
     # ------------------------------------------------------------------
-    # Utilities (XPLMUtilities subset)
+    # Utilities
     # ------------------------------------------------------------------
     def getSystemPath(self) -> str: ...
     def getPrefsPath(self) -> str: ...

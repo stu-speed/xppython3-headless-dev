@@ -3,14 +3,43 @@
 # FakeXPFlightLoop — XP12-style flightloop struct factory for SimlessRunner
 #
 # Responsibilities:
-#   • Create XP12-style flightloop "handles" and store their struct metadata
-#   • Provide XP-facing API: create/destroy/schedule/unschedule/query
-#   • Hold NO timing or scheduling state (runner owns all scheduling)
+#   • Create XP12-style flightloop “handles” (integer IDs)
+#   • Store XP12-style struct metadata (callback, refcon, phase, etc.)
+#   • Provide XP-facing API: create / destroy / schedule / unschedule / query
+#   • Hold NO timing or scheduling state (SimlessRunner owns all scheduling)
 #   • Expose raw structs so SimlessRunner can build its own scheduler entries
+#
+# IMPORTANT NOTE ABOUT SIGNATURES
+#   XPPython3 (production) still uses the **legacy XP11-style callback
+#   signature**:
+#
+#       float callback(float elapsedSinceLastCall,
+#                      float elapsedTimeSinceLastFlightLoop,
+#                      int   counter,
+#                      void* refcon)
+#
+#   Simless, however, uses the **XP12-style struct-based API**, where
+#   createFlightLoop() receives either:
+#       • a struct dict containing callback/phase/refcon, or
+#       • a bare callback function (convenience form)
+#
+#   FakeXPFlightLoop stores XP12-style structs so SimlessRunner can schedule
+#   callbacks consistently, while still accepting the legacy callback form
+#   for compatibility with XPPython3 plugins.
+#
+# Architectural invariants:
+#   • This subsystem never infers timing or mutates runner state
+#   • All scheduling calls are XP-facing no-ops
+#   • getNextFlightLoopCallbackTime() returns runner-populated values only
+#   • Structs are shallow-copied and never mutated after creation
 # ===========================================================================
 
 from __future__ import annotations
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
+
+
+# XP12-style struct dictionary
+FlightLoopStruct = Dict[str, Any]
 
 
 class FakeXPFlightLoop:
@@ -32,35 +61,54 @@ class FakeXPFlightLoop:
         "_get_flightloop_struct",
     ]
 
+    # ------------------------------------------------------------------
+    # Initialization
+    # ------------------------------------------------------------------
     def _init_flightloop(self) -> None:
-        # ID → struct (XP12-style dict: callback, refcon, phase, structSize, etc.)
-        self._flightloop_structs: Dict[int, Dict[str, Any]] = {}
+        """
+        Initialize internal flightloop storage.
+
+        FakeXPFlightLoop owns:
+          • Struct metadata (callback, refcon, phase, structSize, etc.)
+          • A read-only timing mirror (populated by SimlessRunner)
+        """
+        self._flightloop_structs: Dict[int, FlightLoopStruct] = {}
         self._next_flightloop_id: int = 1
 
-        # Optional: runner-populated timing view (read-only from xp side)
-        # The runner can mirror its internal timing here if you want
-        # getNextFlightLoopCallbackTime() to be meaningful.
+        # Runner-populated timing mirror: fid → next_call_time
         self._flightloop_times: Dict[int, float] = {}
 
     # ------------------------------------------------------------------
-    # Internal helper for runner
+    # Runner-facing helper
     # ------------------------------------------------------------------
-    def _get_flightloop_struct(self, fid: int) -> Optional[Dict[str, Any]]:
+    def _get_flightloop_struct(self, fid: int) -> Optional[FlightLoopStruct]:
         """
-        For SimlessRunner: fetch the XP12-style struct for a given flightloop ID.
-        This is the ONLY place the runner needs to touch xp's flightloop state.
+        Fetch the XP12-style struct for a given flightloop ID.
+
+        This is the ONLY entry point SimlessRunner uses to obtain callback,
+        refcon, phase, and other metadata needed to build scheduler entries.
         """
         return self._flightloop_structs.get(fid)
 
     # ------------------------------------------------------------------
     # CREATE / DESTROY
     # ------------------------------------------------------------------
-    def createFlightLoop(self, struct, refcon: Any = None) -> int:
+    def createFlightLoop(
+        self,
+        struct: FlightLoopStruct | Callable[..., float],
+        refcon: Any = None,
+    ) -> int:
         """
-        XPPython3-compatible createFlightLoop:
-        - Accepts either a struct dict or a bare callback function.
+        XPPython3-compatible createFlightLoop.
+
+        Accepts either:
+          • A struct dict (XP12-style)
+          • A bare callback function (legacy XP11-style convenience form)
+
+        Returns:
+          • Integer flightloop ID
         """
-        # Convenience form: xp.createFlightLoop(callback)
+        # Legacy XP11-style: xp.createFlightLoop(callback)
         if callable(struct):
             struct = {
                 "callback": struct,
@@ -71,42 +119,45 @@ class FakeXPFlightLoop:
         fid = self._next_flightloop_id
         self._next_flightloop_id += 1
 
-        # Store a shallow copy of the struct
+        # Store a shallow copy of the struct to avoid accidental mutation
         self._flightloop_structs[fid] = dict(struct)
 
         return fid
 
     def destroyFlightLoop(self, fid: int) -> None:
+        """
+        Remove struct metadata and any runner-populated timing mirror.
+        """
         self._flightloop_structs.pop(fid, None)
         self._flightloop_times.pop(fid, None)
 
     # ------------------------------------------------------------------
     # SCHEDULING (XP-facing; runner owns real scheduling)
     # ------------------------------------------------------------------
-    def scheduleFlightLoop(self, fid: int, interval: float, relativeToNow: int = 1) -> None:
+    def scheduleFlightLoop(
+        self,
+        fid: int,
+        interval: float,
+        relativeToNow: int = 1,
+    ) -> None:
         """
-        XP-facing API. This does NOT schedule anything itself.
+        XP-facing API. This subsystem performs NO scheduling.
 
-        The expectation is:
+        Expected behavior:
           • SimlessRunner intercepts this call (via xp.scheduleFlightLoop)
-          • It then uses _get_flightloop_struct(fid) to obtain callback/refcon/etc.
-          • It manages all timing and rescheduling internally.
+          • Runner uses _get_flightloop_struct(fid) to obtain metadata
+          • Runner manages all timing, rescheduling, and execution
 
-        From FakeXPFlightLoop's perspective, this is a no-op.
+        This method intentionally performs no work.
         """
-        # Intentionally no scheduling logic here.
-        # You can optionally log/debug if desired:
-        # self._dbg(f"scheduleFlightLoop(fid={fid}, interval={interval}, relativeToNow={relativeToNow})")
         pass
 
     def unscheduleFlightLoop(self, fid: int) -> None:
         """
-        XP-facing API. Real unscheduling is done by the runner.
+        XP-facing API. Real unscheduling is performed by SimlessRunner.
 
-        This is a no-op here; the runner should handle unscheduling when it
-        sees this call.
+        This method intentionally performs no work.
         """
-        # self._dbg(f"unscheduleFlightLoop(fid={fid})")
         pass
 
     # ------------------------------------------------------------------
@@ -114,9 +165,13 @@ class FakeXPFlightLoop:
     # ------------------------------------------------------------------
     def getNextFlightLoopCallbackTime(self, fid: int) -> float:
         """
-        XP-facing query. Returns -1.0 if the runner has not populated timing.
+        XP-facing query.
 
-        If you want this to be meaningful, SimlessRunner can mirror its
-        internal "next_call" time into self._flightloop_times[fid].
+        Returns:
+          • Runner-populated next_call time
+          • -1.0 if the runner has not populated timing for this ID
+
+        SimlessRunner may mirror its internal scheduler state into
+        self._flightloop_times[fid] to make this meaningful.
         """
         return self._flightloop_times.get(fid, -1.0)

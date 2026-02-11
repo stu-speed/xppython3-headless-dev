@@ -1,5 +1,6 @@
+# plugins/sshd_extensions/datarefs.py
 # ===========================================================================
-# DataRefs — unified production/simless DataRef layer
+# DataRefs — unified production/simless DataRef layer (PRODUCTION ONLY)
 #
 # ROLE
 #   Provide a deterministic, typed, validation‑driven interface for all
@@ -7,22 +8,24 @@
 #   source of truth for DataRef shape, readiness, writability, and type
 #   correctness. It must remain independent of X‑Plane transport concerns.
 #
+# ENVIRONMENT RULE
+#   This file is PRODUCTION‑ONLY.
+#   Simless must never import this module. FakeXPDataRef provides the
+#   simless‑only DataRef engine.
+#
 # CORE INVARIANTS
-#   - Will use the Public API as much as possible
 #   - DataRefSpec is the canonical representation of a DataRef.
 #   - DataRefManager owns all validation, readiness tracking, and value
 #     retrieval semantics.
 #   - No other subsystem may infer or validate DataRef metadata.
-#   - No dummy DataRefs are created unless explicitly requested by the
-#     caller (headless fallback only).
+#   - No dummy DataRefs are created unless explicitly requested.
 #   - No mutation of X‑Plane SDK objects; normalization happens here.
 #
 # METADATA RULES
 #   - DataRefSpec.from_info() receives:
 #         path, info, required, default, handle, is_dummy, array_size
-#   - array_size must be validated exclusively by
-#         DataRefSpec._validate_array_size()
-#   - No “is_array” or “size” fields exist; array_size=0 denotes scalar.
+#   - array_size must be validated exclusively by _validate_array_size().
+#   - array_size=0 denotes scalar; >0 denotes array.
 #   - dtype, writable, and array_size must be internally consistent.
 #
 # VALIDATION RULES
@@ -30,24 +33,20 @@
 #   - DataRefManager must reject invalid specs immediately.
 #   - Required DataRefs must enforce readiness timeouts.
 #   - Optional DataRefs must never block readiness.
-#   - Value getters must enforce dtype and array_size correctness.
 #
 # VALUE ACCESS RULES
-#   - DataRefManager.get_value(path) returns raw X‑Plane values without
-#     coercion or transformation.
-#   - For arrays, returned values must match array_size exactly.
-#   - For scalars, returned values must be Python primitives.
-#   - No caching beyond last_sent snapshots used by the bridge.
+#   - get_value() returns raw X‑Plane values without coercion.
+#   - Arrays must match array_size exactly.
+#   - Scalars must be Python primitives.
 #
 # READINESS RULES
 #   - A DataRef is ready when:
-#         - its handle is valid,
-#         - its metadata is validated,
-#         - its value can be retrieved without error.
-#   - DataRefManager.ready(counter) returns True only when all required
-#     DataRefs are ready or have timed out.
+#         • handle is valid
+#         • metadata is validated
+#         • value retrieval succeeds
+#   - ready(counter) returns True only when all required DataRefs are ready
+#     or have timed out.
 # ===========================================================================
-
 
 from __future__ import annotations
 
@@ -56,9 +55,11 @@ from enum import IntEnum
 from typing import Any, Dict, Optional, Iterable
 
 from XPPython3.xp_typing import XPLMDataRef, XPLMDataRefInfo_t
-from sshd_extensions.xp_interface import XPInterface
 
 
+# ===========================================================================
+# DRefType — production enum (mirrors X‑Plane SDK)
+# ===========================================================================
 class DRefType(IntEnum):
     INT         = 1
     FLOAT       = 2
@@ -69,17 +70,16 @@ class DRefType(IntEnum):
 
 
 # ===========================================================================
-# DataRefSpec
+# DataRefSpec — canonical metadata representation
 # ===========================================================================
-
 @dataclass(slots=True)
 class DataRefSpec:
     """
     Unified DataRef specification.
 
     Shape is expressed via:
-      - array_size = 0 for scalars
-      - array_size = N (>0) for arrays
+      • array_size = 0 for scalars
+      • array_size = N (>0) for arrays
     """
     name: str
     type: int
@@ -96,14 +96,13 @@ class DataRefSpec:
     # ------------------------------------------------------------------
     # Internal validator
     # ------------------------------------------------------------------
-
     @staticmethod
     def _validate_array_size(path: str, dtype: int, array_size: int) -> int:
         """
         Enforce scalar/array rules:
 
-          - Scalar types → array_size must be 0
-          - Array types  → array_size must be > 0
+          • Scalar types → array_size must be 0
+          • Array types  → array_size must be > 0
         """
         array_size = int(array_size)
 
@@ -127,7 +126,6 @@ class DataRefSpec:
     # ------------------------------------------------------------------
     # Construction from real metadata
     # ------------------------------------------------------------------
-
     @classmethod
     def from_info(
         cls,
@@ -141,11 +139,6 @@ class DataRefSpec:
     ) -> "DataRefSpec":
         """
         Build a spec from a real XPLMDataRefInfo_t-like object.
-
-        Rules:
-          - array_size is optional.
-          - For array types: array_size MUST be provided and > 0.
-          - For scalar types: array_size must be 0 or None.
         """
         dtype = info.type
 
@@ -178,11 +171,10 @@ class DataRefSpec:
     # ------------------------------------------------------------------
     # Dummy spec
     # ------------------------------------------------------------------
-
     @classmethod
     def dummy(cls, path: str, *, required: bool, default: Any) -> "DataRefSpec":
         """
-        Dummy spec used before X-Plane provides the real DataRef.
+        Dummy spec used before X‑Plane provides the real DataRef.
         Type/shape inferred from defaults; later promoted via promote().
         """
         if isinstance(default, (list, bytes, bytearray)):
@@ -204,8 +196,12 @@ class DataRefSpec:
     # ------------------------------------------------------------------
     # Promotion from dummy → real
     # ------------------------------------------------------------------
-
-    def promote(self, handle: XPLMDataRef, info: XPLMDataRefInfo_t, array_size: Optional[int]) -> None:
+    def promote(
+        self,
+        handle: XPLMDataRef,
+        info: XPLMDataRefInfo_t,
+        array_size: Optional[int],
+    ) -> None:
         """
         Promote a dummy spec to a real, bound DataRef using explicit array_size.
         """
@@ -239,17 +235,21 @@ class DataRefSpec:
 
 
 # ===========================================================================
-# DataRefManager
+# DataRefManager — authoritative DataRef lifecycle manager
 # ===========================================================================
-
 class DataRefManager:
     """
     Unified DataRef manager for production and simless.
+
+    PRODUCTION‑ONLY:
+      This module must never be imported by simless. FakeXPDataRef provides
+      the simless DataRef engine. The only simless interaction allowed is
+      optional binding via xp.bind_dataref_manager().
     """
 
     def __init__(
         self,
-        xp: XPInterface,
+        xp: Any,
         datarefs: Optional[Dict[Any, Dict[str, Any]]] = None,
         timeout_seconds: float = 10.0,
     ) -> None:
@@ -260,14 +260,14 @@ class DataRefManager:
         self.specs: Dict[str, DataRefSpec] = {}
         self._all_real: bool = True
 
-        # Bind into FakeXP so FakeXPDataRef can see plugin defaults
+        # Optional: allow FakeXP to bind for simless defaults
         if hasattr(self.xp, "bind_dataref_manager"):
             self.xp.bind_dataref_manager(self)
 
+        # Initialize dummy specs if provided
         if datarefs:
             self._all_real = False
-            for key, cfg in datarefs.items():
-                path = key
+            for path, cfg in datarefs.items():
                 required = cfg.get("required", False)
                 default = cfg.get("default", None)
                 self.specs[path] = DataRefSpec.dummy(
@@ -279,7 +279,6 @@ class DataRefManager:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
     def add_spec(self, path: str, spec: DataRefSpec) -> None:
         self.specs[path] = spec
 
@@ -333,7 +332,6 @@ class DataRefManager:
     # ------------------------------------------------------------------
     # Startup resolution
     # ------------------------------------------------------------------
-
     def ready(self, counter: int) -> bool:
         """
         Bind all declared DataRefs once, using xp.findDataRef + xp.getDataRefInfo.

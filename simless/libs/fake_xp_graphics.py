@@ -1,9 +1,30 @@
 # simless/libs/fake_xp_graphics.py
+# ===========================================================================
+# FakeXPGraphics — DearPyGui-backed graphics subsystem mixin for FakeXP
+#
+# ROLE
+#   Provide a minimal, deterministic, XPLMGraphics-like façade for simless
+#   execution. This subsystem mirrors the public xp graphics API surface
+#   without inference, layout logic, or hidden state.
+#
+# CORE INVARIANTS
+#   - Must match the production xp.* graphics API contract (xp.pyi).
+#   - Must not infer semantics or perform validation.
+#   - Must not mutate SDK-shaped objects.
+#   - Must return deterministic values based solely on internal storage.
+#
+# SIMLESS RULES
+#   - DearPyGui is used only for visualization; never exposed to plugins.
+#   - DPG context is initialized lazily and exactly once.
+#   - No automatic layout, no coordinate transforms.
+# ===========================================================================
 
 from __future__ import annotations
+
 from typing import Any, Callable, List, Tuple
 
 import dearpygui.dearpygui as dpg
+import XPPython3
 
 
 class FakeXPGraphics:
@@ -13,37 +34,40 @@ class FakeXPGraphics:
     """
 
     public_api_names = [
-        # Drawing callbacks
         "registerDrawCallback",
         "unregisterDrawCallback",
-
-        # Screen + mouse queries
         "getScreenSize",
         "getMouseLocation",
-
-        # Drawing primitives
         "drawString",
         "drawNumber",
-
-        # Graphics state
         "setGraphicsState",
+        "bindTexture2d",
+        "generateTextureNumbers",
+        "deleteTexture",
     ]
 
+    # ----------------------------------------------------------------------
+    # INITIALIZATION
+    # ----------------------------------------------------------------------
     def _init_graphics(self) -> None:
-        # Draw callbacks: (callback, phase, before)
+        """
+        Initialize internal graphics state.
+        Called by FakeXP during construction.
+        """
+        # Draw callbacks: (callback, phase, wantsBefore)
         self._draw_callbacks: List[tuple[Callable, int, int]] = []
 
-        # Texture bookkeeping (stub)
+        # Texture bookkeeping (simless stub)
         self._next_tex_id: int = 1
         self._textures: dict[int, Any] = {}
 
-        # Screen + mouse state
+        # Screen + mouse state (static unless overridden)
         self._mouse_x: int = 0
         self._mouse_y: int = 0
         self._screen_w: int = 1920
         self._screen_h: int = 1080
 
-        # DearPyGui context is created lazily when GUI is enabled
+        # DearPyGui context is created lazily
         self._dpg_initialized: bool = False
 
     # ----------------------------------------------------------------------
@@ -57,31 +81,51 @@ class FakeXPGraphics:
         if self._dpg_initialized:
             return
 
-        dpg.create_context()
-        dpg.create_viewport(
-            title="FakeXP Graphics",
-            width=self._screen_w,
-            height=self._screen_h,
-        )
-        dpg.setup_dearpygui()
-        dpg.show_viewport()
-
-        self._dpg_initialized = True
+        try:
+            dpg.create_context()
+            dpg.create_viewport(
+                title="FakeXP Graphics",
+                width=self._screen_w,
+                height=self._screen_h,
+            )
+            dpg.setup_dearpygui()
+            dpg.show_viewport()
+            self._dpg_initialized = True
+        except Exception as exc:
+            XPPython3.xp.log(f"[Graphics] DPG init error: {exc!r}")
 
     # ----------------------------------------------------------------------
-    # Draw callback registration
+    # DRAW CALLBACK REGISTRATION
     # ----------------------------------------------------------------------
-    def registerDrawCallback(self, cb: Callable, phase: int, wantsBefore: int) -> None:
+    def registerDrawCallback(
+        self,
+        cb: Callable[[int, int], Any],
+        phase: int,
+        wantsBefore: int,
+    ) -> None:
+        """
+        Register a draw callback.
+        FakeXP calls these once per frame in _draw_frame().
+        """
         self._draw_callbacks.append((cb, phase, wantsBefore))
 
-    def unregisterDrawCallback(self, cb: Callable, phase: int, wantsBefore: int) -> None:
+    def unregisterDrawCallback(
+        self,
+        cb: Callable[[int, int], Any],
+        phase: int,
+        wantsBefore: int,
+    ) -> None:
+        """
+        Remove a previously registered draw callback.
+        """
         self._draw_callbacks = [
-            entry for entry in self._draw_callbacks
+            entry
+            for entry in self._draw_callbacks
             if not (entry[0] is cb and entry[1] == phase and entry[2] == wantsBefore)
         ]
 
     # ----------------------------------------------------------------------
-    # Text drawing
+    # TEXT DRAWING
     # ----------------------------------------------------------------------
     def drawString(
         self,
@@ -91,6 +135,10 @@ class FakeXPGraphics:
         text: str,
         wordWrapWidth: int,
     ) -> None:
+        """
+        Draw a string at (x, y) using DearPyGui.
+        wordWrapWidth is ignored (simless stub).
+        """
         if not self._dpg_initialized:
             return
 
@@ -107,8 +155,7 @@ class FakeXPGraphics:
                     ),
                 )
         except Exception as exc:
-            if hasattr(self, "log"):
-                self.log(f"[Graphics] drawString error: {exc!r}")
+            XPPython3.xp.log(f"[Graphics] drawString error: {exc!r}")
 
     def drawNumber(
         self,
@@ -119,11 +166,14 @@ class FakeXPGraphics:
         digits: int,
         decimals: int,
     ) -> None:
+        """
+        Draw a formatted number using drawString().
+        """
         fmt = f"{{:{digits}.{decimals}f}}"
         self.drawString(color, x, y, fmt.format(number), 0)
 
     # ----------------------------------------------------------------------
-    # Graphics state (stub)
+    # GRAPHICS STATE (STUB)
     # ----------------------------------------------------------------------
     def setGraphicsState(
         self,
@@ -135,13 +185,19 @@ class FakeXPGraphics:
         texMode: int,
         depth: int,
     ) -> None:
-        pass
+        """
+        Stub: X-Plane graphics state flags are ignored in simless mode.
+        """
+        return
 
     # ----------------------------------------------------------------------
-    # Texture API (stub)
+    # TEXTURE API (STUB)
     # ----------------------------------------------------------------------
     def generateTextureNumbers(self, count: int) -> List[int]:
-        ids = []
+        """
+        Allocate texture IDs (simless stub).
+        """
+        ids: List[int] = []
         for _ in range(count):
             tid = self._next_tex_id
             self._next_tex_id += 1
@@ -150,13 +206,19 @@ class FakeXPGraphics:
         return ids
 
     def bindTexture2d(self, textureID: int, unit: int) -> None:
-        pass
+        """
+        Stub: No real texture binding in simless mode.
+        """
+        return
 
     def deleteTexture(self, textureID: int) -> None:
+        """
+        Remove a texture ID from bookkeeping.
+        """
         self._textures.pop(textureID, None)
 
     # ----------------------------------------------------------------------
-    # Screen + mouse
+    # SCREEN + MOUSE
     # ----------------------------------------------------------------------
     def getScreenSize(self) -> Tuple[int, int]:
         return (self._screen_w, self._screen_h)
@@ -165,6 +227,9 @@ class FakeXPGraphics:
         return (self._mouse_x, self._mouse_y)
 
     def _update_mouse(self) -> None:
+        """
+        Update mouse position from DearPyGui.
+        """
         if not self._dpg_initialized:
             return
 
@@ -175,7 +240,7 @@ class FakeXPGraphics:
             pass
 
     # ----------------------------------------------------------------------
-    # Frame rendering
+    # FRAME RENDERING
     # ----------------------------------------------------------------------
     def _draw_frame(self) -> None:
         """
@@ -192,21 +257,18 @@ class FakeXPGraphics:
             try:
                 cb(phase, wantsBefore)
             except Exception as exc:
-                if hasattr(self, "log"):
-                    self.log(f"[Graphics] draw callback error: {exc!r}")
+                XPPython3.xp.log(f"[Graphics] draw callback error: {exc!r}")
 
-        # Render X-Plane-style widgets into DearPyGui, if the widget subsystem is present
+        # Render widgets if widget subsystem is present
         if hasattr(self, "_draw_all_widgets"):
             try:
                 self._draw_all_widgets()
             except Exception as exc:
-                if hasattr(self, "log"):
-                    self.log(f"[Graphics] widget render error: {exc!r}")
+                XPPython3.xp.log(f"[Graphics] widget render error: {exc!r}")
 
         # Render DPG frame
         if self._dpg_initialized:
             try:
                 dpg.render_dearpygui_frame()
             except Exception as exc:
-                if hasattr(self, "log"):
-                    self.log(f"[Graphics] frame render error: {exc!r}")
+                XPPython3.xp.log(f"[Graphics] frame render error: {exc!r}")
