@@ -1,7 +1,48 @@
 # simless/libs/fake_xp/fakexp.py
 # ===========================================================================
 # FakeXP — unified xp.* façade for simless plugin execution
+#
+# ROLE
+#   Provide a deterministic, minimal, X‑Plane‑authentic façade for simless
+#   execution. FakeXP must mirror the public API surface of the real
+#   XPPython3 XPInterface without adding behavior, inference, or hidden
+#   state. It enables plugin code to run identically in headless mode.
+#
+# CORE INVARIANTS
+#   - Will use the Public API as much as possible
+#   - FakeXP must match real XPInterface method names, signatures, and
+#     return types exactly.
+#   - FakeXP must never mutate XPLMDataRefInfo_t or any SDK‑shaped object.
+#   - FakeXP must not introduce fields, flags, or attributes not present in
+#     the real X‑Plane API.
+#   - FakeXP must not infer semantics or perform validation; it only
+#     simulates the minimal behavior required for deterministic execution.
+#
+# DATAREF RULES
+#   - FakeXP must not compute or infer array_size; callers must supply it.
+#   - FakeXP must return values in the same shape and type as real X‑Plane:
+#         scalars → Python primitives
+#         arrays  → lists of primitives
+#   - FakeXP must not normalize, coerce, or transform values.
+#   - FakeXP must not create dummy DataRefs unless explicitly requested by
+#     the DataRefManager.
+#
+# METADATA RULES
+#   - FakeXP.getDataRefInfo() must return an XPLMDataRefInfo_t‑shaped object
+#     with only the real X‑Plane fields (name, type, writable).
+#   - FakeXP must not add array_size or any other synthetic metadata.
+#   - All normalization of metadata belongs to DataRefSpec.
+#
+# VALUE ACCESS RULES
+#   - FakeXP.getData*() methods must return deterministic values based on
+#     internal storage only.
+#   - FakeXP.setData*() methods must update internal storage without side
+#     effects.
+#   - FakeXP must not perform bounds checking or type validation; that is
+#     the responsibility of DataRefSpec/DataRefManager.
 # ===========================================================================
+
+
 
 from __future__ import annotations
 

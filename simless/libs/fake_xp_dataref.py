@@ -1,12 +1,16 @@
 # simless/libs/fake_xp_dataref.py
 # ===========================================================================
 # FakeXP DataRef subsystem — mirrors XPPython3/X-Plane DataRefInfo fields
+#
+# CORE INVARIANTS
+#   - Public API signatures must MATCH real X-Plane/XPPython3.
+#   - Any higher-level normalization is done by DataRefManager.
 # ===========================================================================
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from plugins.sshd_extensions.datarefs import DRefType
 
@@ -26,7 +30,7 @@ class FakeDataRef:
     type: int          # XPLMDataRefTypes
     writable: bool
     is_array: bool
-    size: int
+    size: int          # For arrays: length; for scalars: 1
     value: Any
     auto_generated: bool
 
@@ -49,8 +53,8 @@ class FakeXPDataRef:
         "setDatad",
         "getDatavf",
         "setDatavf",
-        "getDatvi",
-        "setDatvi",
+        "getDatavi",
+        "setDatavi",
         "getDatab",
         "setDatab",
         "registerDataRef",
@@ -59,6 +63,18 @@ class FakeXPDataRef:
     def _init_dataref(self) -> None:
         self._handles: Dict[str, FakeDataRef] = {}
         self._values: Dict[str, Any] = {}
+        # Optional: bound DataRefManager so we can honor plugin defaults
+        self._dataref_manager = None
+
+    # ----------------------------------------------------------------------
+    # Binding to DataRefManager (for simless defaults)
+    # ----------------------------------------------------------------------
+
+    def bind_dataref_manager(self, mgr) -> None:
+        """
+        Called by DataRefManager if available, so FakeXP can see specs/defaults.
+        """
+        self._dataref_manager = mgr
 
     # ----------------------------------------------------------------------
     # Explicit registration (test helpers / XPPython3 compatibility)
@@ -73,23 +89,31 @@ class FakeXPDataRef:
         size: int = 1,
         writable: bool = True,
     ) -> FakeDataRef:
-
+        """
+        Explicitly register a DataRef with full control over metadata.
+        Signature is intentionally similar to XPPython3 helpers.
+        """
         dtype = DRefType(xp_type)
 
-        if dtype == DRefType.FLOAT_ARRAY:
-            value = [0.0] * size
-        elif dtype == DRefType.INT_ARRAY:
-            value = [0] * size
-        elif dtype == DRefType.BYTE_ARRAY:
-            value = bytearray(size)
-        elif dtype == DRefType.FLOAT:
-            value = 0.0
-        elif dtype == DRefType.INT:
-            value = 0
-        elif dtype == DRefType.DOUBLE:
-            value = 0.0
+        if is_array:
+            if dtype == DRefType.FLOAT_ARRAY:
+                value = [0.0] * size
+            elif dtype == DRefType.INT_ARRAY:
+                value = [0] * size
+            elif dtype == DRefType.BYTE_ARRAY:
+                value = bytearray(size)
+            else:
+                raise TypeError(f"Scalar dtype {dtype} cannot be registered as array")
         else:
-            raise TypeError(f"Unsupported dtype {dtype}")
+            if dtype == DRefType.FLOAT:
+                value = 0.0
+            elif dtype == DRefType.INT:
+                value = 0
+            elif dtype == DRefType.DOUBLE:
+                value = 0.0
+            else:
+                # For array types without is_array=True, treat as scalar error
+                raise TypeError(f"Array dtype {dtype} must be registered with is_array=True")
 
         ref = FakeDataRef(
             path=path,
@@ -109,12 +133,16 @@ class FakeXPDataRef:
     # Auto-generation honoring DataRefManager defaults
     # ----------------------------------------------------------------------
 
-    def _infer_from_manager(self, name: str):
-        mgr = getattr(self, "_dataref_manager", None)
+    def _infer_from_manager(self, name: str) -> Optional[Dict[str, Any]]:
+        """
+        If a DataRefManager is bound and has a spec for this path, use its
+        default to infer type/shape/value.
+        """
+        mgr = self._dataref_manager
         if mgr is None:
             return None
 
-        spec = mgr.specs.get(name)
+        spec = mgr.get_spec(name) if hasattr(mgr, "get_spec") else mgr.specs.get(name)
         if spec is None:
             return None
 
@@ -128,6 +156,15 @@ class FakeXPDataRef:
                 "value": [0.0] * len(default),
             }
 
+        if isinstance(default, (bytes, bytearray)):
+            return {
+                "dtype": DRefType.BYTE_ARRAY,
+                "is_array": True,
+                "size": len(default),
+                "value": bytearray(len(default)),
+            }
+
+        # Fallback: scalar float
         return {
             "dtype": DRefType.FLOAT,
             "is_array": False,
@@ -135,7 +172,10 @@ class FakeXPDataRef:
             "value": 0.0,
         }
 
-    def _infer_unmanaged(self, name: str):
+    def _infer_unmanaged(self, name: str) -> Dict[str, Any]:
+        """
+        Heuristic for unmanaged DataRefs (no spec in DataRefManager).
+        """
         is_array = name.endswith("s") or "array" in name.lower()
         if is_array:
             return {
@@ -156,6 +196,9 @@ class FakeXPDataRef:
     # ----------------------------------------------------------------------
 
     def findDataRef(self, name: str) -> FakeDataRef | None:
+        """
+        Mirror XPPython3: return a handle object or None.
+        """
         if name in self._handles:
             return self._handles[name]
 
@@ -183,7 +226,8 @@ class FakeXPDataRef:
           - writable
           - is_array
           - size
-        FakeDataRef already exposes these fields.
+
+        FakeDataRef already exposes these fields, so we can just return it.
         """
         return handle
 
@@ -192,6 +236,10 @@ class FakeXPDataRef:
     # ----------------------------------------------------------------------
 
     def _resolve_value_ref(self, handle: FakeDataRef | str) -> FakeDataRef:
+        """
+        Accept either a FakeDataRef handle or a path string, mirroring how
+        some code may call the API.
+        """
         if isinstance(handle, FakeDataRef):
             return handle
 
@@ -216,7 +264,7 @@ class FakeXPDataRef:
         return self._handles[handle]
 
     # ----------------------------------------------------------------------
-    # Scalar + array accessors
+    # Scalar accessors
     # ----------------------------------------------------------------------
 
     def getDatai(self, handle):
@@ -232,10 +280,14 @@ class FakeXPDataRef:
         self._resolve_value_ref(handle).value = float(v)
 
     def getDatad(self, handle):
-        return self.getDataf(handle)
+        return float(self._resolve_value_ref(handle).value)
 
     def setDatad(self, handle, v):
-        self.setDataf(handle, v)
+        self._resolve_value_ref(handle).value = float(v)
+
+    # ----------------------------------------------------------------------
+    # Array accessors
+    # ----------------------------------------------------------------------
 
     def getDatavf(self, handle, out, offset, count):
         ref = self._resolve_value_ref(handle)
@@ -251,7 +303,7 @@ class FakeXPDataRef:
         for i in range(count):
             arr[offset + i] = float(values[i])
 
-    def getDatvi(self, handle, out, offset, count):
+    def getDatavi(self, handle, out, offset, count):
         ref = self._resolve_value_ref(handle)
         arr = ref.value
         if out is None:
@@ -259,7 +311,7 @@ class FakeXPDataRef:
         for i in range(count):
             out[i] = int(arr[offset + i])
 
-    def setDatvi(self, handle, values, offset, count):
+    def setDatavi(self, handle, values, offset, count):
         ref = self._resolve_value_ref(handle)
         arr = ref.value
         for i in range(count):

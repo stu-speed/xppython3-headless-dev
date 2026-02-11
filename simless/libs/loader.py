@@ -1,15 +1,19 @@
 # ===========================================================================
 # loader.py — INTERNAL FakeXP plugin loader (fully typed)
 #
-# Not exposed to user code. Used exclusively by FakeXPRunner.
+# ROLE
+#   Instantiate plugin modules deterministically, bind required subsystems
+#   (FakeXP, DataRefManager, runner), and expose a clean, explicit lifecycle
+#   interface. The loader must remain minimal, predictable, and free of
+#   hidden behavior or inference.
 #
-# Responsibilities:
-#   • Load PI_*.py modules from ./plugins/
-#   • Instantiate PythonInterface
-#   • Call XPluginStart() to retrieve (Name, Sig, Desc)
-#   • Maintain plugin registry for FakeXP (ID, signature, path)
-#   • Hard‑fail (raise RuntimeError) on ANY error
+# CORE INVARIANTS
+#   - Will use the Public API as much as possible
+#   - Loader must not mutate plugin classes beyond documented fields.
+#   - Loader must not infer plugin behavior; it only instantiates and binds.
 # ===========================================================================
+
+
 
 from __future__ import annotations
 

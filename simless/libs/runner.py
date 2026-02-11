@@ -1,14 +1,18 @@
 # ===========================================================================
 # runner.py — deterministic simless execution harness
 #
-# Responsibilities:
-#   • Load plugins via SimlessPluginLoader
-#   • Inject xp.* namespace into plugin instances (XPPython3‑authentic)
-#   • Execute lifecycle: Start → Enable → frame loop → Disable → Stop
-#   • Maintain deterministic 60 Hz pacing
-#   • Own ALL flightloop scheduling (FakeXP holds no scheduler state)
-#   • Defer DearPyGui context/viewport to FakeXPGraphics
+# ROLE
+#   Provide deterministic, single‑source‑of‑truth execution for plugin code
+#   outside of X‑Plane. The runner owns timing, callback scheduling, and
+#   lifecycle sequencing. It must remain minimal, explicit, and free of
+#   X‑Plane‑specific inference. All simulation behavior is delegated to
+#   FakeXP and DataRefManager.
+#
+# CORE INVARIANTS
+#   - Will use the Public API as much as possible
+#   - Runner is the authoritative code for simless execution.
 # ===========================================================================
+
 
 from __future__ import annotations
 

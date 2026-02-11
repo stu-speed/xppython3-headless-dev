@@ -1,6 +1,53 @@
 # ===========================================================================
 # DataRefs — unified production/simless DataRef layer
+#
+# ROLE
+#   Provide a deterministic, typed, validation‑driven interface for all
+#   DataRef metadata and value access. This subsystem is the authoritative
+#   source of truth for DataRef shape, readiness, writability, and type
+#   correctness. It must remain independent of X‑Plane transport concerns.
+#
+# CORE INVARIANTS
+#   - Will use the Public API as much as possible
+#   - DataRefSpec is the canonical representation of a DataRef.
+#   - DataRefManager owns all validation, readiness tracking, and value
+#     retrieval semantics.
+#   - No other subsystem may infer or validate DataRef metadata.
+#   - No dummy DataRefs are created unless explicitly requested by the
+#     caller (headless fallback only).
+#   - No mutation of X‑Plane SDK objects; normalization happens here.
+#
+# METADATA RULES
+#   - DataRefSpec.from_info() receives:
+#         path, info, required, default, handle, is_dummy, array_size
+#   - array_size must be validated exclusively by
+#         DataRefSpec._validate_array_size()
+#   - No “is_array” or “size” fields exist; array_size=0 denotes scalar.
+#   - dtype, writable, and array_size must be internally consistent.
+#
+# VALIDATION RULES
+#   - All type, array, and writability checks occur inside DataRefSpec.
+#   - DataRefManager must reject invalid specs immediately.
+#   - Required DataRefs must enforce readiness timeouts.
+#   - Optional DataRefs must never block readiness.
+#   - Value getters must enforce dtype and array_size correctness.
+#
+# VALUE ACCESS RULES
+#   - DataRefManager.get_value(path) returns raw X‑Plane values without
+#     coercion or transformation.
+#   - For arrays, returned values must match array_size exactly.
+#   - For scalars, returned values must be Python primitives.
+#   - No caching beyond last_sent snapshots used by the bridge.
+#
+# READINESS RULES
+#   - A DataRef is ready when:
+#         - its handle is valid,
+#         - its metadata is validated,
+#         - its value can be retrieved without error.
+#   - DataRefManager.ready(counter) returns True only when all required
+#     DataRefs are ready or have timed out.
 # ===========================================================================
+
 
 from __future__ import annotations
 
@@ -21,13 +68,18 @@ class DRefType(IntEnum):
     BYTE_ARRAY  = 32
 
 
+# ===========================================================================
+# DataRefSpec
+# ===========================================================================
+
 @dataclass(slots=True)
 class DataRefSpec:
     """
-    Production-authentic description of a DataRef, plus plugin-side defaults.
+    Unified DataRef specification.
 
-    Fields are intentionally aligned with what XPPython3/X-Plane expose via
-    XPLMDataRefInfo_t: type, writable, is_array (derived), size/count.
+    Shape is expressed via:
+      - array_size = 0 for scalars
+      - array_size = N (>0) for arrays
     """
     name: str
     type: int
@@ -39,8 +91,42 @@ class DataRefSpec:
     handle: Optional[XPLMDataRef] = None
     is_dummy: bool = False
 
-    is_array: bool = False
-    count: int = 1
+    array_size: int = 0  # 0 = scalar, >0 = array length
+
+    # ------------------------------------------------------------------
+    # Internal validator
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_array_size(path: str, dtype: int, array_size: int) -> int:
+        """
+        Enforce scalar/array rules:
+
+          - Scalar types → array_size must be 0
+          - Array types  → array_size must be > 0
+        """
+        array_size = int(array_size)
+
+        if dtype in (
+            int(DRefType.FLOAT_ARRAY),
+            int(DRefType.INT_ARRAY),
+            int(DRefType.BYTE_ARRAY),
+        ):
+            if array_size <= 0:
+                raise ValueError(
+                    f"DataRef '{path}' is array type ({dtype}) but array_size={array_size}"
+                )
+        else:
+            if array_size != 0:
+                raise ValueError(
+                    f"DataRef '{path}' is scalar type ({dtype}) but array_size={array_size}"
+                )
+
+        return array_size
+
+    # ------------------------------------------------------------------
+    # Construction from real metadata
+    # ------------------------------------------------------------------
 
     @classmethod
     def from_info(
@@ -49,57 +135,60 @@ class DataRefSpec:
         info: XPLMDataRefInfo_t,
         required: bool,
         default: Any,
-        handle: Optional[XPLMDataRef] = None,
-        is_dummy: bool = False,
+        handle: Optional[XPLMDataRef],
+        is_dummy: bool,
+        array_size: Optional[int] = None,
     ) -> "DataRefSpec":
         """
-        Build a spec from a real XPLMDataRefInfo_t.
+        Build a spec from a real XPLMDataRefInfo_t-like object.
 
-        XPPython3/X-Plane provide:
-          - info.type
-          - info.writable
-          - info.is_array (may be None)
-          - info.size (may be None)
+        Rules:
+          - array_size is optional.
+          - For array types: array_size MUST be provided and > 0.
+          - For scalar types: array_size must be 0 or None.
         """
-        # size may be None in some environments; fall back to default shape
-        size = getattr(info, "size", None)
-        if size is None:
-            if isinstance(default, (list, bytes, bytearray)):
-                size = len(default)
-            else:
-                size = 1
+        dtype = info.type
 
-        is_array = getattr(info, "is_array", None)
-        if is_array is None:
-            is_array = size > 1
+        # Determine array_size
+        if array_size is None:
+            if dtype in (
+                int(DRefType.FLOAT),
+                int(DRefType.INT),
+                int(DRefType.DOUBLE),
+            ):
+                array_size = 0
+            else:
+                raise ValueError(
+                    f"DataRef '{path}' is array type ({dtype}) but no array_size was provided"
+                )
+
+        array_size = cls._validate_array_size(path, dtype, array_size)
 
         return cls(
             name=path,
-            type=info.type,
+            type=dtype,
             writable=info.writable,
             required=required,
             default=default,
             handle=handle,
             is_dummy=is_dummy,
-            is_array=bool(is_array),
-            count=int(size),
+            array_size=array_size,
         )
+
+    # ------------------------------------------------------------------
+    # Dummy spec
+    # ------------------------------------------------------------------
 
     @classmethod
     def dummy(cls, path: str, *, required: bool, default: Any) -> "DataRefSpec":
         """
         Dummy spec used before X-Plane provides the real DataRef.
-        Type/shape are inferred from defaults; later promoted via promote().
+        Type/shape inferred from defaults; later promoted via promote().
         """
-        if isinstance(default, list):
-            is_array = True
-            count = len(default)
-        elif isinstance(default, (bytes, bytearray)):
-            is_array = True
-            count = len(default)
+        if isinstance(default, (list, bytes, bytearray)):
+            array_size = len(default)
         else:
-            is_array = False
-            count = 1
+            array_size = 0
 
         return cls(
             name=path,
@@ -109,51 +198,53 @@ class DataRefSpec:
             default=default,
             handle=None,
             is_dummy=True,
-            is_array=is_array,
-            count=count,
+            array_size=array_size,
         )
 
-    def promote(self, handle: XPLMDataRef, info: XPLMDataRefInfo_t) -> None:
-        """
-        Promote a dummy spec to a real, bound DataRef using XPLMDataRefInfo_t.
+    # ------------------------------------------------------------------
+    # Promotion from dummy → real
+    # ------------------------------------------------------------------
 
-        This is called once, from DataRefManager.ready(), when X-Plane (or
-        FakeXP) finally provides the real DataRef.
+    def promote(self, handle: XPLMDataRef, info: XPLMDataRefInfo_t, array_size: Optional[int]) -> None:
+        """
+        Promote a dummy spec to a real, bound DataRef using explicit array_size.
         """
         self.handle = handle
         self.is_dummy = False
 
-        # Mirror X-Plane/XPPython3 field names
-        self.type = info.type
+        dtype = info.type
+        self.type = dtype
         self.writable = info.writable
 
-        size = getattr(info, "size", None)
-        if size is None:
-            # Preserve existing count if X-Plane doesn't report size
-            size = self.count or 1
+        if array_size is None:
+            if dtype in (
+                int(DRefType.FLOAT),
+                int(DRefType.INT),
+                int(DRefType.DOUBLE),
+            ):
+                array_size = 0
+            else:
+                raise ValueError(
+                    f"DataRef '{self.name}' is array type ({dtype}) but no array_size provided during promote()"
+                )
 
-        is_array = getattr(info, "is_array", None)
-        if is_array is None:
-            is_array = size > 1
+        array_size = self._validate_array_size(self.name, dtype, array_size)
+        self.array_size = array_size
 
-        self.count = int(size)
-        self.is_array = bool(is_array)
-
-        # XP initializes DataRefs to zero; align defaults with that behavior
-        if self.is_array:
-            self.default = [0.0] * self.count
+        # XP initializes DataRefs to zero; align defaults
+        if array_size > 0:
+            self.default = [0.0] * array_size
         else:
             self.default = 0.0
 
 
+# ===========================================================================
+# DataRefManager
+# ===========================================================================
+
 class DataRefManager:
     """
     Unified DataRef manager for production and simless.
-
-    - In production (X-Plane), it binds to real DataRefs via xp.findDataRef()
-      and xp.getDataRefInfo(), then uses xp.get*/set* for access.
-    - In simless, FakeXP implements the same xp.* API and DataRefInfo fields,
-      so this class runs unchanged.
     """
 
     def __init__(
@@ -192,6 +283,9 @@ class DataRefManager:
     def add_spec(self, path: str, spec: DataRefSpec) -> None:
         self.specs[path] = spec
 
+    def get_spec(self, path: str) -> Optional[DataRefSpec]:
+        return self.specs.get(path)
+
     def get_value(self, path: str) -> Any:
         spec = self.specs.get(path)
         if spec is None:
@@ -216,9 +310,9 @@ class DataRefManager:
             xp.getDatavf(h, out, 0, size)
             return out
         if t == int(DRefType.INT_ARRAY):
-            size = xp.getDatvi(h, None, 0, 0)
+            size = xp.getDatavi(h, None, 0, 0)
             out = [0] * size
-            xp.getDatvi(h, out, 0, size)
+            xp.getDatavi(h, out, 0, size)
             return out
         if t == int(DRefType.BYTE_ARRAY):
             size = xp.getDatab(h, None, 0, 0)
@@ -243,10 +337,6 @@ class DataRefManager:
     def ready(self, counter: int) -> bool:
         """
         Bind all declared DataRefs once, using xp.findDataRef + xp.getDataRefInfo.
-
-        Returns True only when:
-          - all required DataRefs have real handles, or
-          - timeout has elapsed and plugin has been disabled (for missing required).
         """
         if self._all_real:
             return True
@@ -267,7 +357,19 @@ class DataRefManager:
                 continue
 
             info = self.xp.getDataRefInfo(handle)
-            spec.promote(handle, info)
+
+            # Compute array_size explicitly
+            t = info.type
+            if t == int(DRefType.FLOAT_ARRAY):
+                array_size = self.xp.getDatavf(handle, None, 0, 0)
+            elif t == int(DRefType.INT_ARRAY):
+                array_size = self.xp.getDatavi(handle, None, 0, 0)
+            elif t == int(DRefType.BYTE_ARRAY):
+                array_size = self.xp.getDatab(handle, None, 0, 0)
+            else:
+                array_size = 0
+
+            spec.promote(handle, info, array_size)
 
         if all_real:
             self._all_real = True

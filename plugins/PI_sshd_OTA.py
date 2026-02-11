@@ -137,17 +137,11 @@ class PythonInterface:
         return 1
 
     def XPluginDisable(self) -> None:
+        self.device.send_data(f"", power_on=False)
+
         if self.floop is not None:
             xp.destroyFlightLoop(self.floop)
             self.floop = None
-
-        if self.device is not None:
-            try:
-                self.device.close_conn()
-            except Exception as exc:
-                xp.log(f"OTA: error closing serial device: {exc!r}")
-            self.device = None
-            xp.log("OTA: serial device connection closed")
 
     def XPluginStop(self) -> None:
         pass
