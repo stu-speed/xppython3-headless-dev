@@ -100,8 +100,8 @@ xp = FakeXP(debug=True)
 XPPython3.xp = xp # Replace X-Plane's xp module with FakeXP to run headless
 
 plugins = [
-    "PI_sshd_OTA",
-    "PI_sshd_dev_ota_gui",
+    "PI_sshd_OAT",
+    "PI_sshd_dev_oat_gui",
 ]
 xp._run_plugin_lifecycle(plugins, debug=True, enable_gui=True)
 ```

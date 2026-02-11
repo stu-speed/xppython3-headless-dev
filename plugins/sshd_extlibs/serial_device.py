@@ -7,6 +7,9 @@ from serial.tools.list_ports_common import ListPortInfo
 
 
 class SerialDevice:
+    last_retry: float
+    prev_msg: str
+
     def __init__(
         self,
         name: Optional[str] = None,
@@ -24,8 +27,6 @@ class SerialDevice:
         self.ignore_dupe_msgs = ignore_dupe_msgs
 
         self.conn: Optional[serial.Serial] = None
-        self.last_retry: float
-        self.prev_msg: str
         self._reset_vars()
 
     def _match_port(self, p: ListPortInfo) -> bool:
@@ -39,11 +40,12 @@ class SerialDevice:
         self.last_retry = 0
         self.prev_msg = ""
 
-    def _format_msg(self, data: str, power_on=True) -> Optional[str]:
-        msg = ""
-        if power_on:
-            msg = f"{data}\n"
+    def _format_msg(self, data: str, **kwargs) -> Optional[str]:
+        msg = f"{data}\n"
         return msg
+
+    def _close_msg(self) -> None:
+        pass
 
     def conn_ready(self) -> bool:
         if self.conn is not None:
@@ -77,30 +79,15 @@ class SerialDevice:
         if self.conn is None:
             return
 
-        try:
-            # send sleep command if applicable
-            self.send_data("", power_on=False)
-        except Exception:
-            pass
+        self._close_msg()
 
         # ===========================================================================
         # Sequence to ensure com port is closed and released
         # ===========================================================================
-
         try:
             # flush buffers
             self.conn.reset_output_buffer()
             self.conn.reset_input_buffer()
-        except Exception:
-            pass
-
-        try:
-            # close underlying file descriptor explicitly
-            if hasattr(self.conn, "fd") and self.conn.fd:
-                try:
-                    self.conn.fd.close()
-                except Exception:
-                    pass
         except Exception:
             pass
 
@@ -110,14 +97,15 @@ class SerialDevice:
             pass
 
         del self.conn  # ensure con is released
+        self.conn = None
         self._reset_vars()
 
-    def send_data(self, data: str, power_on=True) -> None:
+    def send_data(self, data: str, **kwargs) -> None:
         if not self.conn_ready():
             return
         assert self.conn is not None
 
-        msg = self._format_msg(data, power_on)
+        msg = self._format_msg(data, **kwargs)
         if self.ignore_dupe_msgs and msg == self.prev_msg:
             return
 
@@ -127,17 +115,19 @@ class SerialDevice:
             print(
                 f"Failed to send data to device {self.name or self.serial_number}: {e}"
             )
+            self.close_conn()
             self._reset_vars()
 
         self.prev_msg = msg
 
 
-class SerialOTA(SerialDevice):
+class SerialOAT(SerialDevice):
     def _reset_vars(self) -> None:
         self.awake = False
         super()._reset_vars()
 
-    def _format_msg(self, data: str, power_on: bool = True) -> Optional[str]:
+    def _format_msg(self, data: str, **kwargs) -> Optional[str]:
+        power_on = kwargs.get("power_on", True)
         msg = ""
         if power_on:
             msg = f"{'W' if not self.awake else ''}{data}\n"
@@ -146,3 +136,10 @@ class SerialOTA(SerialDevice):
             msg = "S\n"
             self.awake = False
         return msg
+
+    def _close_msg(self) -> None:
+        try:
+            # send sleep command if applicable
+            self.send_data("", power_on=False)
+        except Exception:
+            pass

@@ -14,7 +14,7 @@ from XPPython3.xp_typing import XPLMFlightLoopID
 
 from sshd_extensions.xp_interface import XPInterface
 from sshd_extensions.datarefs import DataRefManager
-from sshd_extlibs.ss_serial_device import SerialOTA
+from sshd_extlibs.serial_device import SerialOAT
 
 xp: XPInterface
 
@@ -63,7 +63,7 @@ class PythonInterface:
 
     manager: DataRefManager
     floop: XPLMFlightLoopID | None
-    device: SerialOTA | None
+    device: SerialOAT | None
 
     def __init__(self) -> None:
         self.Name = "OTA display v1.0"
@@ -78,7 +78,7 @@ class PythonInterface:
     def _ensure_device(self) -> bool:
         if self.device is None:
             xp.log("OTA: creating SerialOTA device")
-            self.device = SerialOTA(serial_number="F1TECH_ARCHER_OHP")
+            self.device = SerialOAT(serial_number="F1TECH_ARCHER_OHP")
 
         if not self.device.conn_ready():
             xp.log("OTA: serial device unavailable")

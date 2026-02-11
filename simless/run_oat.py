@@ -18,17 +18,17 @@ PLUGIN_ROOT = ROOT / "plugins"
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 
-def run_simless_ota_gui() -> None:
+def run_simless_oat_gui() -> None:
     xp = FakeXP(debug=True, enable_gui=True)
     XPPython3.xp = xp
 
     plugins = [
-        "PI_sshd_OTA",
-        "PI_sshd_dev_ota_gui",
+        "PI_sshd_OAT",
+        "PI_sshd_dev_oat_gui",
     ]
 
     xp._run_plugin_lifecycle(plugins)
 
 
 if __name__ == "__main__":
-    run_simless_ota_gui()
+    run_simless_oat_gui()
