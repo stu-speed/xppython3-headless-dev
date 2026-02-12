@@ -56,13 +56,13 @@ from XPPython3.xp_typing import (
 
 from sshd_extensions.datarefs import DataRefManager
 from simless.libs.runner import SimlessRunner
-
-from .constants import bind_xp_constants
-from .fake_xp_dataref import FakeXPDataRef
-from .fake_xp_widget import FakeXPWidget
-from .fake_xp_graphics import FakeXPGraphics
-from .fake_xp_flightloop import FakeXPFlightLoop
-from .fake_xp_utilities import FakeXPUtilities
+from simless.libs.fake_xp_constants import bind_xp_constants
+from simless.libs.fake_xp_dataref import FakeXPDataRef
+from simless.libs.fake_xp_widget import FakeXPWidget
+from simless.libs.fake_xp_graphics import FakeXPGraphics
+from simless.libs.fake_xp_flightloop import FakeXPFlightLoop
+from simless.libs.fake_xp_utilities import FakeXPUtilities
+from simless.libs.fake_xp_interface import FakeXPInterface
 
 
 # For alignment with SimlessXPInterface
@@ -107,9 +107,6 @@ class FakeXP(
         self._sim_time: float = 0.0
         self._keyboard_focus: XPWidgetID | None = None
 
-        # Runner will be created after subsystems initialize
-        self._runner: SimlessRunner | None = None
-
         # ------------------------------------------------------------------
         # Initialize subsystems
         # ------------------------------------------------------------------
@@ -120,17 +117,12 @@ class FakeXP(
         self._init_utilities()
 
         # ------------------------------------------------------------------
-        # Create the SimlessRunner automatically
-        # ------------------------------------------------------------------
-        self._runner = SimlessRunner(self, run_time=run_time)
-
-        # ------------------------------------------------------------------
         # Bind xp.* namespace
         # ------------------------------------------------------------------
         XPPython3.xp = self
-        xp = XPPython3.xp
+        self.xp: FakeXPInterface  = XPPython3.xp  # type: ignore[arg-type]
 
-        bind_xp_constants(xp)
+        bind_xp_constants(self.xp)
 
         # Bind subsystem public APIs into xp.* ONLY
         for subsystem in (
@@ -142,14 +134,19 @@ class FakeXP(
         ):
             for name in getattr(subsystem, "public_api_names", []):
                 fn = getattr(self, name)
-                setattr(xp, name, fn)
+                setattr(self.xp, name, fn)
 
         # destroyWidget wrapper (XPPython3-style)
         def destroyWidget(self_: FakeXP, wid: XPWidgetID, destroy_children: int = 1) -> None:
             # XPPython3's xp.destroyWidget delegates to killWidget; we mirror that.
             self_.killWidget(wid)
 
-        xp.destroyWidget = destroyWidget.__get__(self)
+        self.xp.destroyWidget = destroyWidget.__get__(self)
+
+        # ------------------------------------------------------------------
+        # Create the SimlessRunner automatically
+        # ------------------------------------------------------------------
+        self._runner = SimlessRunner(self.xp, run_time=run_time)
 
     # ----------------------------------------------------------------------
     # Debug helper
@@ -158,10 +155,17 @@ class FakeXP(
         if self.debug:
             print(f"[FakeXP] {msg}")
 
+    def _quit(self) -> None:
+        """
+        Stop the internal runner.
+        """
+        if self._runner is not None:
+            self._runner.end_run_loop()
+
     # ----------------------------------------------------------------------
-    # Lifecycle helpers (FakeXPInterface)
+    # Lifecycle runner
     # ----------------------------------------------------------------------
-    def _run_plugin_lifecycle(
+    def run_plugin_lifecycle(
         self,
         plugin_names: list[str],
         *,
@@ -178,12 +182,6 @@ class FakeXP(
 
         self._runner.run_plugin_lifecycle(plugin_names)
 
-    def _quit(self) -> None:
-        """
-        Stop the internal runner.
-        """
-        if self._runner is not None:
-            self._runner.end_run_loop()
 
     # ----------------------------------------------------------------------
     # Base xp methods (XPPython3-compatible, SimlessXPInterface)
@@ -314,7 +312,7 @@ class FakeXP(
             params = {
                 "callback": callback,
                 "refcon": refCon,
-                "phase": int(phase),
+                "phase": phase,
                 "structSize": 1,
             }
         elif isinstance(callback, (tuple, list)) and len(callback) >= 2:
@@ -331,7 +329,7 @@ class FakeXP(
             # Fallback: treat as a dict-like struct if someone passes that in.
             params = dict(callback)  # type: ignore[arg-type]
             params.setdefault("refcon", refCon)
-            params.setdefault("phase", int(phase))
+            params.setdefault("phase", phase)
             params.setdefault("structSize", 1)
 
         fid = self._runner.create_flightloop(2, params)
@@ -351,7 +349,7 @@ class FakeXP(
         if self._runner is None:
             raise RuntimeError("FakeXP._runner must exist before scheduleFlightLoop")
         # relativeToNow is ignored in simless mode; runner controls timing.
-        self._runner.schedule_flightloop(int(loop_id), interval)
+        self._runner.schedule_flightloop(loop_id, interval)
 
     def destroyFlightLoop(self, loop_id: XPLMFlightLoopID) -> None:
         """
@@ -361,4 +359,4 @@ class FakeXP(
         """
         if self._runner is None:
             raise RuntimeError("FakeXP._runner must exist before destroyFlightLoop")
-        self._runner.destroy_flightloop(int(loop_id))
+        self._runner.destroy_flightloop(loop_id)

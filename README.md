@@ -31,7 +31,8 @@ xppython3-headless-dev/
 │   │
 │   └── sshd_extensions/                    # Shared plugin architecture (namespaced)
 │       ├── datarefs.py                     # Managed datarefs
-│       └── ...                             
+│       ├── xp_interface.py                 # Runtime placeholder for XPInterface (prod-safe)
+│       └── ...
 │
 ├── simless/                                # Sim-less execution harnesses
 │   ├── __init__.pyi                        # Declares xp: FakeXPInterface for IDE/mypy visibility
@@ -48,6 +49,9 @@ xppython3-headless-dev/
 │       └── fake_xp_interface.py            # Runtime shim (TYPE_CHECKING guard)
 │
 ├── stubs/                                  # IDE-visible stubs for real XPPython3 + simless Protocols
+│   ├── sshd_extensions/
+│   │   └── xp_interface.pyi                # Generated Protocol: full xp.* API surface for prod typing
+│   │
 │   ├── simless/
 │   │   └── libs/
 │   │       ├── simless_xp_interface.pyi    # Subset of xp API implemented for simless
@@ -62,13 +66,14 @@ xppython3-headless-dev/
 │
 └── pyproject.toml                          # Poetry package management
 ```
+
 ---
 
 ## 🧩 IDE (PyCharm) Development Workflow
 
 Development workflow features:
 
-• **Strong datatyping and code inspection with xp.pyi and xp_typing.pyi**  
+• **Strong datatyping and code inspection with xp.pyi and xp_typing.pyi, xp_interface.pyi**  
 • **Structured to generate and validate AI generated code**  
 • **Debug plugins in the IDE debugger using a simless runner**  
 • **Run with live X-plane datarefs through a dataref bridge**
@@ -107,15 +112,15 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_ROOT = ROOT / "plugins"
 sys.path.insert(0, str(PLUGIN_ROOT))
- 
+
 xp = FakeXP(debug=True)
-XPPython3.xp = xp # Replace X-Plane's xp module with FakeXP to run headless
+XPPython3.xp = xp  # Replace X-Plane's xp module with FakeXP to run headless
 
 plugins = [
     "PI_sshd_OAT",
     "PI_sshd_dev_oat_gui",
 ]
-xp._run_plugin_lifecycle(plugins, debug=True, enable_gui=True)
+xp.run_plugin_lifecycle(plugins, debug=True, enable_gui=True)
 ```
 
 This runner:

@@ -1,3 +1,8 @@
+# tests/test_datarefs.py
+# ===========================================================================
+# DataRefManager + FakeXP integration tests
+# ===========================================================================
+
 import pytest
 import XPPython3
 
@@ -73,15 +78,7 @@ def test_required_timeout(monkeypatch):
     xp = DummyXP()
     XPPython3.xp = xp
 
-    # ------------------------------------------------------------------
-    # Simulate REAL XP behavior:
-    # Real XP returns None when a DataRef does not exist.
-    #
-    # So for this test, we disable FakeXP's fallback auto-generation
-    # by overriding findDataRef to always return None.
-    #
-    # This forces DataRefManager to see "required DataRef never resolves".
-    # ------------------------------------------------------------------
+    # Simulate real XP: missing DataRefs return None
     monkeypatch.setattr(xp, "findDataRef", lambda path: None)
 
     specs = {"sim/test/required": {"required": True, "default": 99.0}}
@@ -104,13 +101,7 @@ def test_required_no_timeout(monkeypatch):
     xp = DummyXP()
     XPPython3.xp = xp
 
-    # ------------------------------------------------------------------
-    # Simulate "no real XP" but DO NOT disable FakeXP auto-generation.
-    #
-    # Real XP would not provide this DataRef, but FakeXP *does* provide
-    # auto-generated placeholders. Clearing _handles simulates "XP has
-    # no explicit DataRefs", while still allowing FakeXP to auto-generate.
-    # ------------------------------------------------------------------
+    # Allow FakeXP auto-generation
     monkeypatch.setattr(xp, "_handles", {})
 
     specs = {"sim/test/required": {"required": True, "default": 123.0}}
@@ -121,10 +112,7 @@ def test_required_no_timeout(monkeypatch):
     for i in range(1, 50):
         mgr.ready(i)
 
-    # Plugin should NOT be disabled because FakeXP auto-generated the DataRef
     assert xp.isPluginEnabled(xp.getMyID()) == 1
-
-    # Auto-generated dummy → promoted → default becomes 0.0
     assert mgr.get_value("sim/test/required") == 0.0
 
 
@@ -185,7 +173,6 @@ def test_real_value_after_promotion(monkeypatch):
     specs = {"sim/test/live": {"required": False, "default": 1.0}}
     mgr = make_manager(xp, specs)
 
-    # Avoid needing DataRefManager._notify_dataref_changed
     monkeypatch.setattr(mgr, "_notify_dataref_changed", lambda *a, **k: None, raising=False)
 
     mgr.ready(0)
@@ -195,3 +182,128 @@ def test_real_value_after_promotion(monkeypatch):
     xp.setDataf(h, 88.8)
 
     assert mgr.get_value("sim/test/live") == 88.8
+
+
+# ===========================================================================
+# 9. set_value: scalar write
+# ===========================================================================
+
+def test_set_value_scalar():
+    xp = DummyXP()
+    XPPython3.xp = xp
+
+    specs = {"sim/test/scalar": {"required": False, "default": 0.0}}
+    mgr = make_manager(xp, specs)
+
+    mgr.ready(0)
+    mgr.ready(1)
+
+    mgr.set_value("sim/test/scalar", 12.5)
+    assert mgr.get_value("sim/test/scalar") == 12.5
+
+
+# ===========================================================================
+# 10. set_value: float array write
+# ===========================================================================
+
+def test_set_value_array_float():
+    xp = DummyXP()
+    XPPython3.xp = xp
+
+    specs = {"sim/test/arr": {"required": False, "default": [0.0, 0.0, 0.0]}}
+    mgr = make_manager(xp, specs)
+
+    mgr.ready(0)
+    mgr.ready(1)
+
+    mgr.set_value("sim/test/arr", [1.1, 2.2, 3.3])
+    assert mgr.get_value("sim/test/arr") == [1.1, 2.2, 3.3]
+
+
+# ===========================================================================
+# 11. set_value: wrong array size raises
+# ===========================================================================
+
+def test_set_value_wrong_size_raises():
+    xp = DummyXP()
+    XPPython3.xp = xp
+
+    specs = {"sim/test/arr": {"required": False, "default": [0.0, 0.0]}}
+    mgr = make_manager(xp, specs)
+
+    mgr.ready(0)
+    mgr.ready(1)
+
+    with pytest.raises(ValueError):
+        mgr.set_value("sim/test/arr", [1.0, 2.0, 3.0])
+
+
+# ===========================================================================
+# 12. set_value: not writable raises
+# ===========================================================================
+
+def test_set_value_not_writable():
+    xp = DummyXP()
+    XPPython3.xp = xp
+
+    # Create a dummy spec
+    specs = {"sim/test/ro": {"required": False, "default": 5.0}}
+    mgr = make_manager(xp, specs)
+
+    # Promote it to a real DataRef
+    mgr.ready(0)
+    mgr.ready(1)
+
+    # Now mark it non-writable AFTER promotion
+    spec = mgr.specs["sim/test/ro"]
+    spec.writable = False
+
+    with pytest.raises(PermissionError):
+        mgr.set_value("sim/test/ro", 10.0)
+
+
+# ===========================================================================
+# 13. set_value: dummy spec cannot be written
+# ===========================================================================
+
+def test_set_value_on_dummy_raises():
+    xp = DummyXP()
+    XPPython3.xp = xp
+
+    specs = {"sim/test/dummy": {"required": False, "default": 9.9}}
+    mgr = make_manager(xp, specs)
+
+    with pytest.raises(RuntimeError):
+        mgr.set_value("sim/test/dummy", 1.0)
+
+
+# ===========================================================================
+# 14. set_value: unmanaged DataRef raises
+# ===========================================================================
+
+def test_set_value_unmanaged_raises():
+    xp = DummyXP()
+    XPPython3.xp = xp
+
+    mgr = make_manager(xp, specs=None)
+
+    with pytest.raises(KeyError):
+        mgr.set_value("sim/unknown/path", 123)
+
+
+# ===========================================================================
+# 15. set_value: real XP write after promotion
+# ===========================================================================
+
+def test_set_value_after_promotion(monkeypatch):
+    xp = DummyXP()
+    XPPython3.xp = xp
+
+    specs = {"sim/test/livewrite": {"required": False, "default": 1.0}}
+    mgr = make_manager(xp, specs)
+
+    mgr.ready(0)
+    mgr.ready(1)
+
+    mgr.set_value("sim/test/livewrite", 77.7)
+    assert mgr.get_value("sim/test/livewrite") == 77.7

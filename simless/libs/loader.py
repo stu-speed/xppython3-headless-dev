@@ -14,7 +14,6 @@
 # ===========================================================================
 
 
-
 from __future__ import annotations
 
 import importlib
@@ -22,10 +21,9 @@ import inspect
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Protocol, TYPE_CHECKING, List
+from typing import Protocol, List
 
-if TYPE_CHECKING:
-    from simless.libs.fake_xp import FakeXP
+from simless.libs.fake_xp_interface import FakeXPInterface
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +76,10 @@ class LoadedPlugin:
 # ---------------------------------------------------------------------------
 
 class SimlessPluginLoader:
-    def __init__(self, xp: FakeXP) -> None:
+    def __init__(self, xp: FakeXPInterface) -> None:
         # Project root → plugins/
         self.root: Path = Path(__file__).resolve().parents[2] / "plugins"
-        self.xp: FakeXP = xp
+        self.xp = xp
 
         # Registry of LoadedPlugin objects
         self._loaded_plugins: List[LoadedPlugin] = []

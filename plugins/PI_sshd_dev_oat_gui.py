@@ -11,6 +11,11 @@ from XPPython3.xp_typing import (
     XPLMFlightLoopID,
 )
 
+from sshd_extensions.xp_interface import XPInterface
+
+
+xp: XPInterface
+
 
 XPWidgetMessageHandler_f = Callable[[int, int, Any, Any], int]
 

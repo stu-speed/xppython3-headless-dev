@@ -84,11 +84,6 @@ class FakeXPWidget:
         self._next_id: int = 1
 
     # ----------------------------------------------------------------------
-    def _dbg(self, msg: str) -> None:
-        if getattr(self, "debug", False):
-            print(f"[FakeXPWidgets] {msg}")
-
-    # ----------------------------------------------------------------------
     # CREATE / DESTROY
     # ----------------------------------------------------------------------
     def createWidget(

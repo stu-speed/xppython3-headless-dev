@@ -1,7 +1,7 @@
-# simless/libs/fake_xp_interface.py
+# simless/libs/simless_xp_interface.py
 # Runtime shim so Python can import FakeXPInterface.
-# The real Protocol lives in fake_xp_interface.pyi
+# The real Protocol lives in simless_xp_interface.pyi
 
-class FakeXPInterface:
+class SimlessXPInterface:
     """Runtime placeholder; FakeXP implements the real methods."""
     pass

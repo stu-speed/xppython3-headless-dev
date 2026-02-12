@@ -41,6 +41,7 @@ from enum import Enum
 from typing import Any, Dict, Optional, TextIO, Union
 
 from XPPython3.xp_typing import XPLMFlightLoopID
+
 from sshd_extensions.xp_interface import XPInterface
 from sshd_extensions.datarefs import DataRefSpec, DataRefManager, DRefType
 
@@ -255,12 +256,6 @@ class XPBridgeServer:
 
         now = time.time()
 
-        # Heartbeat timeout: no outbound activity for full timeout
-        if now - self._last_activity > HEARTBEAT_TIMEOUT:
-            self.xp.log("[Bridge] heartbeat timeout — closing client and full reset")
-            self._close_client()
-            return -1.0
-
         # Accept new client only if none is connected
         if self.client_sock is None and self.server_sock is not None:
             try:
@@ -313,6 +308,12 @@ class XPBridgeServer:
             # No UPDATE pending: send heartbeat if idle for timeout/2
             if now - self._last_activity > (HEARTBEAT_TIMEOUT / 2.0):
                 self._send(BridgeMessage(type=MsgType.PING, value=""))
+
+        # Heartbeat timeout: no outbound activity for full timeout
+        if now - self._last_activity > HEARTBEAT_TIMEOUT:
+            self.xp.log("[Bridge] heartbeat timeout — closing client and full reset")
+            self._close_client()
+            return -1.0
 
         return self.rate
 
@@ -495,7 +496,6 @@ class XPBridgeClient:
     # ------------------------------------------------------------------
     # Poll for inbound messages
     # ------------------------------------------------------------------
-    import select
 
     def poll(self) -> Optional[BridgeMessage]:
         if self.file is None:

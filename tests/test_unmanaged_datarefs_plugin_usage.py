@@ -76,7 +76,7 @@ def test_unmanaged_dataref_read_write():
             self.calls.append("stop")
 
     mod = register_plugin("unmanaged_rw_plugin", Plugin)
-    xp._run_plugin_lifecycle([mod])
+    xp.run_plugin_lifecycle([mod])
 
     plugin = get_plugin_instance(xp)
 
@@ -137,7 +137,7 @@ def test_unmanaged_dataref_ui_updates():
             self.calls.append("stop")
 
     mod = register_plugin("unmanaged_ui_plugin", Plugin)
-    xp._run_plugin_lifecycle([mod])
+    xp.run_plugin_lifecycle([mod])
 
     plugin = get_plugin_instance(xp)
 
@@ -185,7 +185,7 @@ def test_unmanaged_dataref_flightloop_read():
             self.calls.append("stop")
 
     mod = register_plugin("unmanaged_loop_plugin", Plugin)
-    xp._run_plugin_lifecycle([mod])
+    xp.run_plugin_lifecycle([mod])
 
     plugin = get_plugin_instance(xp)
 
@@ -233,7 +233,7 @@ def test_unmanaged_array_write_via_ui():
             self.calls.append("stop")
 
     mod = register_plugin("unmanaged_array_plugin", Plugin)
-    xp._run_plugin_lifecycle([mod])
+    xp.run_plugin_lifecycle([mod])
 
     plugin = get_plugin_instance(xp)
 

@@ -20,10 +20,6 @@ Do not open PyCharm inside `plugins/` or `simless/`.
 XPPython treats the plugin directory as the import root.  
 PyCharm must mirror this behavior.
 
-### 2.1 Exclude the `plugins/` directory
-Right‑click stubs/ → Mark Directory As → Excluded
-
-### 2.1 Mark `plugins/` as a Source
 Right‑click: plugins/ → Mark Directory As → Sources Root
 
 This enables headless absolute imports in plugins such as:
@@ -36,25 +32,13 @@ This enables headless absolute imports in plugins such as:
 Place the official XPPython3 `.pyi` stubs and python code in:
 
     stubs/XPPython3/
+    stubs/sshd_extensions
 
-PyCharm must treat this directory as a source root, but the parent `stubs/`
-must be excluded to avoid indexing noise.
-
-### 3.1 Exclude the `stubs/` directory
-Right‑click stubs/ → Mark Directory As → Excluded
-
-### 3.2 Add `stubs/` as a Content Root
-Settings → Project Structure → Add Content Root → stubs/
-
-### 3.3 Mark `stubs/XPPython3` as a Source
-Right‑click stubs/XPPython3 → Mark Directory As → Sources Root
-
-![Structure](structure.png)
+Right‑click stubs → Mark Directory As → Sources Root
 
 This enables:
 • xp.* autocomplete  
 • mypy‑safe type checking  
-• fast indexing without PyCharm freezes  
 
 ---
 
@@ -79,10 +63,12 @@ This ensures:
 ## Summary
 Your project now has a unified import model:
 
+![Structure](structure.png)
+
 | Environment         | Import Root                         |
 |---------------------|-------------------------------------|
 | X‑Plane (XPPython3) | plugins/                            |
-| PyCharm             | plugins/                            |
+| PyCharm             | project, plugins/, stubs/           |
 | FakeXP headless     | plugins/ (via sys.path)             |
 | Working directory   | project root (`xplane-python-dev/`) |
 

@@ -27,7 +27,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, MutableSequence, Sequence, Union
+
+from simless.libs.fake_xp_interface import FakeXPInterface
 
 
 # ===========================================================================
@@ -65,6 +67,7 @@ class FakeDataRef:
 # FakeXPDataRef — auto-generation using DataRefManager defaults + heuristics
 # ===========================================================================
 class FakeXPDataRef:
+    xp: FakeXPInterface  # established in FakeXP
 
     public_api_names = [
         "fake_register_dataref",
@@ -303,7 +306,7 @@ class FakeXPDataRef:
     def getDatavf(
         self,
         handle: Union[FakeDataRef, str],
-        out: Optional[Sequence[float]],
+        out: Optional[MutableSequence[float]],
         offset: int,
         count: int,
     ) -> Optional[int]:
@@ -318,7 +321,7 @@ class FakeXPDataRef:
     def setDatavf(
         self,
         handle: Union[FakeDataRef, str],
-        values: Sequence[float],
+        values: MutableSequence[float],
         offset: int,
         count: int,
     ) -> None:
@@ -330,7 +333,7 @@ class FakeXPDataRef:
     def getDatavi(
         self,
         handle: Union[FakeDataRef, str],
-        out: Optional[Sequence[int]],
+        out: Optional[MutableSequence[int]],
         offset: int,
         count: int,
     ) -> Optional[int]:
@@ -345,7 +348,7 @@ class FakeXPDataRef:
     def setDatavi(
         self,
         handle: Union[FakeDataRef, str],
-        values: Sequence[int],
+        values: MutableSequence[int],
         offset: int,
         count: int,
     ) -> None:

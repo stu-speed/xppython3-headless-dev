@@ -10,6 +10,7 @@
 #
 # CORE INVARIANTS
 #   - Will use the Public API as much as possible
+#   - Runner will use the Public API as much as possible
 #   - Runner is the authoritative code for simless execution.
 # ===========================================================================
 
@@ -17,17 +18,16 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, TYPE_CHECKING
+from typing import Any, Dict, List
 
 from simless.libs.loader import SimlessPluginLoader, LoadedPlugin
-if TYPE_CHECKING:
-    from simless.libs.fake_xp import FakeXP
+from simless.libs.fake_xp_interface import FakeXPInterface
 
 
 class SimlessRunner:
     def __init__(
         self,
-        xp: FakeXP,
+        xp: FakeXPInterface,
         *,
         run_time: float = -1.0,
     ) -> None:

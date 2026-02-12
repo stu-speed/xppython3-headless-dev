@@ -1,12 +1,14 @@
 
 ## AI‑Assisted Coding for XPPython3
 
-I have MS CoPilot (not optimized for coding) which has meaningful limitations for AI assisted coding. 
+I have MS CoPilot Feb/2026 which has meaningful limitations for AI assisted coding. 
 The biggest constraint is the **context window**: the session has a limited short‑term,
 detailed memory (the active context) and a compressed, long‑term memory (context compression).
 This guide documents what I learned from this project to get the most out of AI‑assisted coding within those constraints.
 
 This AI generated guide merged what I found for XPPython3 coding with what has already been widely published.
+
+This project provides a solid framework for creating fun X-plane AI generated code.
 
 ---
 
@@ -35,8 +37,8 @@ Regenerate the README periodically as the design evolves so the model’s contex
 The AI generated simless libs in this project are broken out into many files with requirement comments on top.
 
 AI performs best when each file has a **single, clear purpose**.  
-At the top of every file, include a requirements block describing:
 
+At the top of every file, include a requirements block describing:
 - the file’s role  
 - invariants  
 - must/must‑not rules  
@@ -50,8 +52,8 @@ AI will honor these requirements consistently across regenerations.
 ## 3. Understand how AI treats old requirements
 
 AI tends to preserve earlier constraints unless explicitly told otherwise.  
-This means:
 
+This means:
 - old requirements remain in force  
 - generated code stays backward‑compatible  
 - the model avoids breaking earlier assumptions  
@@ -63,10 +65,9 @@ If a requirement is obsolete, explicitly tell the AI to ignore or remove it.
 ## 4. Avoid unnecessary indirection
 
 AI is comfortable generating deep abstraction layers because it can track them easily.  
-You cannot.
+You cannot.  Don't let it.
 
 Push back against:
-
 - extra wrapper classes  
 - unnecessary factories  
 - redundant interfaces  
@@ -78,16 +79,15 @@ Keep the architecture simple and explicit.
 
 ## 5. Use strong typing everywhere
 
-Give stubs.XPPython3 xp.pyi and xp_typing.pyi files to AI model to follow.
+Give stubs.XPPython3.xp_typing.pyi and stubs.xp_interface.pyi files to AI model to follow.
 
 Strong typing (preferably **mypy‑clean**) dramatically improves:
-
 - AI’s ability to reason about your code  
 - IDE code inspection  
 - error detection  
 - long‑term maintainability  
 
-Do not accept AI‑generated code unless it passes static analysis and IDE inspection.  AI will
+Do not accept AI‑generated code unless it passes IDE inspection and unit tests.  AI will
 hallucinate methods that logically should exist but don't.
 
 ---

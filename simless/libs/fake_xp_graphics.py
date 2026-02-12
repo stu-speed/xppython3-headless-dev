@@ -24,7 +24,8 @@ from __future__ import annotations
 from typing import Any, Callable, List, Tuple
 
 import dearpygui.dearpygui as dpg
-import XPPython3
+
+from simless.libs.fake_xp_interface import FakeXPInterface
 
 
 class FakeXPGraphics:
@@ -32,6 +33,7 @@ class FakeXPGraphics:
     DearPyGui-backed graphics subsystem mixin for FakeXP.
     Provides a minimal XPLMGraphics-like API surface for simless GUI testing.
     """
+    xp: FakeXPInterface  # established in FakeXP
 
     public_api_names = [
         "registerDrawCallback",
@@ -84,7 +86,7 @@ class FakeXPGraphics:
         try:
             dpg.create_context()
             dpg.create_viewport(
-                title="FakeXP Graphics",
+                title="Fake X-plane Window",
                 width=self._screen_w,
                 height=self._screen_h,
             )
@@ -92,7 +94,7 @@ class FakeXPGraphics:
             dpg.show_viewport()
             self._dpg_initialized = True
         except Exception as exc:
-            XPPython3.xp.log(f"[Graphics] DPG init error: {exc!r}")
+            self.xp.log(f"[Graphics] DPG init error: {exc!r}")
 
     # ----------------------------------------------------------------------
     # DRAW CALLBACK REGISTRATION
@@ -155,7 +157,7 @@ class FakeXPGraphics:
                     ),
                 )
         except Exception as exc:
-            XPPython3.xp.log(f"[Graphics] drawString error: {exc!r}")
+            self.xp.log(f"[Graphics] drawString error: {exc!r}")
 
     def drawNumber(
         self,
@@ -242,11 +244,18 @@ class FakeXPGraphics:
     # ----------------------------------------------------------------------
     # FRAME RENDERING
     # ----------------------------------------------------------------------
+
     def _draw_frame(self) -> None:
         """
         Called by SimlessRunner once per frame.
         Executes draw callbacks, renders widgets, and renders DearPyGui.
         """
+        # Detect viewport closure
+        if self._dpg_initialized and not dpg.is_dearpygui_running():
+            # Tell the runner to stop
+            self.xp._quit()
+            return
+
         if getattr(self, "enable_gui", False):
             self._ensure_dpg()
 
@@ -257,18 +266,18 @@ class FakeXPGraphics:
             try:
                 cb(phase, wantsBefore)
             except Exception as exc:
-                XPPython3.xp.log(f"[Graphics] draw callback error: {exc!r}")
+                self.xp.log(f"[Graphics] draw callback error: {exc!r}")
 
         # Render widgets if widget subsystem is present
         if hasattr(self, "_draw_all_widgets"):
             try:
                 self._draw_all_widgets()
             except Exception as exc:
-                XPPython3.xp.log(f"[Graphics] widget render error: {exc!r}")
+                self.xp.log(f"[Graphics] widget render error: {exc!r}")
 
         # Render DPG frame
         if self._dpg_initialized:
             try:
                 dpg.render_dearpygui_frame()
             except Exception as exc:
-                XPPython3.xp.log(f"[Graphics] frame render error: {exc!r}")
+                self.xp.log(f"[Graphics] frame render error: {exc!r}")

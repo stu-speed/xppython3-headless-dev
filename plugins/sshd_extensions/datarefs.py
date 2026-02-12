@@ -36,6 +36,7 @@
 #
 # VALUE ACCESS RULES
 #   - get_value() returns raw X‑Plane values without coercion.
+#   - set_value() enforces dtype, array_size, and writability.
 #   - Arrays must match array_size exactly.
 #   - Scalars must be Python primitives.
 #
@@ -137,12 +138,8 @@ class DataRefSpec:
         is_dummy: bool,
         array_size: Optional[int] = None,
     ) -> "DataRefSpec":
-        """
-        Build a spec from a real XPLMDataRefInfo_t-like object.
-        """
         dtype = info.type
 
-        # Determine array_size
         if array_size is None:
             if dtype in (
                 int(DRefType.FLOAT),
@@ -173,10 +170,6 @@ class DataRefSpec:
     # ------------------------------------------------------------------
     @classmethod
     def dummy(cls, path: str, *, required: bool, default: Any) -> "DataRefSpec":
-        """
-        Dummy spec used before X‑Plane provides the real DataRef.
-        Type/shape inferred from defaults; later promoted via promote().
-        """
         if isinstance(default, (list, bytes, bytearray)):
             array_size = len(default)
         else:
@@ -202,9 +195,6 @@ class DataRefSpec:
         info: XPLMDataRefInfo_t,
         array_size: Optional[int],
     ) -> None:
-        """
-        Promote a dummy spec to a real, bound DataRef using explicit array_size.
-        """
         self.handle = handle
         self.is_dummy = False
 
@@ -228,10 +218,7 @@ class DataRefSpec:
         self.array_size = array_size
 
         # XP initializes DataRefs to zero; align defaults
-        if array_size > 0:
-            self.default = [0.0] * array_size
-        else:
-            self.default = 0.0
+        self.default = [0.0] * array_size if array_size > 0 else 0.0
 
 
 # ===========================================================================
@@ -260,11 +247,9 @@ class DataRefManager:
         self.specs: Dict[str, DataRefSpec] = {}
         self._all_real: bool = True
 
-        # Optional: allow FakeXP to bind for simless defaults
         if hasattr(self.xp, "bind_dataref_manager"):
             self.xp.bind_dataref_manager(self)
 
-        # Initialize dummy specs if provided
         if datarefs:
             self._all_real = False
             for path, cfg in datarefs.items():
@@ -285,6 +270,9 @@ class DataRefManager:
     def get_spec(self, path: str) -> Optional[DataRefSpec]:
         return self.specs.get(path)
 
+    # ------------------------------------------------------------------
+    # Value retrieval
+    # ------------------------------------------------------------------
     def get_value(self, path: str) -> Any:
         spec = self.specs.get(path)
         if spec is None:
@@ -321,6 +309,79 @@ class DataRefManager:
 
         raise TypeError(f"Unsupported dtype {t}")
 
+    # ------------------------------------------------------------------
+    # Value write
+    # ------------------------------------------------------------------
+    def set_value(self, path: str, value: Any) -> None:
+        spec = self.specs.get(path)
+        if spec is None:
+            raise KeyError(f"Unknown DataRef '{path}'")
+
+        if spec.is_dummy or spec.handle is None:
+            raise RuntimeError(f"DataRef '{path}' is not ready; cannot set value")
+
+        if not spec.writable:
+            raise PermissionError(f"DataRef '{path}' is not writable")
+
+        xp = self.xp
+        h = spec.handle
+        t = spec.type
+
+        # Scalars
+        if t == int(DRefType.FLOAT):
+            if not isinstance(value, (int, float)):
+                raise TypeError(f"Expected float for '{path}'")
+            xp.setDataf(h, float(value))
+            return
+
+        if t == int(DRefType.INT):
+            if not isinstance(value, (int, float)):
+                raise TypeError(f"Expected int for '{path}'")
+            xp.setDatai(h, int(value))
+            return
+
+        if t == int(DRefType.DOUBLE):
+            if not isinstance(value, (int, float)):
+                raise TypeError(f"Expected double for '{path}'")
+            xp.setDatad(h, float(value))
+            return
+
+        # Arrays
+        if t == int(DRefType.FLOAT_ARRAY):
+            if not isinstance(value, (list, tuple)):
+                raise TypeError(f"Expected list[float] for '{path}'")
+            if len(value) != spec.array_size:
+                raise ValueError(
+                    f"Array size mismatch for '{path}': expected {spec.array_size}, got {len(value)}"
+                )
+            xp.setDatavf(h, value, 0, spec.array_size)
+            return
+
+        if t == int(DRefType.INT_ARRAY):
+            if not isinstance(value, (list, tuple)):
+                raise TypeError(f"Expected list[int] for '{path}'")
+            if len(value) != spec.array_size:
+                raise ValueError(
+                    f"Array size mismatch for '{path}': expected {spec.array_size}, got {len(value)}"
+                )
+            xp.setDatavi(h, value, 0, spec.array_size)
+            return
+
+        if t == int(DRefType.BYTE_ARRAY):
+            if not isinstance(value, (bytes, bytearray)):
+                raise TypeError(f"Expected bytes/bytearray for '{path}'")
+            if len(value) != spec.array_size:
+                raise ValueError(
+                    f"Array size mismatch for '{path}': expected {spec.array_size}, got {len(value)}"
+                )
+            xp.setDatab(h, value, 0, spec.array_size)
+            return
+
+        raise TypeError(f"Unsupported dtype {t}")
+
+    # ------------------------------------------------------------------
+    # Utility
+    # ------------------------------------------------------------------
     def all_paths(self) -> Iterable[str]:
         return self.specs.keys()
 
@@ -333,9 +394,6 @@ class DataRefManager:
     # Startup resolution
     # ------------------------------------------------------------------
     def ready(self, counter: int) -> bool:
-        """
-        Bind all declared DataRefs once, using xp.findDataRef + xp.getDataRefInfo.
-        """
         if self._all_real:
             return True
 
@@ -356,7 +414,6 @@ class DataRefManager:
 
             info = self.xp.getDataRefInfo(handle)
 
-            # Compute array_size explicitly
             t = info.type
             if t == int(DRefType.FLOAT_ARRAY):
                 array_size = self.xp.getDatavf(handle, None, 0, 0)
@@ -373,7 +430,6 @@ class DataRefManager:
             self._all_real = True
             return True
 
-        # Timeout
         elapsed = counter - self._start_counter
         if elapsed > self.timeout:
             missing = [

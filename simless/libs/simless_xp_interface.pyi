@@ -1,9 +1,9 @@
-# stubs/simless/libs/simless_xp_interface.pyi
+# simless/libs/simless_xp_interface.pyi
 # ===========================================================================
 # SimlessXPInterface — typed, minimal API contract for xp.* in simless mode
 #
 # PURPOSE
-#   Defines the production‑safe xp.* API surface that FakeXP must implement.
+#   Defines the subset of xp.* API surface that FakeXP can make available.
 #   This Protocol exists solely for strong typing, IDE support, and
 #   architectural clarity during simless development.
 #
@@ -20,11 +20,6 @@
 #   FakeXPInterface extends this Protocol with simless‑only helpers such as
 #   fake_register_dataref() and bind_dataref_manager(). Those extensions MUST
 #   NOT appear here, and production plugins MUST NEVER see them.
-#
-# PRODUCTION SAFETY
-#   Production plugins NEVER import this file. They import the real
-#   XPPython3 xp.* module. This file is strictly for simless development,
-#   FakeXP implementation, DataRefManager, and test harnesses.
 # ===========================================================================
 
 from __future__ import annotations
