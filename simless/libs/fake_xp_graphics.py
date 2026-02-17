@@ -17,11 +17,12 @@
 #   - DearPyGui is used only for visualization; never exposed to plugins.
 #   - DPG context is initialized lazily and exactly once.
 #   - No automatic layout, no coordinate transforms.
+#   - Background FakeXP Graphics Surface supports XPLMGraphics emulation.
 # ===========================================================================
 
 from __future__ import annotations
 
-from typing import Any, Callable, List, Tuple
+from typing import Any, Callable, List, Tuple, Sequence, Optional
 
 import dearpygui.dearpygui as dpg
 
@@ -57,7 +58,7 @@ class FakeXPGraphics:
         Called by FakeXP during construction.
         """
         # Draw callbacks: (callback, phase, wantsBefore)
-        self._draw_callbacks: List[tuple[Callable, int, int]] = []
+        self._draw_callbacks: List[tuple[Callable[[int, int], Any], int, int]] = []
 
         # Texture bookkeeping (simless stub)
         self._next_tex_id: int = 1
@@ -71,28 +72,55 @@ class FakeXPGraphics:
 
         # DearPyGui context is created lazily
         self._dpg_initialized: bool = False
+        self._drawlist_id: Optional[int] = None
 
     # ----------------------------------------------------------------------
     # DPG INITIALIZATION
     # ----------------------------------------------------------------------
     def _ensure_dpg(self) -> None:
-        """
-        Initialize DearPyGui exactly once.
-        Called automatically when GUI mode is enabled.
-        """
         if self._dpg_initialized:
             return
 
         try:
             dpg.create_context()
             dpg.create_viewport(
-                title="Fake X-plane Window",
+                title="Fake X-Plane",
                 width=self._screen_w,
                 height=self._screen_h,
             )
             dpg.setup_dearpygui()
             dpg.show_viewport()
+
+            # Defer graphics surface creation until frame 1
+            def _create_graphics_surface(sender, app_data):
+                try:
+                    # Child window = non-interactive framebuffer layer
+                    self._graphics_window = dpg.add_child_window(
+                        label="##gfx",
+                        pos=(0, 0),
+                        width=self._screen_w,
+                        height=self._screen_h,
+                        no_scrollbar=True,
+                        no_scroll_with_mouse=True,
+                        no_background=True,
+                        border=False,
+                    )
+
+                    # Drawlist inside the child window
+                    self._drawlist_id = dpg.add_drawlist(
+                        parent=self._graphics_window,
+                        width=self._screen_w,
+                        height=self._screen_h,
+                    )
+
+                except Exception as exc:
+                    self.xp.log(f"[Graphics] graphics surface creation failed: {exc!r}")
+
+            # Schedule for frame 1 (after viewport is active)
+            dpg.set_frame_callback(1, _create_graphics_surface)
+
             self._dpg_initialized = True
+
         except Exception as exc:
             self.xp.log(f"[Graphics] DPG init error: {exc!r}")
 
@@ -131,37 +159,42 @@ class FakeXPGraphics:
     # ----------------------------------------------------------------------
     def drawString(
         self,
-        color: List[float],
+        color: Sequence[float],
         x: int,
         y: int,
         text: str,
-        wordWrapWidth: int,
+        wordWrap: int,
+        fontID: int,
     ) -> None:
         """
         Draw a string at (x, y) using DearPyGui.
-        wordWrapWidth is ignored (simless stub).
+
+        Signature matches xp.drawString(color, x, y, text, wordWrap, fontID).
+        wordWrap and fontID are accepted but ignored in simless mode.
         """
-        if not self._dpg_initialized:
+        if not self._dpg_initialized or self._drawlist_id is None:
             return
 
+        self.xp.log(f"[Graphics] drawString at ({x}, {y}) text={text!r}")
+
         try:
-            with dpg.draw_layer():
-                dpg.draw_text(
-                    pos=(x, y),
-                    text=text,
-                    color=(
-                        int(color[0] * 255),
-                        int(color[1] * 255),
-                        int(color[2] * 255),
-                        255,
-                    ),
-                )
+            dpg.draw_text(
+                pos=(x, y),
+                text=text,
+                color=(
+                    int(color[0] * 255),
+                    int(color[1] * 255),
+                    int(color[2] * 255),
+                    255,
+                ),
+                parent=self._drawlist_id,
+            )
         except Exception as exc:
             self.xp.log(f"[Graphics] drawString error: {exc!r}")
 
     def drawNumber(
         self,
-        color: List[float],
+        color: Sequence[float],
         x: int,
         y: int,
         number: float,
@@ -172,7 +205,7 @@ class FakeXPGraphics:
         Draw a formatted number using drawString().
         """
         fmt = f"{{:{digits}.{decimals}f}}"
-        self.drawString(color, x, y, fmt.format(number), 0)
+        self.drawString(color, x, y, fmt.format(number), 0, 0)
 
     # ----------------------------------------------------------------------
     # GRAPHICS STATE (STUB)
@@ -244,7 +277,6 @@ class FakeXPGraphics:
     # ----------------------------------------------------------------------
     # FRAME RENDERING
     # ----------------------------------------------------------------------
-
     def _draw_frame(self) -> None:
         """
         Called by SimlessRunner once per frame.

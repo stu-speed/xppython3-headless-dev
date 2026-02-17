@@ -47,15 +47,12 @@ xppython3-headless-dev/
 │       ├── fake_xp_dataref.py              # DataRef engine (managed-spec consumer + inference)
 │       ├── fake_xp_utilities.py            # Commands, menus, misc XPLM shims
 │       └── fake_xp_interface.py            # Runtime shim (TYPE_CHECKING guard)
+│       ├── simless_xp_interface.pyi        # Subset of xp API implemented for simless
+│       └── fake_xp_interface.pyi           # FakeXPInterface + FakeRefInfo (simless-only typing)
 │
 ├── stubs/                                  # IDE-visible stubs for real XPPython3 + simless Protocols
 │   ├── sshd_extensions/
 │   │   └── xp_interface.pyi                # Generated Protocol: full xp.* API surface for prod typing
-│   │
-│   ├── simless/
-│   │   └── libs/
-│   │       ├── simless_xp_interface.pyi    # Subset of xp API implemented for simless
-│   │       └── fake_xp_interface.pyi       # FakeXPInterface + FakeRefInfo (simless-only typing)
 │   │
 │   └── XPPython3/
 │       ├── xp.pyi                          # Full XPPython3 API surface

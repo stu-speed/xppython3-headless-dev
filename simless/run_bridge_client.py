@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import time
 
-from sshd_extensions.xp_bridge_protocol import XPBridgeClient, BridgeMessage
-from simless.libs.constants import BRIDGE_HOST, BRIDGE_PORT
+from sshd_extensions.bridge_protocol import (
+    XPBridgeClient,
+    BridgeMsgType,
+    BRIDGE_PORT
+)
 
+
+BRIDGE_HOST = "10.22.50.189"
 
 DATAREF_PATHS = [
     "sim/cockpit2/temperature/outside_air_temp_degc",
@@ -21,10 +26,9 @@ def run_bridge_client() -> None:
         client.connect()
         print("Connected")
 
-        # Register DataRefs
-        for path in DATAREF_PATHS:
-            print(f"[Client] ADD {path}")
-            client.add(path)
+        # Register DataRefs (list-based ADD)
+        print(f"[Client] ADD {DATAREF_PATHS}")
+        client.add(DATAREF_PATHS)
 
     except Exception as exc:
         print(f"Connection failed: {exc!r}")
@@ -34,10 +38,9 @@ def run_bridge_client() -> None:
 
     try:
         while True:
-            msg = client.poll()
-            if msg is None:
-                continue
-            print(f"[Client] {msg}")
+            msgs = client.poll()   # always returns a list (possibly empty)
+            for msg in msgs:
+                print(msg.to_dict())
 
             time.sleep(0.05)
 
