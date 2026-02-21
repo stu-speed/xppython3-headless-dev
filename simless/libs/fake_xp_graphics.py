@@ -15,7 +15,7 @@
 #
 # SIMLESS RULES
 #   - DearPyGui is used only for visualization; never exposed to plugins.
-#   - DPG context is initialized lazily and exactly once.
+#   - DPG context + viewport + graphics surface are created BEFORE plugin enable.
 #   - No automatic layout, no coordinate transforms.
 #   - Background FakeXP Graphics Surface supports XPLMGraphics emulation.
 # ===========================================================================
@@ -57,31 +57,37 @@ class FakeXPGraphics:
         Initialize internal graphics state.
         Called by FakeXP during construction.
         """
-        # Draw callbacks: (callback, phase, wantsBefore)
         self._draw_callbacks: List[tuple[Callable[[int, int], Any], int, int]] = []
 
         # Texture bookkeeping (simless stub)
         self._next_tex_id: int = 1
         self._textures: dict[int, Any] = {}
 
-        # Screen + mouse state (static unless overridden)
+        # Screen + mouse state
         self._mouse_x: int = 0
         self._mouse_y: int = 0
         self._screen_w: int = 1920
         self._screen_h: int = 1080
 
-        # DearPyGui context is created lazily
+        # DearPyGui state
         self._dpg_initialized: bool = False
+        self._graphics_window: Optional[int] = None
         self._drawlist_id: Optional[int] = None
 
     # ----------------------------------------------------------------------
-    # DPG INITIALIZATION
+    # DPG INITIALIZATION (PRODUCTION-PARITY)
     # ----------------------------------------------------------------------
-    def _ensure_dpg(self) -> None:
+    def init_graphics_root(self) -> None:
+        """
+        Initialize DearPyGui context, viewport, and root graphics surface
+        BEFORE any plugin enable. This matches production X-Plane behavior:
+        the widget system is fully ready before plugins run.
+        """
         if self._dpg_initialized:
             return
 
         try:
+            # Create DPG context + viewport
             dpg.create_context()
             dpg.create_viewport(
                 title="Fake X-Plane",
@@ -91,34 +97,28 @@ class FakeXPGraphics:
             dpg.setup_dearpygui()
             dpg.show_viewport()
 
-            # Defer graphics surface creation until frame 1
-            def _create_graphics_surface(sender, app_data):
-                try:
-                    # Child window = non-interactive framebuffer layer
-                    self._graphics_window = dpg.add_child_window(
-                        label="##gfx",
-                        pos=(0, 0),
-                        width=self._screen_w,
-                        height=self._screen_h,
-                        no_scrollbar=True,
-                        no_scroll_with_mouse=True,
-                        no_background=True,
-                        border=False,
-                    )
+            # Root window at top level
+            with dpg.window(
+                    label="##gfx_root",
+                    pos=(0, 0),
+                    width=self._screen_w,
+                    height=self._screen_h,
+                    no_title_bar=True,
+                    no_resize=True,
+                    no_move=True,
+                    no_scrollbar=True,
+                    no_collapse=True,
+            ) as root:
+                self._graphics_window = root
 
-                    # Drawlist inside the child window
-                    self._drawlist_id = dpg.add_drawlist(
-                        parent=self._graphics_window,
-                        width=self._screen_w,
-                        height=self._screen_h,
-                    )
+                # Drawlist inside the root window
+                self._drawlist_id = dpg.add_drawlist(
+                    parent=self._graphics_window,
+                    width=self._screen_w,
+                    height=self._screen_h,
+                )
 
-                except Exception as exc:
-                    self.xp.log(f"[Graphics] graphics surface creation failed: {exc!r}")
-
-            # Schedule for frame 1 (after viewport is active)
-            dpg.set_frame_callback(1, _create_graphics_surface)
-
+            dpg.set_primary_window(self._graphics_window, True)
             self._dpg_initialized = True
 
         except Exception as exc:
@@ -133,10 +133,6 @@ class FakeXPGraphics:
         phase: int,
         wantsBefore: int,
     ) -> None:
-        """
-        Register a draw callback.
-        FakeXP calls these once per frame in _draw_frame().
-        """
         self._draw_callbacks.append((cb, phase, wantsBefore))
 
     def unregisterDrawCallback(
@@ -145,9 +141,6 @@ class FakeXPGraphics:
         phase: int,
         wantsBefore: int,
     ) -> None:
-        """
-        Remove a previously registered draw callback.
-        """
         self._draw_callbacks = [
             entry
             for entry in self._draw_callbacks
@@ -166,16 +159,8 @@ class FakeXPGraphics:
         wordWrap: int,
         fontID: int,
     ) -> None:
-        """
-        Draw a string at (x, y) using DearPyGui.
-
-        Signature matches xp.drawString(color, x, y, text, wordWrap, fontID).
-        wordWrap and fontID are accepted but ignored in simless mode.
-        """
         if not self._dpg_initialized or self._drawlist_id is None:
             return
-
-        self.xp.log(f"[Graphics] drawString at ({x}, {y}) text={text!r}")
 
         try:
             dpg.draw_text(
@@ -201,9 +186,6 @@ class FakeXPGraphics:
         digits: int,
         decimals: int,
     ) -> None:
-        """
-        Draw a formatted number using drawString().
-        """
         fmt = f"{{:{digits}.{decimals}f}}"
         self.drawString(color, x, y, fmt.format(number), 0, 0)
 
@@ -220,18 +202,12 @@ class FakeXPGraphics:
         texMode: int,
         depth: int,
     ) -> None:
-        """
-        Stub: X-Plane graphics state flags are ignored in simless mode.
-        """
         return
 
     # ----------------------------------------------------------------------
     # TEXTURE API (STUB)
     # ----------------------------------------------------------------------
     def generateTextureNumbers(self, count: int) -> List[int]:
-        """
-        Allocate texture IDs (simless stub).
-        """
         ids: List[int] = []
         for _ in range(count):
             tid = self._next_tex_id
@@ -241,15 +217,9 @@ class FakeXPGraphics:
         return ids
 
     def bindTexture2d(self, textureID: int, unit: int) -> None:
-        """
-        Stub: No real texture binding in simless mode.
-        """
         return
 
     def deleteTexture(self, textureID: int) -> None:
-        """
-        Remove a texture ID from bookkeeping.
-        """
         self._textures.pop(textureID, None)
 
     # ----------------------------------------------------------------------
@@ -262,12 +232,8 @@ class FakeXPGraphics:
         return (self._mouse_x, self._mouse_y)
 
     def _update_mouse(self) -> None:
-        """
-        Update mouse position from DearPyGui.
-        """
         if not self._dpg_initialized:
             return
-
         try:
             pos = dpg.get_mouse_pos()
             self._mouse_x, self._mouse_y = int(pos[0]), int(pos[1])
@@ -282,14 +248,9 @@ class FakeXPGraphics:
         Called by SimlessRunner once per frame.
         Executes draw callbacks, renders widgets, and renders DearPyGui.
         """
-        # Detect viewport closure
         if self._dpg_initialized and not dpg.is_dearpygui_running():
-            # Tell the runner to stop
             self.xp._quit()
             return
-
-        if getattr(self, "enable_gui", False):
-            self._ensure_dpg()
 
         self._update_mouse()
 
@@ -300,7 +261,7 @@ class FakeXPGraphics:
             except Exception as exc:
                 self.xp.log(f"[Graphics] draw callback error: {exc!r}")
 
-        # Render widgets if widget subsystem is present
+        # Render widgets if widget subsystem exists
         if hasattr(self, "_draw_all_widgets"):
             try:
                 self._draw_all_widgets()

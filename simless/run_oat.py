@@ -26,7 +26,7 @@ class MDR(str, Enum):
 
 
 def run_simless_oat_gui() -> None:
-    xp = FakeXP(debug=True, enable_gui=True)
+    xp = FakeXP(debug=True, enable_gui=True, enable_dataref_bridge=True)
     XPPython3.xp = xp
 
     xp._bridge_host = BRIDGE_HOST

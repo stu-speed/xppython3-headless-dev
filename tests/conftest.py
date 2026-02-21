@@ -1,72 +1,71 @@
 # tests/conftest.py
+# ===========================================================================
+# Global pytest fixtures for simless tests
+#
+# ROLE
+#   • Ensure each test begins with a clean XPPython3.xp binding.
+#   • Provide a deterministic inline plugin module factory for loader tests.
+#
+# INVARIANTS
+#   • Never instantiate FakeXP here.
+#   • Never import plugin modules here.
+#   • Inline plugin modules must define PythonInterface explicitly.
+# ===========================================================================
 
 import pytest
-import sys
-import inspect
-import simless.libs.loader as loader
+import types
 import XPPython3
 
 
 @pytest.fixture(autouse=True)
 def reset_xp():
-    # Ensure each test starts with a clean FakeXP binding
+    """
+    Ensure each test starts with a clean FakeXP binding.
+
+    Tests are responsible for constructing FakeXP and assigning:
+        XPPython3.xp = FakeXP(...)
+    """
     XPPython3.xp = None
 
 
-@pytest.fixture(autouse=True)
-def bypass_plugin_loader(monkeypatch):
+@pytest.fixture
+def inline_plugin():
     """
-    Forces SimlessPluginLoader to load inline plugins from sys.modules
-    instead of requiring real files in plugins/.
-    """
+    Factory for creating inline plugin modules.
 
-    # 1. Disable filesystem validation
-    monkeypatch.setattr(
-        loader.SimlessPluginLoader,
-        "_validate",
-        lambda self, name: True
-    )
-
-    # 2. Override _load_single to load inline modules from sys.modules
-    def _load_single_inline(self, full_name: str):
-        # full_name is "plugins.<name>"
-        short_name = full_name.split(".", 1)[1]
-
-        if short_name not in sys.modules:
-            raise RuntimeError(
-                f"[Loader] Inline plugin '{short_name}' not found in sys.modules"
-            )
-
-        module = sys.modules[short_name]
-
-        iface_cls = getattr(module, "PythonInterface", None)
-        if iface_cls is None or not inspect.isclass(iface_cls):
-            raise RuntimeError(
-                f"[Loader] Inline plugin '{short_name}' has no PythonInterface class"
-            )
-
-        # Instantiate PythonInterface
-        iface = iface_cls()
-
-        # Call XPluginStart() and normalize return tuple
-        name, sig, desc = iface.XPluginStart()
-
-        # Assign plugin_id using the loader’s per-instance counter
-        plugin_id = self._next_id
-        self._next_id += 1
-
-        # Construct LoadedPlugin using the NEW signature
-        return loader.LoadedPlugin(
-            plugin_id=plugin_id,
-            name=name,
-            sig=sig,
-            desc=desc,
-            module=module,
-            instance=iface,
+    Usage:
+        mod = inline_plugin(
+            name="my_plugin",
+            plugin_obj=plugin_instance
         )
 
-    monkeypatch.setattr(
-        loader.SimlessPluginLoader,
-        "_load_single",
-        _load_single_inline
-    )
+    The returned object is a ModuleType suitable for SimlessPluginLoader.
+    """
+
+    def _create(
+        *,
+        name: str,
+        plugin_obj,
+    ):
+        mod = types.ModuleType(name)
+
+        class PythonInterface:
+            def __init__(self):
+                self.obj = plugin_obj
+
+            def XPluginStart(self):
+                return self.obj.XPluginStart()
+
+            def XPluginEnable(self):
+                return self.obj.XPluginEnable()
+
+            def XPluginDisable(self):
+                return self.obj.XPluginDisable()
+
+            def XPluginStop(self):
+                return self.obj.XPluginStop()
+
+        mod.PythonInterface = PythonInterface
+        return mod
+
+    return _create

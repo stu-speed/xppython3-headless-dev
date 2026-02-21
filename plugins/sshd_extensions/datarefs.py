@@ -1,52 +1,41 @@
 # plugins/sshd_extensions/datarefs.py
 # ===========================================================================
-# DataRefs — unified production/simless DataRef layer (PRODUCTION ONLY)
+# DataRefs — unified production/simless DataRef layer
 #
 # ROLE
 #   Provide a deterministic, typed, validation‑driven interface for all
 #   DataRef metadata and value access. This subsystem is the authoritative
 #   source of truth for DataRef shape, readiness, writability, and type
-#   correctness. It must remain independent of X‑Plane transport concerns.
+#   correctness. It remains independent of X‑Plane transport concerns.
 #
-# ENVIRONMENT RULE
-#   This file is PRODUCTION‑ONLY.
-#   Simless must never import this module. FakeXPDataRef provides the
-#   simless‑only DataRef engine.
+# ENVIRONMENT RULES
+#   • In PRODUCTION:
+#         Each plugin may instantiate its own DataRefManager. Instances are
+#         independent and simply wrap the X‑Plane SDK’s global DataRef system.
+#
+#   • In SIMLESS:
+#         All plugins must transparently share a single DataRefManager bound
+#         to the FakeXP instance. This preserves the production invariant of
+#         “one simulator → one DataRef namespace” while allowing plugins to
+#         instantiate DataRefManager normally.
+#
+#   • No plugin code changes are required. DataRefManager detects whether the
+#     xp interface already has a bound manager and reuses it automatically.
 #
 # CORE INVARIANTS
-#   - DataRefSpec is the canonical representation of a DataRef.
-#   - DataRefManager owns all validation, readiness tracking, and value
-#     retrieval semantics.
+#   - DataRefSpec is the canonical metadata representation.
+#   - DataRefManager owns all validation, readiness tracking, and value access.
 #   - No other subsystem may infer or validate DataRef metadata.
-#   - No dummy DataRefs are created unless explicitly requested.
-#   - No mutation of X‑Plane SDK objects; normalization happens here.
-#
-# METADATA RULES
-#   - DataRefSpec.from_info() receives:
-#         path, info, required, default, handle, is_dummy, array_size
-#   - array_size must be validated exclusively by _validate_array_size().
-#   - array_size=0 denotes scalar; >0 denotes array.
-#   - dtype, writable, and array_size must be internally consistent.
-#
-# VALIDATION RULES
-#   - All type, array, and writability checks occur inside DataRefSpec.
-#   - DataRefManager must reject invalid specs immediately.
-#   - Required DataRefs must enforce readiness timeouts.
-#   - Optional DataRefs must never block readiness.
-#
-# VALUE ACCESS RULES
+#   - Required DataRefs enforce readiness timeouts.
+#   - Optional DataRefs never block readiness.
 #   - get_value() returns raw X‑Plane values without coercion.
 #   - set_value() enforces dtype, array_size, and writability.
-#   - Arrays must match array_size exactly.
-#   - Scalars must be Python primitives.
 #
-# READINESS RULES
-#   - A DataRef is ready when:
-#         • handle is valid
-#         • metadata is validated
-#         • value retrieval succeeds
-#   - ready(counter) returns True only when all required DataRefs are ready
-#     or have timed out.
+# SINGLETON RULE (SIMLESS ONLY)
+#   - If xp already has a _dataref_manager attribute, DataRefManager.__new__()
+#     returns that instance instead of creating a new one.
+#   - Production xp objects do not have this attribute, so each plugin gets
+#     its own independent manager.
 # ===========================================================================
 
 from __future__ import annotations
@@ -73,10 +62,11 @@ class DRefType(IntEnum):
 # ===========================================================================
 # DataRefSpec — canonical metadata representation
 # ===========================================================================
+
 @dataclass(slots=True)
 class DataRefSpec:
     """
-    Unified DataRef specification.
+    Canonical DataRef specification.
 
     Shape is expressed via:
       • array_size = 0 for scalars
@@ -99,12 +89,6 @@ class DataRefSpec:
     # ------------------------------------------------------------------
     @staticmethod
     def _validate_array_size(path: str, dtype: int, array_size: int) -> int:
-        """
-        Enforce scalar/array rules:
-
-          • Scalar types → array_size must be 0
-          • Array types  → array_size must be > 0
-        """
         array_size = int(array_size)
 
         if dtype in (
@@ -228,38 +212,91 @@ class DataRefManager:
     """
     Unified DataRef manager for production and simless.
 
-    PRODUCTION‑ONLY:
-      This module must never be imported by simless. FakeXPDataRef provides
-      the simless DataRef engine. The only simless interaction allowed is
-      optional binding via xp.bind_dataref_manager().
+    PRODUCTION:
+        Each plugin may instantiate its own DataRefManager. Instances are
+        independent wrappers around the global X‑Plane DataRef system.
+
+    SIMLESS:
+        All plugins share a single DataRefManager bound to the FakeXP
+        instance. Plugins still instantiate DataRefManager normally, but
+        __new__ returns the shared instance.
     """
 
+    # ------------------------------------------------------------------
+    # Singleton-per-XP-instance (simless only)
+    # ------------------------------------------------------------------
+    def __new__(cls, xp, *args, **kwargs):
+        existing = getattr(xp, "_dataref_manager", None)
+        if existing is not None:
+            return existing
+
+        instance = super().__new__(cls)
+        setattr(xp, "_dataref_manager", instance)
+        return instance
+
+    # ------------------------------------------------------------------
+    # Initialization after new
+    # ------------------------------------------------------------------
     def __init__(
         self,
         xp: Any,
         datarefs: Optional[Dict[Any, Dict[str, Any]]] = None,
         timeout_seconds: float = 10.0,
     ) -> None:
-        self.xp = xp
-        self.timeout = timeout_seconds
-        self._start_counter: Optional[int] = None
+        """
+        __init__ may run multiple times if plugins instantiate repeatedly.
+        In simless, __new__ ensures a shared instance, so __init__ must:
+          - initialize core state only once
+          - ALWAYS merge new specs
+          - ALWAYS update timeout conservatively (max)
+        """
 
-        self.specs: Dict[str, DataRefSpec] = {}
-        self._all_real: bool = True
+        # --------------------------------------------------------------
+        # First-time initialization
+        # --------------------------------------------------------------
+        if not hasattr(self, "_initialized"):
+            self._initialized = True
+            self.xp = xp
+            self.specs: Dict[str, DataRefSpec] = {}
+            self._all_real = True
+            self._start_counter: Optional[int] = None
 
-        if hasattr(self.xp, "bind_dataref_manager"):
-            self.xp.bind_dataref_manager(self)
+            # Bind to XP if supported (production)
+            if hasattr(self.xp, "bind_dataref_manager"):
+                self.xp.bind_dataref_manager(self)
 
+            # Initial timeout
+            self.timeout = timeout_seconds
+        else:
+            # ----------------------------------------------------------
+            # Subsequent __init__ calls (simless)
+            # Timeout must be conservative: keep the maximum
+            # ----------------------------------------------------------
+            self.timeout = max(self.timeout, timeout_seconds)
+
+        # --------------------------------------------------------------
+        # Merge passed-in specs (append behavior)
+        # --------------------------------------------------------------
         if datarefs:
-            self._all_real = False
             for path, cfg in datarefs.items():
                 required = cfg.get("required", False)
                 default = cfg.get("default", None)
-                self.specs[path] = DataRefSpec.dummy(
-                    path,
-                    required=required,
-                    default=default,
-                )
+
+                if path not in self.specs:
+                    # New dummy spec
+                    self.specs[path] = DataRefSpec.dummy(
+                        path,
+                        required=required,
+                        default=default,
+                    )
+                    self._all_real = False
+                else:
+                    # Existing spec — update fields if provided
+                    spec = self.specs[path]
+                    if "required" in cfg:
+                        spec.required = required
+                    if "default" in cfg:
+                        spec.default = default
 
     # ------------------------------------------------------------------
     # Public API

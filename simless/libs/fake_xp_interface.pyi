@@ -17,26 +17,27 @@
 # ===========================================================================
 
 from __future__ import annotations
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable, Optional, List
 
-# Base production-safe xp.* API surface
 from simless.libs.simless_xp_interface import SimlessXPInterface
-
-# Simless-only DataRef types
 from simless.libs.fake_xp_dataref import FakeDataRef
+from sshd_extensions.bridge_protocol import XPBridgeClient
+from simless.libs.runner import SimlessRunner
+from simless.libs.fake_xp_widget import XPWidgetID
+from sshd_extensions.datarefs import DataRefManager
 
 
-# ===========================================================================
-# FakeXPInterface Protocol
-# ===========================================================================
 @runtime_checkable
 class FakeXPInterface(SimlessXPInterface, Protocol):
     """
     Simless-only API surface implemented by FakeXP.
 
-    These methods do NOT exist in real XPPython3 and must never appear in
-    SimlessXPInterface. They are used only by the simless runner,
-    DataRefManager, bridge modules, and test harnesses.
+    FakeXP extends the production-safe SimlessXPInterface with:
+      • DataRef auto-registration helpers
+      • DataRefManager binding
+      • simless lifecycle control
+      • bridge client creation and management
+      • GUI + widget + flightloop subsystems
     """
 
     # ------------------------------------------------------------------
@@ -44,6 +45,21 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
     # ------------------------------------------------------------------
     enable_gui: bool
     debug: bool
+    enable_dataref_bridge: bool
+
+    # ------------------------------------------------------------------
+    # Core simless state (strong typing)
+    # ------------------------------------------------------------------
+    _sim_time: float
+    _keyboard_focus: XPWidgetID | None
+
+    _dataref_manager: DataRefManager | None
+    _plugins: list[Any]
+    _disabled_plugins: set[int]
+
+    # Runner + bridge
+    _runner: SimlessRunner
+    bridge: XPBridgeClient | None
 
     # ------------------------------------------------------------------
     # DataRef auto-registration (simless only)
@@ -70,6 +86,18 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
         """
         Attach the DataRefManager so FakeXP can honor plugin defaults.
         Real XPPython3 does not support this.
+        """
+        ...
+
+    # ----------------------------------------------------------------------
+    # DPG INITIALIZATION (PRODUCTION-PARITY)
+    # ----------------------------------------------------------------------
+    def init_graphics_root(self) -> None:
+        """
+        Initialize DearPyGui context, viewport, and root graphics surface
+        BEFORE any plugin enable. This matches production X-Plane behavior:
+        the widget system is fully ready before plugins run.
+
         """
         ...
 

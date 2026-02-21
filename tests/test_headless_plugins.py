@@ -1,43 +1,22 @@
-import sys
-import types
+# tests/test_inline_plugins.py
+# ===========================================================================
+# Inline plugin tests using SimlessRunner + FakeXP
+# Fully refactored to use the inline_plugin fixture
+# ===========================================================================
+
 import XPPython3
 
+from sshd_extensions.bridge_protocol import BridgeData, BridgeDataType
+from sshd_extensions.datarefs import DRefType
 from simless.libs.fake_xp import FakeXP
 from simless.libs.runner import SimlessRunner
-
-
-def register_inline_plugin(name: str, plugin_obj) -> str:
-    """
-    Registers an inline plugin module so SimlessRunner can load it.
-    """
-    module = types.ModuleType(name)
-
-    class PythonInterface:
-        def __init__(self):
-            self.obj = plugin_obj
-
-        def XPluginStart(self):
-            return self.obj.XPluginStart()
-
-        def XPluginEnable(self):
-            return self.obj.XPluginEnable()
-
-        def XPluginDisable(self):
-            return self.obj.XPluginDisable()
-
-        def XPluginStop(self):
-            return self.obj.XPluginStop()
-
-    module.PythonInterface = PythonInterface
-    sys.modules[name] = module
-    return name
 
 
 # ===========================================================================
 # 1. Basic headless plugin lifecycle
 # ===========================================================================
 
-def test_headless_plugin_lifecycle():
+def test_headless_plugin_lifecycle(inline_plugin):
     xp = FakeXP(debug=True, enable_gui=False)
     runner = SimlessRunner(xp, run_time=0.1)
     xp._runner = runner
@@ -62,7 +41,7 @@ def test_headless_plugin_lifecycle():
             self.calls.append("stop")
 
     plugin = Plugin()
-    mod = register_inline_plugin("headless_plugin", plugin)
+    mod = inline_plugin(name="headless_plugin", plugin_obj=plugin)
 
     runner.run_plugin_lifecycle([mod])
 
@@ -73,7 +52,7 @@ def test_headless_plugin_lifecycle():
 # 2. Headless plugin can create and use DataRefs
 # ===========================================================================
 
-def test_headless_plugin_dataref_usage():
+def test_headless_plugin_dataref_usage(inline_plugin):
     xp = FakeXP(debug=True, enable_gui=False)
     runner = SimlessRunner(xp, run_time=0.1)
     xp._runner = runner
@@ -99,7 +78,7 @@ def test_headless_plugin_dataref_usage():
             pass
 
     plugin = Plugin()
-    mod = register_inline_plugin("headless_dataref_plugin", plugin)
+    mod = inline_plugin(name="headless_dataref_plugin", plugin_obj=plugin)
 
     runner.run_plugin_lifecycle([mod])
 
@@ -114,7 +93,7 @@ def test_headless_plugin_dataref_usage():
 # 3. Multiple headless plugins share DataRefs correctly
 # ===========================================================================
 
-def test_headless_shared_datarefs():
+def test_headless_shared_datarefs(inline_plugin):
     xp = FakeXP(debug=True, enable_gui=False)
     runner = SimlessRunner(xp, run_time=0.1)
     xp._runner = runner
@@ -164,8 +143,8 @@ def test_headless_shared_datarefs():
     writer = Writer()
     reader = Reader()
 
-    mod_writer = register_inline_plugin("writer_headless", writer)
-    mod_reader = register_inline_plugin("reader_headless", reader)
+    mod_writer = inline_plugin(name="writer_headless", plugin_obj=writer)
+    mod_reader = inline_plugin(name="reader_headless", plugin_obj=reader)
 
     runner.run_plugin_lifecycle([mod_writer, mod_reader])
 
@@ -183,7 +162,7 @@ def test_headless_shared_datarefs():
 # 4. GUI example test (headless)
 # ===========================================================================
 
-def test_example_gui():
+def test_example_gui(inline_plugin):
     xp = FakeXP(debug=True, enable_gui=False)
     runner = SimlessRunner(xp, run_time=0.1)
     xp._runner = runner
@@ -251,9 +230,9 @@ def test_example_gui():
             self.calls.append("stop")
 
     plugin = DevOTAGUIPlugin()
-    module_name = register_inline_plugin("dev_ota_gui_register_plugin", plugin)
+    mod = inline_plugin(name="dev_ota_gui_register_plugin", plugin_obj=plugin)
 
-    runner.run_plugin_lifecycle([module_name])
+    runner.run_plugin_lifecycle([mod])
 
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
@@ -263,3 +242,94 @@ def test_example_gui():
     assert plugin.slider is not None
     assert plugin.quit_btn is not None
     assert plugin.win is None
+
+# ===========================================================================
+# 5. Validate that FakeXP + SimlessRunner correctly process bridge META/UPDATE
+# ===========================================================================
+
+def test_headless_bridge_enabled(inline_plugin, monkeypatch):
+    # ----------------------------------------------------------------------
+    # 1. FakeXP in headless mode with bridge enabled
+    # ----------------------------------------------------------------------
+    xp = FakeXP(debug=True, enable_gui=False, enable_dataref_bridge=True)
+    runner = SimlessRunner(xp, run_time=0.1)
+    XPPython3.xp = xp
+
+    # ----------------------------------------------------------------------
+    # 2. Inline plugin (does nothing except allow lifecycle to run)
+    # ----------------------------------------------------------------------
+    class Plugin:
+        def XPluginStart(self):
+            return "BridgeTest", "bridge.test", "Bridge test"
+
+        def XPluginEnable(self):
+            return 1
+
+        def XPluginDisable(self):
+            pass
+
+        def XPluginStop(self):
+            pass
+
+    mod = inline_plugin(name="bridge_test_plugin", plugin_obj=Plugin())
+
+    # ----------------------------------------------------------------------
+    # 3. Fake bridge events
+    # ----------------------------------------------------------------------
+    # META: define real DataRef metadata
+    meta_event = BridgeData(
+        type=BridgeDataType.META,
+        path="sim/test/bridge_value",
+        dtype=DRefType.FLOAT,
+        writable=True,
+        array_size=0,
+        value=None,
+        text=None,
+    )
+
+    # UPDATE: set actual value
+    update_event = BridgeData(
+        type=BridgeDataType.UPDATE,
+        path="sim/test/bridge_value",
+        dtype=DRefType.FLOAT,
+        writable=True,
+        array_size=0,
+        value=123.45,
+        text=None,
+    )
+
+    # Monkeypatch bridge.poll_data() to return META then UPDATE
+    events = [meta_event, update_event]
+
+    def fake_poll():
+        # Return all events once, then nothing
+        nonlocal events
+        out = events
+        events = []
+        return out
+
+    monkeypatch.setattr(runner.bridge, "poll_data", fake_poll)
+
+    # ----------------------------------------------------------------------
+    # 4. Run lifecycle
+    # ----------------------------------------------------------------------
+    runner.run_plugin_lifecycle([mod])
+
+    # ----------------------------------------------------------------------
+    # 5. Assertions
+    # ----------------------------------------------------------------------
+    mgr = xp._dataref_manager
+    spec = mgr.get_spec("sim/test/bridge_value")
+
+    # META should have created a real spec
+    assert spec is not None
+    assert spec.is_dummy is False
+    assert spec.writable is True
+    assert spec.type == DRefType.FLOAT
+
+    # UPDATE should have set the value
+    assert mgr.get_value("sim/test/bridge_value") == 123.45
+
+    # Public API should reflect the same value
+    h = xp.findDataRef("sim/test/bridge_value")
+    assert xp.getDataf(h) == 123.45

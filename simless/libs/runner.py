@@ -1,63 +1,152 @@
+# simless/libs/runner.py
 # ===========================================================================
-# runner.py — deterministic simless execution harness
+# SimlessRunner — production‑parity X‑Plane plugin lifecycle harness
 #
 # ROLE
-#   Provide deterministic, single‑source‑of‑truth execution for plugin code
-#   outside of X‑Plane. The runner owns timing, callback scheduling, and
-#   lifecycle sequencing. It must remain minimal, explicit, and free of
-#   X‑Plane‑specific inference. All simulation behavior is delegated to
-#   FakeXP and DataRefManager.
+#   Provide a deterministic, single‑source‑of‑truth execution environment
+#   for XPPython3 plugins outside of X‑Plane. The runner owns lifecycle
+#   sequencing, timing, flightloop scheduling, bridge synchronization, and
+#   graphics frame dispatch. All simulation behavior is delegated to FakeXP
+#   and DataRefManager.
+#
+# DESIGN
+#   • Production‑parity ordering: graphics root is initialized BEFORE any
+#     plugin load, start, or enable, matching X‑Plane’s widget subsystem.
+#   • Plugins are fully independent: each receives a fresh xp interface and
+#     may create windows or widgets during XPluginEnable without restriction.
+#   • Runner drives a fixed‑rate simulation clock (60 Hz) and executes all
+#     modern flightloops according to XPLM scheduling semantics.
+#   • Bridge synchronization is runner‑owned: inbound META/UPDATE/ERROR
+#     events are dispatched to DataRefManager before flightloops run.
 #
 # CORE INVARIANTS
-#   - Will use the Public API as much as possible
-#   - Runner will use the Public API as much as possible
-#   - Runner is the authoritative code for simless execution.
+#   • No inference, no hidden state: runner behavior is explicit and
+#     deterministic across all environments.
+#   • No plugin‑specific branching: lifecycle is identical for every plugin.
+#   • Graphics, widgets, and DataRefManager are always initialized before
+#     XPluginEnable, ensuring production‑authentic UI behavior.
+#   • Flightloops, bridge sync, and graphics frames are executed in a strict,
+#     documented order each frame.
+#
+# LIFECYCLE SEQUENCE
+#   1. xp.init_graphics_root()        — graphics + widget system ready
+#   2. loader.load_plugins()          — import plugin modules
+#   3. xp._bind_datarefs()            — establish DataRefManager
+#   4. XPluginStart()                 — plugin metadata only
+#   5. XPluginEnable()                — plugins may create windows/UI
+#   6. Main loop (flightloops → widgets → graphics)
+#   7. XPluginDisable()
+#   8. XPluginStop()
 # ===========================================================================
-
 
 from __future__ import annotations
 
 import time
 from typing import Any, Dict, List
 
+from sshd_extensions.bridge_protocol import BridgeDataType, BridgeData, XPBridgeClient
+from sshd_extensions.datarefs import DataRefSpec
 from simless.libs.loader import SimlessPluginLoader, LoadedPlugin
 from simless.libs.fake_xp_interface import FakeXPInterface
 
 
 class SimlessRunner:
+    """Deterministic simless execution harness.
+
+    The runner provides a minimal, explicit, single‑source‑of‑truth
+    execution environment for plugin code outside of X‑Plane. It owns
+    timing, callback scheduling, lifecycle sequencing, and bridge
+    synchronization. All simulation behavior is delegated to FakeXP and
+    DataRefManager.
+    """
+
     def __init__(
         self,
         xp: FakeXPInterface,
         *,
         run_time: float = -1.0,
     ) -> None:
-        self.xp = xp
-        self.run_time = run_time
-        self._running = False
+        self.xp: FakeXPInterface = xp
+        self.run_time: float = run_time
+        self._running: bool = False
 
         # Allow FakeXP to call back into us
         setattr(self.xp, "_runner", self)
 
-        # ------------------------------------------------------------------
-        # Plugin loader (authoritative registry)
-        # ------------------------------------------------------------------
+        self.bridge = XPBridgeClient(xp)
+
+        # Plugin loader
         self.loader: SimlessPluginLoader = SimlessPluginLoader(self.xp)
 
-        # ------------------------------------------------------------------
-        # Flightloop state (runner-owned)
-        # ------------------------------------------------------------------
+        # Flightloop state
         self._next_flightloop_id: int = 1
         self._flightloops: Dict[int, Dict[str, Any]] = {}
-        self._sim_time: float = 0.0  # single source of sim time
+        self._sim_time: float = 0.0
 
     # ----------------------------------------------------------------------
-    # Public API for FakeXP to forward scheduling calls
+    # Bridge management
+    # ----------------------------------------------------------------------
+    def _manage_bridged_datarefs(self) -> None:
+        """Poll bridge events and update DataRefManager state.
+
+        Connection management is handled entirely by XPBridgeClient.poll().
+        This method only:
+          • polls for inbound events,
+          • applies META/UPDATE changes,
+          • marks DataRefs dummy on disconnect,
+          • logs bridge errors.
+        """
+        xp = self.xp
+        mgr = xp._dataref_manager
+
+        if not xp.enable_dataref_bridge or mgr is None:
+            return
+
+        # --------------------------------------------------------------
+        # 1. Poll inbound events (connect/reconnect handled in poll())
+        # --------------------------------------------------------------
+        try:
+            events: List[BridgeData] = self.bridge.poll_data()
+        except ConnectionResetError:
+            xp.log("[Runner] Bridge disconnected")
+
+            # Mark all DataRefs as dummy until reconnect
+            for path in mgr.all_paths():
+                spec = mgr.get_spec(path)
+                if spec is None:
+                    continue
+                spec.is_dummy = True
+                mgr.add_spec(path, spec)
+
+            return
+
+        # --------------------------------------------------------------
+        # 2. Dispatch events
+        # --------------------------------------------------------------
+        for ev in events:
+            if ev.type is BridgeDataType.META:
+                spec = mgr.get_spec(ev.path) or DataRefSpec.dummy(ev.path, required=False, default=0.0)
+
+                # Update metadata
+                spec.type = ev.dtype
+                spec.writable = bool(ev.writable)
+                spec.is_dummy = False
+
+                # Create a FakeDataRef handle and bind it
+                ref = xp.findDataRef(ev.path)
+                spec.handle = ref
+
+                mgr.add_spec(ev.path, spec)
+            elif ev.type is BridgeDataType.UPDATE:
+                # Now safe because META created a handle
+                mgr.set_value(ev.path, ev.value)
+            elif ev.type is BridgeDataType.ERROR:
+                xp.log(f"[Bridge] ERROR: {ev.text}")
+
+    # ----------------------------------------------------------------------
+    # Flightloop API (runner-owned)
     # ----------------------------------------------------------------------
     def create_flightloop(self, version: int, params: Dict[str, Any]) -> int:
-        """
-        Modern X-Plane 12-style flightloop creation.
-        'params' must contain: callback, refcon, phase, structSize.
-        """
         loop_id = self._next_flightloop_id
         self._next_flightloop_id += 1
 
@@ -79,7 +168,6 @@ class SimlessRunner:
             return
 
         fl["interval"] = float(interval)
-
         if interval < 0:
             fl["next_call"] = self._sim_time
         else:
@@ -89,35 +177,38 @@ class SimlessRunner:
         self._flightloops.pop(loop_id, None)
 
     # ----------------------------------------------------------------------
-    # Stop loop (called by plugins via xp._quit() / xp.end_run_loop())
+    # Stop loop
     # ----------------------------------------------------------------------
     def end_run_loop(self) -> None:
-        """Stop the main loop immediately."""
         self._running = False
         self.xp.log("[Runner] end_run_loop() called — stopping main loop")
 
     # ----------------------------------------------------------------------
-    # GUI lifecycle (graphics owns DearPyGui)
+    # GUI lifecycle
     # ----------------------------------------------------------------------
     def init_gui(self) -> None:
+        """Initialize GUI (FakeXPGraphics handles DearPyGui)."""
         self.xp.log("[Runner] GUI enabled (FakeXPGraphics manages DearPyGui)")
 
     def shutdown_gui(self) -> None:
         self.xp.log("[Runner] GUI shutdown requested (no-op for runner)")
 
     # ----------------------------------------------------------------------
-    # Unified per-frame execution
+    # One frame
     # ----------------------------------------------------------------------
     def run_one_frame(self) -> bool:
         xp = self.xp
 
-        # 1. Advance sim time (60 Hz)
+        # 1. Advance sim time
         dt = 1.0 / 60.0
         self._sim_time += dt
         xp._sim_time = self._sim_time
         sim_time = self._sim_time
 
-        # 2. Flightloops
+        # 2. Bridge sync
+        self._manage_bridged_datarefs()
+
+        # 3. Flightloops
         for fl in list(self._flightloops.values()):
             if sim_time >= fl["next_call"]:
                 since = sim_time - fl["last_call"]
@@ -143,7 +234,7 @@ class SimlessRunner:
                     fl["interval"] = float(next_interval)
                     fl["next_call"] = sim_time + float(next_interval)
 
-        # 3. Graphics frame
+        # 4. Graphics frame
         try:
             if xp.enable_gui:
                 xp._draw_frame()
@@ -154,33 +245,30 @@ class SimlessRunner:
         return True
 
     # ----------------------------------------------------------------------
-    # Lifecycle execution
+    # Full lifecycle (plugins = list of plugin names)
     # ----------------------------------------------------------------------
-    def run_plugin_lifecycle(self, plugin_names: list[str]) -> None:
-        """
-        Load plugins via loader, then run full lifecycle.
-        """
-        plugins = self.loader.load_plugins(plugin_names)
-        self.run_lifecycle(plugins)
-
-    def run_lifecycle(self, plugins: List[LoadedPlugin]) -> None:
+    def run_plugin_lifecycle(self, plugin_names: List[str]) -> None:
         xp = self.xp
 
-        if not plugins:
+        if not plugin_names:
             xp.log("[Runner] No plugins to run")
             return
 
-        if xp.debug:
+        # 1. Initialize graphics BEFORE plugin load/start/enable
+        #    (production parity: widget system ready before plugins run)
+        if xp.enable_gui:
+            xp.init_graphics_root()
             self.init_gui()
 
-        # Enable
+        # 2. Load plugin modules by name → LoadedPlugin[]
+        plugins: List[LoadedPlugin] = self.loader.load_plugins(plugin_names)
+
+        # 3. XPluginEnable
         xp.log("[Runner] === XPluginEnable BEGIN ===")
         disabled: set[int] = set()
         setattr(xp, "_disabled_plugins", disabled)
 
         for p in plugins:
-            p.instance.xp = xp
-
             try:
                 xp.log(f"[Runner] → XPluginEnable: {p.name}")
                 result = p.instance.XPluginEnable()
@@ -193,7 +281,7 @@ class SimlessRunner:
 
         xp.log("[Runner] === XPluginEnable END ===")
 
-        # Main loop
+        # 4. Main loop
         xp.log("[Runner] === Main loop BEGIN ===")
         self._running = True
         start = time.time()
@@ -217,7 +305,7 @@ class SimlessRunner:
 
         xp.log("[Runner] === Main loop END ===")
 
-        # Disable
+        # 5. XPluginDisable
         xp.log("[Runner] === XPluginDisable BEGIN ===")
         for p in plugins:
             try:
@@ -227,7 +315,7 @@ class SimlessRunner:
                 raise RuntimeError(f"[Runner] XPluginDisable failed for {p.name}: {exc!r}")
         xp.log("[Runner] === XPluginDisable END ===")
 
-        # Stop
+        # 6. XPluginStop
         xp.log("[Runner] === XPluginStop BEGIN ===")
         for p in plugins:
             try:

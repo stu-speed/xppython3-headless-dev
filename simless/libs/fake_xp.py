@@ -41,7 +41,6 @@
 #     effects.
 #   - FakeXP must not perform bounds checking or type validation; that is
 #     the responsibility of DataRefSpec/DataRefManager.
-# ===========================================================================
 
 from __future__ import annotations
 
@@ -55,6 +54,7 @@ from XPPython3.xp_typing import (
 )
 
 from sshd_extensions.datarefs import DataRefManager
+from sshd_extensions.bridge_protocol import XPBridgeClient, BRIDGE_HOST, BRIDGE_PORT
 from simless.libs.runner import SimlessRunner
 from simless.libs.fake_xp_constants import bind_xp_constants
 from simless.libs.fake_xp_dataref import FakeXPDataRef
@@ -65,7 +65,6 @@ from simless.libs.fake_xp_utilities import FakeXPUtilities
 from simless.libs.fake_xp_interface import FakeXPInterface
 
 
-# For alignment with SimlessXPInterface
 FlightLoopCallback = Callable[[float, float, int, Any], float]
 
 
@@ -79,33 +78,95 @@ class FakeXP(
     """
     Unified xp.* façade for simless plugin execution.
 
-    Subsystems are cooperative mixins with _init_*() initializers.
-    FakeXP automatically creates and owns a SimlessRunner.
-
-    This class is intended to satisfy:
-      • SimlessXPInterface
-      • FakeXPInterface
+    FakeXP mirrors the public API surface of XPPython3's xp.* namespace
+    while delegating all simulation behavior to FakeXP subsystems and the
+    SimlessRunner. It provides deterministic, headless execution for
+    plugin development and testing.
     """
+
+    debug: bool
+    enable_gui: bool
+    enable_dataref_bridge: bool
+
+    bridge_host: str
+    bridge_port: int
+    bridge: XPBridgeClient | None
+
+    _dataref_manager: DataRefManager | None
+    _plugins: list[Any]
+    _disabled_plugins: set[int]
+
+    _sim_time: float
+    _keyboard_focus: XPWidgetID | None
+
+    _runner: SimlessRunner
+    xp: FakeXPInterface
 
     def __init__(
         self,
         *,
         debug: bool = False,
         enable_gui: bool = True,
+        enable_dataref_bridge: bool = False,
+        bridge_host: str = BRIDGE_HOST,
+        bridge_port: int = BRIDGE_PORT,
         run_time: float = -1.0,
     ) -> None:
+        """Initialize the FakeXP façade.
+
+        Args:
+            debug (bool, optional):
+                Enable verbose logging and additional diagnostics useful
+                during simless development. Defaults to False.
+
+            enable_gui (bool, optional):
+                Enable DearPyGui-backed rendering via FakeXPGraphics.
+                When False, all GUI drawing calls become no-ops.
+                Defaults to True.
+
+            enable_dataref_bridge (bool, optional):
+                Enable the external DataRef bridge used to synchronize
+                real X‑Plane DataRefs into the simless environment.
+                When True, the SimlessRunner will create and manage an
+                XPBridgeClient and forward metadata/value updates into
+                the DataRefManager. Defaults to False.
+
+            bridge_host (str, optional):
+                Hostname or IP address of the DataRef bridge server.
+
+            bridge_port (int, optional):
+                TCP port of the DataRef bridge server.
+
+            run_time (float, optional):
+                Maximum wall‑clock duration (in seconds) for the simless
+                main loop. A negative value disables the limit and allows
+                execution to continue until a plugin calls
+                xp.end_run_loop(). Defaults to -1.0.
+        """
+
+        # ------------------------------------------------------------------
+        # Core flags
+        # ------------------------------------------------------------------
         self.debug = debug
         self.enable_gui = enable_gui
+        self.enable_dataref_bridge = enable_dataref_bridge
 
+        # Bridge configuration
+        self.bridge_host = bridge_host
+        self.bridge_port = bridge_port
+        self.bridge = None
+
+        # ------------------------------------------------------------------
         # Core state
-        self._dataref_manager: DataRefManager | None = None
-        self._plugins: list[Any] = []
+        # ------------------------------------------------------------------
+        # Ensure FakeXP starts without a bound DataRefManager
+        if hasattr(self, "_dataref_manager"):
+            delattr(self, "_dataref_manager")
 
-        # Track disabled plugins (XPLMDisablePlugin)
-        self._disabled_plugins: set[int] = set()
-
-        self._sim_time: float = 0.0
-        self._keyboard_focus: XPWidgetID | None = None
+        self._plugins = []
+        self._disabled_plugins = set()
+        self._sim_time = 0.0
+        self._keyboard_focus = None
 
         # ------------------------------------------------------------------
         # Initialize subsystems
@@ -120,31 +181,37 @@ class FakeXP(
         # Bind xp.* namespace
         # ------------------------------------------------------------------
         XPPython3.xp = self
-        self.xp: FakeXPInterface  = XPPython3.xp  # type: ignore[arg-type]
+        self.xp = XPPython3.xp  # type: ignore[arg-type]
 
         bind_xp_constants(self.xp)
 
-        # Bind subsystem public APIs into xp.* ONLY
+        # Bind subsystem public APIs into xp.*
         for subsystem in (
-            FakeXPDataRef,
-            FakeXPWidget,
-            FakeXPGraphics,
-            FakeXPFlightLoop,
-            FakeXPUtilities,
+                FakeXPDataRef,
+                FakeXPWidget,
+                FakeXPGraphics,
+                FakeXPFlightLoop,
+                FakeXPUtilities,
         ):
             for name in getattr(subsystem, "public_api_names", []):
                 fn = getattr(self, name)
                 setattr(self.xp, name, fn)
 
-        # destroyWidget wrapper (XPPython3-style)
+        # destroyWidget wrapper
         def destroyWidget(self_: FakeXP, wid: XPWidgetID, destroy_children: int = 1) -> None:
-            # XPPython3's xp.destroyWidget delegates to killWidget; we mirror that.
             self_.killWidget(wid)
 
         self.xp.destroyWidget = destroyWidget.__get__(self)
 
         # ------------------------------------------------------------------
-        # Create the SimlessRunner automatically
+        # Create the shared DataRefManager immediately
+        # ------------------------------------------------------------------
+        # Plugins may instantiate DataRefManager themselves, but __new__
+        # ensures they all receive this same instance.
+        self._dataref_manager = DataRefManager(self.xp, {}, timeout_seconds=10.0)
+
+        # ------------------------------------------------------------------
+        # Create the SimlessRunner
         # ------------------------------------------------------------------
         self._runner = SimlessRunner(self.xp, run_time=run_time)
 
