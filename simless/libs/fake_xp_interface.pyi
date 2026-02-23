@@ -24,7 +24,7 @@ from simless.libs.fake_xp_dataref import FakeDataRef
 from sshd_extensions.bridge_protocol import XPBridgeClient
 from simless.libs.runner import SimlessRunner
 from simless.libs.fake_xp_widget import XPWidgetID
-from sshd_extensions.datarefs import DataRefManager
+from sshd_extensions.dataref_manager import DataRefManager
 
 
 @runtime_checkable
@@ -60,24 +60,6 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
     # Runner + bridge
     _runner: SimlessRunner
     bridge: XPBridgeClient | None
-
-    # ------------------------------------------------------------------
-    # DataRef auto-registration (simless only)
-    # ------------------------------------------------------------------
-    def fake_register_dataref(
-        self,
-        path: str,
-        *,
-        xp_type: int,
-        is_array: bool = False,
-        size: int = 1,
-        writable: bool = True,
-    ) -> FakeDataRef:
-        """
-        Create a FakeDataRef entry and allocate default storage.
-        Used by DataRefManager during simless initialization.
-        """
-        ...
 
     # ------------------------------------------------------------------
     # DataRefManager binding (simless only)

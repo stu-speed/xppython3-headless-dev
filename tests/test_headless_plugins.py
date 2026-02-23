@@ -7,7 +7,7 @@
 import XPPython3
 
 from sshd_extensions.bridge_protocol import BridgeData, BridgeDataType
-from sshd_extensions.datarefs import DRefType
+from sshd_extensions.dataref_manager import DRefType
 from simless.libs.fake_xp import FakeXP
 from simless.libs.runner import SimlessRunner
 
@@ -181,14 +181,6 @@ def test_example_gui(inline_plugin):
 
         def XPluginEnable(self):
             self.calls.append("enable")
-
-            xp.registerDataRef(
-                "sim/cockpit2/temperature/outside_air_temp_degc",
-                xpType=2,
-                isArray=False,
-                writable=True,
-                defaultValue=0.0,
-            )
 
             self.win = xp.createWidget(
                 100, 500, 500, 100, 1,

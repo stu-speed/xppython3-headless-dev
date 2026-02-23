@@ -6,7 +6,7 @@ from XPPython3 import xp
 from XPPython3.xp_typing import XPLMFlightLoopID
 
 from sshd_extensions.xp_interface import XPInterface
-from sshd_extensions.datarefs import DataRefManager
+from sshd_extensions.dataref_manager import DataRefManager
 
 from sshd_extlibs.dataref_viewer import DataRefViewer
 

@@ -47,7 +47,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, TextIO, Tuple,
 from XPPython3.xp_typing import XPLMFlightLoopID
 
 from sshd_extensions.xp_interface import XPInterface
-from sshd_extensions.datarefs import DataRefSpec, DataRefManager, DRefType
+from sshd_extensions.dataref_manager import DataRefSpec, DataRefManager, DRefType
 
 
 EPSILON: float = float(os.getenv("XPBRIDGE_EPSILON", "0.001"))
@@ -423,12 +423,13 @@ class XPBridgeServer:
 
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind((BRIDGE_HOST, BRIDGE_PORT))
+        bind_host = "0.0.0.0"
+        srv.bind((bind_host, BRIDGE_PORT))
         srv.listen(1)
         srv.setblocking(False)
 
         self.server_sock = srv
-        self.xp.log(f"[Bridge] listening on {BRIDGE_HOST}:{BRIDGE_PORT}")
+        self.xp.log(f"[Bridge] listening on {bind_host}:{BRIDGE_PORT}")
 
     def _close_server(self) -> None:
         """Close the listening socket if open."""
@@ -647,6 +648,7 @@ class XPBridgeServer:
             self.xp.log(f"[Bridge] ADD failed: DataRef info unavailable: handle={handle}")
             self._send_error(f"DataRef info unavailable: handle={handle}")
             return
+        self.xp.log(f"[Bridge] INFO: {info} type={info.type}")
 
         # Determine array size
         t = info.type
@@ -667,7 +669,6 @@ class XPBridgeServer:
                 required=False,
                 default=None,
                 handle=handle,
-                is_dummy=False,
                 array_size=array_size,
             )
             self.specs[path] = spec
@@ -844,6 +845,7 @@ class XPBridgeClient:
     def connect(self) -> None:
         self.disconnect()
 
+        self.xp.log(f"[Bridge] Connecting to {self.host}:{self.port}")
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(2.0)
         sock.connect((self.host, self.port))

@@ -6,31 +6,22 @@
 # ===========================================================================
 
 import sys
-from enum import Enum
 
 import XPPython3
+
 from simless.libs.fake_xp import FakeXP
 from pathlib import Path
 
-
-BRIDGE_HOST = "10.22.50.189"
 
 # Emulate plugin root dir
 ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_ROOT = ROOT / "plugins"
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-class MDR(str, Enum):
-    oat_c = "sim/cockpit2/temperature/outside_air_temp_degc"
-    bus_volts = "sim/cockpit2/electrical/bus_volts"
-
 
 def run_simless_oat_gui() -> None:
     xp = FakeXP(debug=True, enable_gui=True, enable_dataref_bridge=True)
     XPPython3.xp = xp
-
-    xp._bridge_host = BRIDGE_HOST
-    xp._bridge_paths = [MDR.oat_c, MDR.bus_volts]
 
     plugins = [
         "PI_sshd_OAT",

@@ -53,7 +53,7 @@ from XPPython3.xp_typing import (
     XPWidgetID,
 )
 
-from sshd_extensions.datarefs import DataRefManager
+from sshd_extensions.dataref_manager import DataRefManager
 from sshd_extensions.bridge_protocol import XPBridgeClient, BRIDGE_HOST, BRIDGE_PORT
 from simless.libs.runner import SimlessRunner
 from simless.libs.fake_xp_constants import bind_xp_constants
@@ -317,13 +317,6 @@ class FakeXP(
 
     def log(self, msg: str) -> None:
         print(f"[FakeXP] {msg}")
-
-    # ----------------------------------------------------------------------
-    # DataRefManager binding (FakeXPInterface)
-    # ----------------------------------------------------------------------
-    def bind_dataref_manager(self, mgr: DataRefManager) -> None:
-        self._dataref_manager = mgr
-        self._dbg("[DataRef] DataRefManager bound to FakeXP")
 
     # ----------------------------------------------------------------------
     # Time (SimlessXPInterface)

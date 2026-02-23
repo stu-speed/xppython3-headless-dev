@@ -45,7 +45,7 @@ import time
 from typing import Any, Dict, List
 
 from sshd_extensions.bridge_protocol import BridgeDataType, BridgeData, XPBridgeClient
-from sshd_extensions.datarefs import DataRefSpec
+from sshd_extensions.dataref_manager import DataRefSpec
 from simless.libs.loader import SimlessPluginLoader, LoadedPlugin
 from simless.libs.fake_xp_interface import FakeXPInterface
 

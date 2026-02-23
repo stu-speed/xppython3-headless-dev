@@ -7,25 +7,17 @@
 #   This Protocol exists solely for strong typing, IDE support, and
 #   architectural clarity during simless development.
 #
-# CONTRACT REQUIREMENT
-#   SimlessXPInterface MUST match the real XPPython3 xp.* contract EXACTLY
-#   as defined in the production xp.pyi file.
-#
-#   • No simless‑only helpers may appear here.
-#   • No additional parameters, overloads, or behaviors may be added.
-#   • No methods may be removed or renamed.
-#   • Signatures, return types, and semantics must remain identical.
-#
-# RELATIONSHIP TO FakeXPInterface
-#   FakeXPInterface extends this Protocol with simless‑only helpers such as
-#   fake_register_dataref() and bind_dataref_manager(). Those extensions MUST
-#   NOT appear here, and production plugins MUST NEVER see them.
+# NOTE (special): Because this runtime is a fake/test harness, the Protocol
+#   below also exposes a small set of simless-only helper methods that are
+#   implemented by FakeXP. These helpers are intended for test harnesses,
+#   runners, and the bridge. Production plugins MUST NOT rely on these
+#   helpers; they exist only to make testing and promotion of dummy
+#   datarefs straightforward.
 # ===========================================================================
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol, Sequence, runtime_checkable
-from dataclasses import dataclass
+from typing import Any, Callable, Protocol, Sequence, runtime_checkable, Optional
 
 from XPPython3.xp_typing import (
     XPLMDataRef,
@@ -41,26 +33,19 @@ from XPPython3.xp_typing import (
     XPWidgetPropertyID,
 )
 
-
-# ===========================================================================
-# Simless-only DataRef metadata (used when FakeXP auto-generates DataRefs)
-# ===========================================================================
-@dataclass(slots=True)
-class FakeRefInfo:
-    path: str
-    xp_type: int
-    writable: bool
-    is_array: bool
-    size: int
-    dummy: bool
-    value: Any
+# Import the FakeDataRef handle type so the Simless type union reflects the
+# actual handle objects returned by FakeXP.findDataRef/registerDataAccessor.
+# This import is for typing only and does not add production-only API surface.
+from simless.libs.fake_xp_dataref import FakeDataRef  # type: ignore
 
 
 # ===========================================================================
 # DataRef handle / info types
 # ===========================================================================
-DataRefHandle = XPLMDataRef | FakeRefInfo
-DataRefInfo = XPLMDataRefInfo_t | FakeRefInfo
+# DataRefHandle and DataRefInfo reflect the production XPLM types OR the
+# FakeDataRef handle used by the simless FakeXP implementation.
+DataRefHandle = XPLMDataRef | FakeDataRef
+DataRefInfo = XPLMDataRefInfo_t | FakeDataRef
 
 
 # ===========================================================================
@@ -89,6 +74,8 @@ class SimlessXPInterface(Protocol):
     # ------------------------------------------------------------------
     # DataRef API (real XPPython3 contract)
     # ------------------------------------------------------------------
+    # NOTE: Signatures mirror production: findDataRef accepts a string and
+    # returns an opaque handle; all other accessors accept the handle only.
     def findDataRef(self, name: str) -> DataRefHandle | None: ...
     def getDataRefInfo(self, handle: DataRefHandle) -> DataRefInfo | None: ...
 
@@ -317,3 +304,31 @@ class SimlessXPInterface(Protocol):
     def getSystemPath(self) -> str: ...
     def getPrefsPath(self) -> str: ...
     def getDirectorySeparator(self) -> str: ...
+
+    # ------------------------------------------------------------------
+    # Simless-only helpers (FakeXP test/runner utilities)
+    # ------------------------------------------------------------------
+    def bind_dataref_manager(self, mgr: Any) -> None: ...
+    def update_dummy_ref(
+        self,
+        dataRef: FakeDataRef,
+        *,
+        dtype: Any | None = None,
+        size: int | None = None,
+        value: Any | None = None,
+    ) -> None: ...
+    def promote_handle_by_handle(
+        self,
+        dataRef: FakeDataRef,
+        *,
+        dtype: Any,
+        is_array: bool,
+        size: int,
+        writable: bool,
+        default_value: Any | None = None,
+        preserve_dummy_writes: bool = True,
+    ) -> bool: ...
+    def attach_handle_callback(self, cb: Optional[Callable[[FakeDataRef], None]]) -> None: ...
+    def detach_handle_callback(self) -> None: ...
+    def list_handles(self) -> list[str]: ...
+    def clear_handles(self) -> None: ...
