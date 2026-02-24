@@ -28,12 +28,6 @@ class PythonInterface:
         self.Sig = "simless.datarefviewer"
         self.Desc = "Viewer for DataRefManager‑managed DataRefs"
 
-        # Create DataRefManager exactly like OTA plugin
-        self.manager = DataRefManager(
-            xp,
-            timeout_seconds=5.0,
-        )
-
         # Viewer receives the manager explicitly
         self.viewer = DataRefViewer()
 
@@ -50,10 +44,6 @@ class PythonInterface:
         counter: int,
         refcon: Any | None = None,
     ) -> float:
-
-        # Wait for DataRefManager to be ready
-        if not self.manager.ready(counter):
-            return 0.5
 
         # Poll viewer (detect changes, redraw only when needed)
         self.viewer.poll()

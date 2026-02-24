@@ -1,8 +1,6 @@
 # ===========================================================================
-# SIM-LESS OTA GUI HARNESS (XPWidget-based, multi-plugin aware)
-# Allows user to set OAT interactively using FakeXPWidgets.
-#
-# See GUI_EMULATION.md for considerations in using GUI emulation
+# SIM-LESS OAT TEST HARNESS WITH LIVE DATAREFS
+# Allows user to test OAT with live datarefs and monitor with viewer.
 # ===========================================================================
 
 import sys
@@ -25,8 +23,7 @@ def run_simless_oat_gui() -> None:
 
     plugins = [
         "PI_sshd_OAT",
-        "PI_sshd_dev_oat_gui",
-        "PI_sshd_dataref_viewer"
+        "PI_sshd_dataref_viewer",
     ]
 
     xp.run_plugin_lifecycle(plugins)

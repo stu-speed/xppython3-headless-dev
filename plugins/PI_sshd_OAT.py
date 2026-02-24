@@ -99,7 +99,7 @@ class PythonInterface:
         refcon: Any | None = None,
     ) -> float:
         # If managed datarefs, must always be at top of flightloop
-        if not self.manager.ready(counter):
+        if not self.manager.ready():
             return 0.5  # required datarefs not available yet
 
         # Handle device reconnects

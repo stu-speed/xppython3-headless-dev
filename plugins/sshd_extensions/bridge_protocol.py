@@ -669,7 +669,6 @@ class XPBridgeServer:
                 required=False,
                 default=None,
                 handle=handle,
-                array_size=array_size,
             )
             self.specs[path] = spec
             self.manager.add_spec(path, spec)
@@ -706,7 +705,7 @@ class XPBridgeServer:
         Returns:
             Optional[BridgeMsg]: UPDATE message if changes exist, else None.
         """
-        if not self.manager.ready(counter):
+        if not self.manager.ready():
             return None
 
         entries: List[UpdateEntry] = []

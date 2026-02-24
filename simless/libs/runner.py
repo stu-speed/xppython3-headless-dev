@@ -86,6 +86,10 @@ class SimlessRunner:
     # ----------------------------------------------------------------------
     # Bridge management
     # ----------------------------------------------------------------------
+    # NOTE:
+    # is_dummy means both type and value are provisional.
+    # It flips to False only on the first provider-originated UPDATE,
+    # never on META.
     def _manage_bridged_datarefs(self) -> None:
         """Poll bridge events and update DataRefManager state.
 
@@ -130,7 +134,6 @@ class SimlessRunner:
                 # Update metadata
                 spec.type = ev.dtype
                 spec.writable = bool(ev.writable)
-                spec.is_dummy = False
 
                 # Create a FakeDataRef handle and bind it
                 ref = xp.findDataRef(ev.path)
@@ -138,6 +141,9 @@ class SimlessRunner:
 
                 mgr.add_spec(ev.path, spec)
             elif ev.type is BridgeDataType.UPDATE:
+                spec = mgr.get_spec(ev.path)
+                if spec.is_dummy:
+                    spec.is_dummy = False
                 # Now safe because META created a handle
                 mgr.set_value(ev.path, ev.value)
             elif ev.type is BridgeDataType.ERROR:
@@ -237,7 +243,7 @@ class SimlessRunner:
         # 4. Graphics frame
         try:
             if xp.enable_gui:
-                xp._draw_frame()
+                xp.draw_frame()
         except Exception as exc:
             xp.log(f"[Runner] graphics/frame error: {exc!r}")
             return False

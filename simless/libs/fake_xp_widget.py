@@ -388,7 +388,7 @@ class FakeXPWidget:
                 width=w,
                 parent=parent,
                 callback=_on_slider,
-                user_data=int(wid),
+                user_data=wid,
             )
 
         elif wclass == xp.WidgetClass_Button:
@@ -407,11 +407,11 @@ class FakeXPWidget:
                 height=h,
                 parent=parent,
                 callback=_on_button,
-                user_data=int(wid),
+                user_data=wid,
             )
 
         else:
-            dpg_id = dpg.add_text(desc or f"Widget {int(wid)}", parent=parent)
+            dpg_id = dpg.add_text(desc or f"Widget {wid}", parent=parent)
 
         self._dpg_ids[wid] = dpg_id
 
@@ -426,7 +426,7 @@ class FakeXPWidget:
 
         for cb in self._callbacks.get(wid, []):
             try:
-                cb(xp.Msg_Draw, int(wid), None, None)
+                cb(xp.Msg_Draw, wid, None, None)
             except Exception as exc:
                 xp.log(f"[FakeXPWidget] draw callback error in {cb.__name__}: {exc!r}")
 

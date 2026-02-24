@@ -47,6 +47,7 @@ class FakeXPGraphics:
         "bindTexture2d",
         "generateTextureNumbers",
         "deleteTexture",
+        "draw_frame"
     ]
 
     # ----------------------------------------------------------------------
@@ -243,7 +244,7 @@ class FakeXPGraphics:
     # ----------------------------------------------------------------------
     # FRAME RENDERING
     # ----------------------------------------------------------------------
-    def _draw_frame(self) -> None:
+    def draw_frame(self) -> None:
         """
         Called by SimlessRunner once per frame.
         Executes draw callbacks, renders widgets, and renders DearPyGui.

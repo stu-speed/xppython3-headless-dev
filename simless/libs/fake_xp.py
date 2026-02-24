@@ -222,7 +222,7 @@ class FakeXP(
         if self.debug:
             print(f"[FakeXP] {msg}")
 
-    def _quit(self) -> None:
+    def quit_runner(self) -> None:
         """
         Stop the internal runner.
         """
