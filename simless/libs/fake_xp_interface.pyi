@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable, Optional, List
 
 from simless.libs.simless_xp_interface import SimlessXPInterface
-from simless.libs.fake_xp_dataref import FakeDataRef
+from simless.libs.fake_xp_dataref_types import FakeDataRef
 from sshd_extensions.bridge_protocol import XPBridgeClient
 from simless.libs.runner import SimlessRunner
 from simless.libs.fake_xp_widget import XPWidgetID
@@ -45,7 +45,6 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
     # ------------------------------------------------------------------
     enable_gui: bool
     debug: bool
-    enable_dataref_bridge: bool
 
     # ------------------------------------------------------------------
     # Core simless state (strong typing)
@@ -53,13 +52,8 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
     _sim_time: float
     _keyboard_focus: XPWidgetID | None
 
-    _dataref_manager: DataRefManager | None
-    _plugins: list[Any]
-    _disabled_plugins: set[int]
-
-    # Runner + bridge
-    _runner: SimlessRunner
-    bridge: XPBridgeClient | None
+    # Runner
+    _simless_runner: SimlessRunner
 
     # ------------------------------------------------------------------
     # DataRefManager binding (simless only)
@@ -102,17 +96,6 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
           • CI systems
 
         Delegates to the internal SimlessRunner.
-        """
-        ...
-
-    # ------------------------------------------------------------------
-    # Internal lifecycle teardown (private)
-    # ------------------------------------------------------------------
-    def _quit(self) -> None:
-        """
-        Stop the internal runner.
-
-        Internal use only. Not part of the public simless API.
         """
         ...
 

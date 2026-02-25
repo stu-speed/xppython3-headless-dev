@@ -53,8 +53,7 @@ from XPPython3.xp_typing import (
     XPWidgetID,
 )
 
-from sshd_extensions.dataref_manager import DataRefManager
-from sshd_extensions.bridge_protocol import XPBridgeClient, BRIDGE_HOST, BRIDGE_PORT
+from sshd_extensions.bridge_protocol import BRIDGE_HOST, BRIDGE_PORT
 from simless.libs.runner import SimlessRunner
 from simless.libs.fake_xp_constants import bind_xp_constants
 from simless.libs.fake_xp_dataref import FakeXPDataRef
@@ -86,31 +85,24 @@ class FakeXP(
 
     debug: bool
     enable_gui: bool
-    enable_dataref_bridge: bool
 
+    enable_dataref_bridge: bool
     bridge_host: str
     bridge_port: int
-    bridge: XPBridgeClient | None
-
-    _dataref_manager: DataRefManager | None
-    _plugins: list[Any]
-    _disabled_plugins: set[int]
 
     _sim_time: float
     _keyboard_focus: XPWidgetID | None
 
-    _runner: SimlessRunner
     xp: FakeXPInterface
+    simless_runner: SimlessRunner
 
     def __init__(
         self,
-        *,
         debug: bool = False,
         enable_gui: bool = True,
         enable_dataref_bridge: bool = False,
         bridge_host: str = BRIDGE_HOST,
         bridge_port: int = BRIDGE_PORT,
-        run_time: float = -1.0,
     ) -> None:
         """Initialize the FakeXP façade.
 
@@ -144,27 +136,8 @@ class FakeXP(
                 xp.end_run_loop(). Defaults to -1.0.
         """
 
-        # ------------------------------------------------------------------
-        # Core flags
-        # ------------------------------------------------------------------
         self.debug = debug
         self.enable_gui = enable_gui
-        self.enable_dataref_bridge = enable_dataref_bridge
-
-        # Bridge configuration
-        self.bridge_host = bridge_host
-        self.bridge_port = bridge_port
-        self.bridge = None
-
-        # ------------------------------------------------------------------
-        # Core state
-        # ------------------------------------------------------------------
-        # Ensure FakeXP starts without a bound DataRefManager
-        if hasattr(self, "_dataref_manager"):
-            delattr(self, "_dataref_manager")
-
-        self._plugins = []
-        self._disabled_plugins = set()
         self._sim_time = 0.0
         self._keyboard_focus = None
 
@@ -204,16 +177,9 @@ class FakeXP(
         self.xp.destroyWidget = destroyWidget.__get__(self)
 
         # ------------------------------------------------------------------
-        # Create the shared DataRefManager immediately
-        # ------------------------------------------------------------------
-        # Plugins may instantiate DataRefManager themselves, but __new__
-        # ensures they all receive this same instance.
-        self._dataref_manager = DataRefManager(self.xp, {}, timeout_seconds=10.0)
-
-        # ------------------------------------------------------------------
         # Create the SimlessRunner
         # ------------------------------------------------------------------
-        self._runner = SimlessRunner(self.xp, run_time=run_time)
+        self.simless_runner = SimlessRunner(self.xp, enable_dataref_bridge, bridge_host, bridge_port)
 
     # ----------------------------------------------------------------------
     # Debug helper
@@ -221,34 +187,6 @@ class FakeXP(
     def _dbg(self, msg: str) -> None:
         if self.debug:
             print(f"[FakeXP] {msg}")
-
-    def quit_runner(self) -> None:
-        """
-        Stop the internal runner.
-        """
-        if self._runner is not None:
-            self._runner.end_run_loop()
-
-    # ----------------------------------------------------------------------
-    # Lifecycle runner
-    # ----------------------------------------------------------------------
-    def run_plugin_lifecycle(
-        self,
-        plugin_names: list[str],
-        *,
-        run_time: float = -1.0,
-    ) -> None:
-        """
-        Delegate lifecycle execution to the internal SimlessRunner.
-        """
-        if self._runner is None:
-            raise RuntimeError("FakeXP._runner must exist (internal error)")
-
-        if run_time >= 0:
-            self._runner.run_time = run_time
-
-        self._runner.run_plugin_lifecycle(plugin_names)
-
 
     # ----------------------------------------------------------------------
     # Base xp methods (XPPython3-compatible, SimlessXPInterface)
@@ -265,33 +203,34 @@ class FakeXP(
         XPLMDisablePlugin(plugin_id)
         Marks the plugin as disabled.
         """
-        self._disabled_plugins.add(plugin_id)
-        self._dbg(f"disablePlugin({plugin_id})")
+        p = self.simless_runner.loader.get_plugin(plugin_id)
+        if not p:
+            return
+        p.enabled = False
 
     def isPluginEnabled(self, plugin_id: int) -> int:
         """
         XPLMIsPluginEnabled(plugin_id)
         Returns 1 if enabled, 0 if disabled.
         """
-        return 0 if plugin_id in self._disabled_plugins else 1
+        p = self.simless_runner.loader.get_plugin(plugin_id)
+        if not p:
+            return 0
+        return 1 if p.enabled else 0
 
     def findPluginBySignature(self, signature: str) -> int:
         """
         XPLMFindPluginBySignature(signature)
         Returns plugin ID or -1.
         """
-        if self._runner is None or self._runner.loader is None:
-            return -1
-        return self._runner.loader.find_plugin_by_signature(signature)
+        return self.simless_runner.loader.find_plugin_by_signature(signature)
 
     def findPluginByPath(self, path: str) -> int:
         """
         XPLMFindPluginByPath(path)
         Returns plugin ID or -1.
         """
-        if self._runner is None or self._runner.loader is None:
-            return -1
-        return self._runner.loader.find_plugin_by_path(path)
+        return self.simless_runner.loader.find_plugin_by_path(path)
 
     def getPluginInfo(self, plugin_id: int) -> tuple[str, str, str, str]:
         """
@@ -299,10 +238,8 @@ class FakeXP(
         Returns (name, signature, description, path).
         Raises RuntimeError if plugin_id is invalid.
         """
-        if self._runner is None or self._runner.loader is None:
-            raise RuntimeError("FakeXP: getPluginInfo called before runner initialized")
 
-        plugin = self._runner.loader.get_plugin(plugin_id)
+        plugin = self.simless_runner.loader.get_plugin(plugin_id)
         if plugin is None:
             raise RuntimeError(f"FakeXP: No plugin with ID {plugin_id}")
 
@@ -364,8 +301,6 @@ class FakeXP(
           • a tuple:        xp.createFlightLoop((phase, callback, refCon))
           • a list:         xp.createFlightLoop([phase, callback, refCon])
         """
-        if self._runner is None:
-            raise RuntimeError("FakeXP._runner must exist before createFlightLoop")
 
         # Normalize into the internal struct dict expected by SimlessRunner.
         if callable(callback):
@@ -392,7 +327,7 @@ class FakeXP(
             params.setdefault("phase", phase)
             params.setdefault("structSize", 1)
 
-        fid = self._runner.create_flightloop(2, params)
+        fid = self.simless_runner.create_flightloop(2, params)
         return XPLMFlightLoopID(fid)
 
     def scheduleFlightLoop(
@@ -406,10 +341,9 @@ class FakeXP(
 
         The runner owns all real scheduling; FakeXP just forwards.
         """
-        if self._runner is None:
-            raise RuntimeError("FakeXP._runner must exist before scheduleFlightLoop")
+
         # relativeToNow is ignored in simless mode; runner controls timing.
-        self._runner.schedule_flightloop(loop_id, interval)
+        self.simless_runner.schedule_flightloop(loop_id, interval)
 
     def destroyFlightLoop(self, loop_id: XPLMFlightLoopID) -> None:
         """
@@ -417,6 +351,5 @@ class FakeXP(
 
         The runner owns the registry of active flightloops.
         """
-        if self._runner is None:
-            raise RuntimeError("FakeXP._runner must exist before destroyFlightLoop")
-        self._runner.destroy_flightloop(loop_id)
+
+        self.simless_runner.destroy_flightloop(loop_id)

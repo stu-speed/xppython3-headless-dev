@@ -18,8 +18,6 @@ from simless.libs.runner import SimlessRunner
 
 def test_headless_plugin_lifecycle(inline_plugin):
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = SimlessRunner(xp, run_time=0.1)
-    xp._runner = runner
     XPPython3.xp = xp
 
     class Plugin:
@@ -43,7 +41,7 @@ def test_headless_plugin_lifecycle(inline_plugin):
     plugin = Plugin()
     mod = inline_plugin(name="headless_plugin", plugin_obj=plugin)
 
-    runner.run_plugin_lifecycle([mod])
+    xp.simless_runner.run_plugin_lifecycle([mod], run_time=0.1)
 
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
@@ -54,8 +52,6 @@ def test_headless_plugin_lifecycle(inline_plugin):
 
 def test_headless_plugin_dataref_usage(inline_plugin):
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = SimlessRunner(xp, run_time=0.1)
-    xp._runner = runner
     XPPython3.xp = xp
 
     class Plugin:
@@ -80,7 +76,7 @@ def test_headless_plugin_dataref_usage(inline_plugin):
     plugin = Plugin()
     mod = inline_plugin(name="headless_dataref_plugin", plugin_obj=plugin)
 
-    runner.run_plugin_lifecycle([mod])
+    xp.simless_runner.run_plugin_lifecycle([mod], run_time=0.1)
 
     assert plugin.value == 42.5
 
@@ -95,8 +91,6 @@ def test_headless_plugin_dataref_usage(inline_plugin):
 
 def test_headless_shared_datarefs(inline_plugin):
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = SimlessRunner(xp, run_time=0.1)
-    xp._runner = runner
     XPPython3.xp = xp
 
     class Writer:
@@ -146,7 +140,7 @@ def test_headless_shared_datarefs(inline_plugin):
     mod_writer = inline_plugin(name="writer_headless", plugin_obj=writer)
     mod_reader = inline_plugin(name="reader_headless", plugin_obj=reader)
 
-    runner.run_plugin_lifecycle([mod_writer, mod_reader])
+    xp.simless_runner.run_plugin_lifecycle([mod_writer, mod_reader], run_time=0.1)
 
     assert writer.calls == ["start", "enable", "disable", "stop"]
     assert reader.calls == ["start", "enable", "disable", "stop"]
@@ -164,8 +158,6 @@ def test_headless_shared_datarefs(inline_plugin):
 
 def test_example_gui(inline_plugin):
     xp = FakeXP(debug=True, enable_gui=False)
-    runner = SimlessRunner(xp, run_time=0.1)
-    xp._runner = runner
     XPPython3.xp = xp
 
     class DevOTAGUIPlugin:
@@ -224,7 +216,7 @@ def test_example_gui(inline_plugin):
     plugin = DevOTAGUIPlugin()
     mod = inline_plugin(name="dev_ota_gui_register_plugin", plugin_obj=plugin)
 
-    runner.run_plugin_lifecycle([mod])
+    xp.simless_runner.run_plugin_lifecycle([mod], run_time=0.1)
 
     assert plugin.calls == ["start", "enable", "disable", "stop"]
 
@@ -241,10 +233,9 @@ def test_example_gui(inline_plugin):
 
 def test_headless_bridge_enabled(inline_plugin, monkeypatch):
     # ----------------------------------------------------------------------
-    # 1. FakeXP in headless mode with bridge enabled
+    # 1. FakeXP in headless mode (bridge is runner-owned)
     # ----------------------------------------------------------------------
     xp = FakeXP(debug=True, enable_gui=False, enable_dataref_bridge=True)
-    runner = SimlessRunner(xp, run_time=0.1)
     XPPython3.xp = xp
 
     # ----------------------------------------------------------------------
@@ -266,9 +257,14 @@ def test_headless_bridge_enabled(inline_plugin, monkeypatch):
     mod = inline_plugin(name="bridge_test_plugin", plugin_obj=Plugin())
 
     # ----------------------------------------------------------------------
-    # 3. Fake bridge events
+    # 3. Pre-create the handle the runner expects to exist on META
     # ----------------------------------------------------------------------
-    # META: define real DataRef metadata
+    h0 = xp.findDataRef("sim/test/bridge_value")
+    assert h0 is not None
+
+    # ----------------------------------------------------------------------
+    # 4. Fake bridge events
+    # ----------------------------------------------------------------------
     meta_event = BridgeData(
         type=BridgeDataType.META,
         path="sim/test/bridge_value",
@@ -279,7 +275,6 @@ def test_headless_bridge_enabled(inline_plugin, monkeypatch):
         text=None,
     )
 
-    # UPDATE: set actual value
     update_event = BridgeData(
         type=BridgeDataType.UPDATE,
         path="sim/test/bridge_value",
@@ -290,38 +285,31 @@ def test_headless_bridge_enabled(inline_plugin, monkeypatch):
         text=None,
     )
 
-    # Monkeypatch bridge.poll_data() to return META then UPDATE
     events = [meta_event, update_event]
 
     def fake_poll():
-        # Return all events once, then nothing
         nonlocal events
         out = events
         events = []
         return out
 
-    monkeypatch.setattr(runner.bridge, "poll_data", fake_poll)
+    # Bridge is runner-owned in headless mode
+    runner = getattr(xp, "simless_runner", None)
+    assert runner is not None, "FakeXP did not expose simless_runner"
+    assert hasattr(runner, "_bridge"), "Runner has no _bridge"
+    monkeypatch.setattr(runner._bridge, "poll_data", fake_poll)
 
     # ----------------------------------------------------------------------
-    # 4. Run lifecycle
+    # 5. Run lifecycle
     # ----------------------------------------------------------------------
-    runner.run_plugin_lifecycle([mod])
+    runner.run_plugin_lifecycle([mod], run_time=0.1)
 
     # ----------------------------------------------------------------------
-    # 5. Assertions
+    # 6. Assertions
     # ----------------------------------------------------------------------
-    mgr = xp._dataref_manager
-    spec = mgr.get_spec("sim/test/bridge_value")
-
-    # META should have created a real spec
-    assert spec is not None
-    assert spec.is_dummy is False
-    assert spec.writable is True
-    assert spec.type == DRefType.FLOAT
-
-    # UPDATE should have set the value
-    assert mgr.get_value("sim/test/bridge_value") == 123.45
-
-    # Public API should reflect the same value
     h = xp.findDataRef("sim/test/bridge_value")
     assert xp.getDataf(h) == 123.45
+
+    info = xp.getDataRefInfo(h)
+    # XPLM-style bitmask, not DRefType enum
+    assert int(info.type) != 0

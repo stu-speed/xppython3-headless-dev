@@ -225,8 +225,8 @@ class PythonInterface:
             if msg == xp.Msg_PushButtonPressed and param1 == self.quit_btn:
                 xp.destroyWidget(self.win, 1)
                 self.win = None
-                if hasattr(xp, "quit_runner"):
-                    xp.quit_runner()
+                if hasattr(xp, "simless_runner"):
+                    xp.simless_runner.end_run_loop()
                 return 1
 
             return 0

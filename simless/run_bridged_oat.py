@@ -1,14 +1,16 @@
 # ===========================================================================
 # SIM-LESS OAT TEST HARNESS WITH LIVE DATAREFS
-# Allows user to test OAT with live datarefs and monitor with viewer.
+# Allows user to test OAT with live datarefs and monitor with viewer
+# Note that oat does not register any datarefs if there is no serial device found
 # ===========================================================================
 
 import sys
+from pathlib import Path
 
 import XPPython3
 
+from sshd_extensions.bridge_protocol import BRIDGE_HOST, BRIDGE_PORT
 from simless.libs.fake_xp import FakeXP
-from pathlib import Path
 
 
 # Emulate plugin root dir
@@ -18,15 +20,14 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 
 def run_simless_oat_gui() -> None:
-    xp = FakeXP(debug=True, enable_gui=True, enable_dataref_bridge=True)
+    xp = FakeXP(debug=True, enable_gui=True, enable_dataref_bridge=True, bridge_host=BRIDGE_HOST, bridge_port=BRIDGE_PORT)
     XPPython3.xp = xp
 
     plugins = [
         "PI_sshd_OAT",
-        "PI_sshd_dataref_viewer",
     ]
 
-    xp.run_plugin_lifecycle(plugins)
+    xp.simless_runner.run_plugin_lifecycle(plugins, enable_dataref_viewer=True)
 
 
 if __name__ == "__main__":

@@ -65,6 +65,7 @@ class LoadedPlugin:
         self.description = desc
         self.module = module
         self.instance = instance
+        self.enabled = False
 
     def __repr__(self) -> str:
         return f"<LoadedPlugin id={self.plugin_id} name={self.name}>"

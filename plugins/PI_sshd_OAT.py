@@ -67,8 +67,8 @@ class PythonInterface:
     device: SerialOAT | None
 
     def __init__(self) -> None:
-        self.Name = "OTA display v1.0"
-        self.Sig = "ota.speedsim.xppython3"
+        self.Name = "OAT display v1.0"
+        self.Sig = "oat.speedsim.xppython3"
         self.Desc = "Display Outside Air Temp to serial device"
 
         self.manager = DataRefManager(xp, MANAGED_DATAREFS, timeout_seconds=30.0)
@@ -78,11 +78,11 @@ class PythonInterface:
 
     def _ensure_device(self) -> bool:
         if self.device is None:
-            xp.log("OTA: creating SerialOTA device")
+            xp.log("[OAT] creating SerialOTA device")
             self.device = SerialOAT(serial_number="F1TECH_ARCHER_OHP")
 
         if not self.device.conn_ready():
-            xp.log("OTA: serial device unavailable")
+            xp.log("[OAT] serial device unavailable")
             return False
 
         return True
@@ -114,7 +114,7 @@ class PythonInterface:
             av_volts = avionics_bus_volts(volts_list)
             avionic_on = float(av_volts) > 8.0
         except Exception as exc:
-            xp.log(f"OTA: avionics bus detection error: {exc!r}")
+            xp.log(f"[OAT] avionics bus detection error: {exc!r}")
             avionic_on = False
 
         self.device.send_data(f"{int(temp_c)}", power_on=avionic_on)
@@ -129,7 +129,10 @@ class PythonInterface:
 
     def XPluginEnable(self) -> int:
         if not self._ensure_device():
-            xp.log("OTA: serial device not found")
+            xp.log("[OAT] serial device not found")
+            if hasattr(xp, "simless_runner"):
+                xp.log("[OAT] prime bridge datarefs for viewer anyway")
+                self.manager.ready()
             return 0
 
         self.floop = xp.createFlightLoop(self.flightloop_callback)

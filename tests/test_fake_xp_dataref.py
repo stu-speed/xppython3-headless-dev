@@ -4,19 +4,20 @@ from typing import List
 
 import XPPython3
 from simless.libs.fake_xp import FakeXP
-from simless.libs.fake_xp_dataref import (
-    FakeDataRef,
-    DRefType,
+from simless.libs.fake_xp_dataref_types import (
+    Type_Unknown,
     Type_Float,
     Type_Int,
+    Type_Data,
 )
+from simless.libs.fake_xp_dataref_types import FakeDataRef
+from sshd_extensions.dataref_manager import DRefType
 
 
 @pytest.fixture
 def xp() -> FakeXP:
     """Create a FakeXP façade and initialize the global XPPython3.xp as tests expect."""
     fake = FakeXP(debug=True)
-    # Bind into XPPython3 global as production code expects
     XPPython3.xp = fake
     return fake
 
@@ -25,21 +26,24 @@ def test_find_and_dummy_creation(xp: FakeXP):
     ref = xp.findDataRef("sim/test/float_scalar")
     assert isinstance(ref, FakeDataRef)
     assert ref.path == "sim/test/float_scalar"
-    assert ref.is_dummy is True
     assert ref.type == DRefType.FLOAT
+    assert ref.type_known is False
+    assert ref.shape_known is False
+    assert ref.is_array is None
     assert ref.size == 1
     assert ref.value == 0.0
 
 
-def test_get_dataref_types_and_info(xp: FakeXP):
+def test_get_dataref_types_and_info_unknown_shape(xp: FakeXP):
     ref = xp.findDataRef("sim/test/float_scalar2")
     tmask = xp.getDataRefTypes(ref)
-    assert tmask & Type_Float
+    assert tmask == Type_Unknown
+
     info = xp.getDataRefInfo(ref)
     assert info.name == ref.path
-    assert info.type == tmask
-    assert info.is_array is False
-    assert info.size == 1
+    assert info.type == Type_Unknown
+    assert info.is_array is None
+    assert info.size == 0
 
 
 def test_can_write_and_is_good(xp: FakeXP):
@@ -47,8 +51,11 @@ def test_can_write_and_is_good(xp: FakeXP):
     assert xp.canWriteDataRef(ref) is True
     assert xp.isDataRefGood(ref) is True
 
-    xp.update_dataref(ref, dtype=DRefType.FLOAT, size=1, value=1.23)
+    # Establish scalar shape + value explicitly
+    xp.promote_shape_from_value(ref=ref, value=1.23)
     assert ref.value == pytest.approx(1.23)
+    assert ref.shape_known is True
+    assert ref.is_array is False
 
     reg = xp.registerDataAccessor(
         "sim/test/writable",
@@ -117,67 +124,61 @@ def test_array_accessors_and_semantics(xp: FakeXP):
     assert written["buf"] == [9.0, 8.0, 7.0, 6.0]
 
 
-def test_byte_array_and_string_helpers(xp: FakeXP):
-    initial_bytes = bytearray(b"Hello\x00" + b"\x00" * 10)
-    ref = xp.registerDataAccessor(
-        "myplugin/bytes",
-        readData=lambda rc, out, off, cnt: 0,
-        writeData=lambda rc, v, off, cnt: None,
-    )
+def test_byte_array_and_string_helpers_on_internal_buffer(xp: FakeXP):
+    ref = xp.findDataRef("sim/test/bytes_internal")
 
-    with xp._handles_lock:
-        h = xp._handles[ref.path]
-        h.type = DRefType.BYTE_ARRAY
-        h.value = initial_bytes
-        h.size = len(initial_bytes)
+    xp.promote_type(ref=ref, dtype=DRefType.BYTE_ARRAY, writable=True)
+    xp.promote_shape_from_value(ref=ref, value=bytearray(b"Hello\x00" + b"\x00" * 10))
+
+    assert xp.getDataRefTypes(ref) & Type_Data
 
     s = xp.getDatas(ref)
     assert s.startswith("Hello")
 
     xp.setDatas(ref, "ABC", offset=0, count=5)
-    with xp._handles_lock:
-        buf = xp._handles[ref.path].value
-    assert bytes(buf[:5]).startswith(b"ABC")
+    assert bytes(ref.value[:5]).startswith(b"ABC")
 
-    assert xp.getDatab(ref, None, 0, -1) == len(buf)
+    assert xp.getDatab(ref, None, 0, -1) == len(ref.value)
 
 
-def test_promotion_preserves_dummy_writes(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/promo")
-    assert ref.is_dummy
+def test_promote_type_validates_value_on_type_change(xp: FakeXP):
+    ref = xp.findDataRef("sim/test/type_change")
 
-    xp.update_dataref(
-        ref,
-        dtype=DRefType.FLOAT_ARRAY,
-        size=4,
-        value=[1.0, 2.0, 3.0, 4.0],
-    )
-    assert ref.value == [1.0, 2.0, 3.0, 4.0]
+    xp.promote_shape_from_value(ref=ref, value=1.5)
+    assert ref.shape_known is True
+    assert ref.is_array is False
 
-    xp.promote_handle(
-        ref,
-        dtype=DRefType.FLOAT_ARRAY,
-        is_array=True,
-        size=4,
-        writable=True,
-        preserve_dummy_writes=True,
-    )
-    assert ref.is_dummy is False
-    assert ref.value == [1.0, 2.0, 3.0, 4.0]
+    xp.promote_type(ref=ref, dtype=DRefType.INT, writable=True)
+    assert ref.type == DRefType.INT
+    assert isinstance(ref.value, int)
 
-    ref2 = xp.findDataRef("sim/test/promo2")
-    xp.update_dataref(ref2, dtype=DRefType.FLOAT, size=1, value=0.5)
 
-    xp.promote_handle(
-        ref2,
-        dtype=DRefType.FLOAT_ARRAY,
-        is_array=True,
-        size=4,
-        writable=True,
-    )
-    assert ref2.is_dummy is False
-    assert isinstance(ref2.value, list)
-    assert len(ref2.value) == 4
+def test_promote_shape_from_value_does_not_change_known_shape(xp: FakeXP):
+    """
+    Current semantics: shape is authoritative once known.
+    promote_shape_from_value may initialize shape when unknown, but does not flip
+    scalar<->array after shape_known=True.
+    """
+    ref = xp.findDataRef("sim/test/shape_replace")
+
+    xp.promote_shape_from_value(ref=ref, value=0.5)
+    assert ref.shape_known is True
+    assert ref.is_array is False
+    assert ref.value == pytest.approx(0.5)
+
+    # Changing dtype does not imply changing shape.
+    xp.promote_type(ref=ref, dtype=DRefType.FLOAT_ARRAY, writable=True)
+    assert ref.type == DRefType.FLOAT_ARRAY
+    assert ref.shape_known is True
+    assert ref.is_array is False
+
+    # Attempting to "promote" to array via value does not flip shape.
+    xp.promote_shape_from_value(ref=ref, value=[1.0, 2.0, 3.0, 4.0])
+    assert ref.shape_known is True
+    assert ref.is_array is False
+    assert ref.size == 1
+    assert isinstance(ref.value, list)
+    assert len(ref.value) == 1
 
 
 def test_update_dummy_ref_validation(xp: FakeXP):
@@ -199,23 +200,20 @@ def test_update_dummy_ref_validation(xp: FakeXP):
     assert reg.size == 4
 
 
-def test_dummy_set_grows_backing_array(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/dummy_grow")
-    assert ref.is_dummy
+def test_setDatavf_establishes_shape_then_enforces_bounds(xp: FakeXP):
+    ref = xp.findDataRef("sim/test/shape_from_write")
+    xp.promote_type(ref=ref, dtype=DRefType.FLOAT_ARRAY, writable=True)
 
-    xp.update_dataref(
-        ref,
-        dtype=DRefType.FLOAT_ARRAY,
-        size=2,
-        value=[1.0, 2.0],
-    )
-    assert ref.value == [1.0, 2.0]
-    assert ref.size == 2
-
+    # Shape unknown: first write establishes shape from provided values
     xp.setDatavf(ref, [9.0, 8.0, 7.0], offset=0, count=3)
-    assert ref.is_dummy
-    assert ref.value == [9.0, 8.0, 7.0]
+    assert ref.shape_known is True
+    assert ref.is_array is True
     assert ref.size == 3
+    assert ref.value == [9.0, 8.0, 7.0]
+
+    # Now bounds are enforced (no implicit growth)
+    with pytest.raises(RuntimeError):
+        xp.setDatavf(ref, [1.0, 2.0, 3.0, 4.0], offset=0, count=4)
 
 
 def test_promoted_set_enforces_inplace_bounds(xp: FakeXP):
@@ -237,57 +235,11 @@ def test_promoted_set_enforces_inplace_bounds(xp: FakeXP):
         writeFloatArray=write_float_array,
     )
 
-    assert ref.is_dummy is False
-
     with pytest.raises(RuntimeError):
         xp.setDatavf(ref, [1.0] * 16, offset=0, count=16)
 
     xp.setDatavf(ref, [9.0, 8.0, 7.0, 6.0], offset=0, count=4)
     assert written["buf"] == [9.0, 8.0, 7.0, 6.0]
-
-
-def test_promote_merges_or_replaces_dummy_writes(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/preserve_merge")
-    xp.update_dataref(
-        ref,
-        dtype=DRefType.FLOAT_ARRAY,
-        size=3,
-        value=[1.0, 2.0, 3.0],
-    )
-    assert ref.is_dummy
-
-    xp.promote_handle(
-        ref,
-        dtype=DRefType.FLOAT_ARRAY,
-        is_array=True,
-        size=3,
-        writable=True,
-        preserve_dummy_writes=True,
-    )
-    assert ref.is_dummy is False
-    assert ref.value == [1.0, 2.0, 3.0]
-
-    ref2 = xp.findDataRef("sim/test/preserve_replace")
-    xp.update_dataref(
-        ref2,
-        dtype=DRefType.FLOAT_ARRAY,
-        size=4,
-        value=[7.0, 7.0, 7.0, 7.0],
-    )
-    assert ref2.is_dummy
-
-    xp.promote_handle(
-        ref2,
-        dtype=DRefType.FLOAT_ARRAY,
-        is_array=True,
-        size=6,
-        writable=True,
-        preserve_dummy_writes=False,
-    )
-    assert ref2.is_dummy is False
-    assert isinstance(ref2.value, list)
-    assert len(ref2.value) >= 6
-    assert ref2.value[0] == pytest.approx(0.0)
 
 
 def test_getDatavf_offset_and_count_write_into_buffer(xp: FakeXP):
@@ -311,38 +263,26 @@ def test_getDatavf_offset_and_count_write_into_buffer(xp: FakeXP):
     assert buf[2:6] == base[2:6]
 
 
-def test_setDatab_dummy_and_real_semantics(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/bytes_dummy")
-    xp.update_dataref(
-        ref,
-        dtype=DRefType.BYTE_ARRAY,
-        size=4,
-        value=bytearray(b"ABCD"),
-    )
-    assert ref.is_dummy
+def test_setDatab_internal_buffer_and_real_bounds(xp: FakeXP):
+    # Internal buffer: establish via promotions, then allow in-bounds writes
+    ref = xp.findDataRef("sim/test/bytes_internal2")
+    xp.promote_type(ref=ref, dtype=DRefType.BYTE_ARRAY, writable=True)
+    xp.promote_shape_from_value(ref=ref, value=bytearray(b"ABCD"))
 
+    # In-bounds write (len == 4)
     xp.setDatab(
         ref,
-        [ord("X"), ord("Y"), ord("Z"), ord("!"), ord("?")],
+        [ord("X"), ord("Y"), ord("Z"), ord("!")],
         offset=0,
-        count=5,
+        count=4,
     )
-    assert bytes(ref.value[:5]) == b"XYZ!?"
+    assert bytes(ref.value[:4]) == b"XYZ!"
 
-    def read_data(rc, out, off, cnt):
-        for i in range(cnt):
-            out[i] = i + 1
-        return cnt
-
-    def write_data(rc, values, off, cnt):
-        return
-
-    real = xp.registerDataAccessor(
-        "myplugin/real_bytes",
-        readData=read_data,
-        writeData=write_data,
-    )
-    assert real.is_dummy is False
-
+    # Out-of-bounds write must fail once shape is known
     with pytest.raises(RuntimeError):
-        xp.setDatab(real, [0] * 512, offset=0, count=512)
+        xp.setDatab(
+            ref,
+            [ord("X"), ord("Y"), ord("Z"), ord("!"), ord("?")],
+            offset=0,
+            count=5,
+        )

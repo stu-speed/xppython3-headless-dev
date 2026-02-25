@@ -17,7 +17,7 @@ from sshd_extensions.dataref_manager import DataRefManager
 # ===========================================================================
 
 def test_dummy_spec_creation():
-    xp = FakeXP(debug=True, run_time=.01)
+    xp = FakeXP(debug=True)
     XPPython3.xp = xp
 
     specs = {
@@ -62,8 +62,8 @@ def test_dummy_to_real_promotion(monkeypatch):
     assert spec.handle is not None
 
     # mgr read (manager-backed value after promotion)
+    assert mgr.ready() is True
     assert mgr.get_value("sim/test/promote") == 0.0
-    assert xp.isPluginEnabled(xp.getMyID()) == 1
 
 
 # ===========================================================================

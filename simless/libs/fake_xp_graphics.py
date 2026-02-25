@@ -250,7 +250,7 @@ class FakeXPGraphics:
         Executes draw callbacks, renders widgets, and renders DearPyGui.
         """
         if self._dpg_initialized and not dpg.is_dearpygui_running():
-            self.xp._quit()
+            self.xp.simless_runner.end_run_loop()
             return
 
         self._update_mouse()

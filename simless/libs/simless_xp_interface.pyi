@@ -35,8 +35,9 @@ from XPPython3.xp_typing import (
 
 # Import the FakeDataRef handle type so the Simless type union reflects the
 # actual handle objects returned by FakeXP.findDataRef/registerDataAccessor.
-from simless.libs.fake_xp_dataref import FakeDataRef  # type: ignore
 from sshd_extensions.dataref_manager import DRefType
+from simless.libs.fake_xp_dataref_types import FakeDataRef
+from simless.libs.runner import SimlessRunner
 
 
 # ===========================================================================
@@ -59,6 +60,11 @@ FlightLoopCallback = Callable[[float, float, int, Any], float]
 # ===========================================================================
 @runtime_checkable
 class SimlessXPInterface(Protocol):
+    debug: bool
+    enable_gui: bool
+
+    simless_runner: SimlessRunner
+
     # ------------------------------------------------------------------
     # Logging / lifecycle
     # ------------------------------------------------------------------
@@ -317,19 +323,22 @@ class SimlessXPInterface(Protocol):
             writable: Optional[bool] = None,
             value: Optional[Any] = None,
     ) -> FakeDataRef: ...
-    def promote_handle(
+    def get_handle(self, name: str) -> Optional[FakeDataRef]: ...
+    def all_handle_paths(self) -> list[str]: ...
+    def all_handles(self) -> list[FakeDataRef]: ...
+    def promote_shape_from_value(
             self,
             ref: FakeDataRef,
+            value: Any,
+    ) -> None: ...
+    def promote_type(
+            self,
+            ref: FakeDataRef,
+            *,
             dtype: DRefType,
-            is_array: bool,
-            size: int,
             writable: bool,
-            default_value: Optional[Any] = None,
-            preserve_dummy_writes: bool = True,
     ) -> None: ...
     def attach_handle_callback(self, cb: Optional[Callable[[FakeDataRef], None]]) -> None: ...
     def detach_handle_callback(self) -> None: ...
-    def list_handles(self) -> list[str]: ...
-    def clear_handles(self) -> None: ...
     def draw_frame(self) -> None: ...
     def quit_runner(self) -> None: ...

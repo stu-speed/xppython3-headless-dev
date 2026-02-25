@@ -28,22 +28,12 @@
 #    - get_value() will create a DummyHandle on demand for newly registered
 #      specs, enabling immediate reads of defaults until promotion.
 # =============================================================================
-# plugins/sshd_extensions/dataref_manager.py
-# ========================================================================
-# DataRefs — simplified DataRef layer (no DummyHandle)
-#
-# - DummyHandle removed: DataRefSpec holds defaults and top-level metadata.
-# - spec.handle is None until a real XPLMDataRef is attached via promote().
-# - get_value returns spec.default when no handle exists (unless required).
-# - set_value allowed only for specs declared required and only after promotion.
-# - No array_size bookkeeping or strict array-length validation.
-# ========================================================================
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Any, Dict, Optional, Iterable, Callable
+from typing import Any, Dict, Optional
 
 import time
 
@@ -76,9 +66,33 @@ class DataRefSpec:
     required: bool = False
     default: Any = None
 
-    # Real handle (XPLMDataRef) or None until promoted
     handle: Optional[XPLMDataRef] = None
     is_dummy: bool = True
+
+    @staticmethod
+    def _mask_to_dtype(mask: int) -> DRefType:
+        """
+        XPLM reports a *bitmask* of supported types. Choose one canonical dtype
+        for manager get/set dispatch.
+        Preference: arrays first, then scalars (double > float > int).
+        """
+        m = int(mask) if mask is not None else 0
+
+        if m & int(DRefType.FLOAT_ARRAY):
+            return DRefType.FLOAT_ARRAY
+        if m & int(DRefType.INT_ARRAY):
+            return DRefType.INT_ARRAY
+        if m & int(DRefType.BYTE_ARRAY):
+            return DRefType.BYTE_ARRAY
+
+        if m & int(DRefType.DOUBLE):
+            return DRefType.DOUBLE
+        if m & int(DRefType.FLOAT):
+            return DRefType.FLOAT
+        if m & int(DRefType.INT):
+            return DRefType.INT
+
+        return DRefType.UNKNOWN
 
     @classmethod
     def from_info(
@@ -89,25 +103,22 @@ class DataRefSpec:
         default: Any,
         handle: XPLMDataRef,
     ) -> "DataRefSpec":
-        try:
-            dtype = DRefType(int(info.type))
-        except Exception as exc:
-            raise TypeError(f"Invalid dtype from xp for DataRef '{path}': {info.type!r}") from exc
+        dtype = cls._mask_to_dtype(int(getattr(info, "type", 0)))
+        if dtype == DRefType.UNKNOWN:
+            raise TypeError(f"Invalid/unknown dtype mask from xp for DataRef '{path}': {getattr(info, 'type', None)!r}")
 
-        spec = cls(
+        return cls(
             name=path,
             type=dtype,
-            writable=bool(info.writable),
+            writable=bool(getattr(info, "writable", False)),
             required=required,
             default=default,
             handle=handle,
             is_dummy=False,
         )
-        return spec
 
     @classmethod
     def dummy(cls, path: str, *, required: bool, default: Any) -> "DataRefSpec":
-        # If default is None, choose a convenient default: single-element float array.
         if default is None:
             default = [0.0]
             dtype = DRefType.FLOAT_ARRAY
@@ -124,7 +135,6 @@ class DataRefSpec:
             elif isinstance(default, float):
                 dtype = DRefType.FLOAT
             else:
-                # fallback to single-element float array
                 default = [0.0]
                 dtype = DRefType.FLOAT_ARRAY
 
@@ -142,27 +152,35 @@ class DataRefSpec:
         """
         Attach a real XPLMDataRef handle and update metadata.
 
-        No array-size parameter; we do not perform strict array-length validation.
+        In production, XPLM always reports a non‑zero type mask.
+        In simless/FakeXP, a zero mask means "not yet known" — fall back
+        to the spec's declared type in that case.
         """
-        try:
-            dtype = DRefType(int(info.type))
-        except Exception as exc:
-            raise TypeError(f"Invalid dtype from xp for DataRef '{self.name}': {info.type!r}") from exc
+        raw_mask = int(getattr(info, "type", 0))
+
+        if raw_mask == 0:
+            # Simless fallback: trust the spec's declared type
+            dtype = self.type
+        else:
+            dtype = self._mask_to_dtype(raw_mask)
+            if dtype == DRefType.UNKNOWN:
+                raise TypeError(
+                    f"Invalid/unknown dtype mask from xp for DataRef '{self.name}': {raw_mask!r}"
+                )
 
         self.handle = handle
         self.is_dummy = False
         self.type = dtype
-        self.writable = bool(info.writable)
+        self.writable = bool(getattr(info, "writable", False))
 
-        # Align default for convenience: arrays -> single-element float array, scalars -> 0.0
+        # Normalize default for convenience
         if dtype in (DRefType.FLOAT_ARRAY, DRefType.INT_ARRAY, DRefType.BYTE_ARRAY):
-            # If default was previously scalar, convert to a small list for consistency
             if not isinstance(self.default, (list, tuple, bytes, bytearray)):
-                self.default = [float(self.default) if isinstance(self.default, (int, float)) else 0.0]
+                self.default = [
+                    float(self.default) if isinstance(self.default, (int, float)) else 0.0
+                ]
         else:
-            # scalar
             if isinstance(self.default, (list, tuple, bytes, bytearray)):
-                # collapse to scalar 0.0 for convenience
                 self.default = 0.0
 
 
@@ -176,12 +194,10 @@ class DataRefManager:
         xp: Any,
         datarefs: Optional[Dict[str, Dict[str, Any]]] = None,
         timeout_seconds: float = 10.0,
-        clock: Optional[Callable[[], float]] = None,
     ) -> None:
         self.xp = xp
         self.specs: Dict[str, DataRefSpec] = {}
         self.timeout = float(timeout_seconds)
-        self.clock = clock or time.monotonic
 
         self._start_time: Optional[float] = None
         self._ready: bool = False
@@ -202,7 +218,6 @@ class DataRefManager:
                     if "default" in cfg:
                         spec.default = default
 
-    # Public API
     def add_spec(self, path: str, spec: DataRefSpec) -> None:
         self.specs[path] = spec
         self._ready = False
@@ -210,19 +225,16 @@ class DataRefManager:
     def get_spec(self, path: str) -> Optional[DataRefSpec]:
         return self.specs.get(path)
 
-    # Value retrieval
     def get_value(self, path: str) -> Any:
         spec = self.specs.get(path)
         if spec is None:
             return None
 
-        # If no handle yet, return default for optional refs; required refs must call ready()
         if spec.handle is None:
             if spec.required:
                 raise RuntimeError(f"DataRef '{path}' not ready; call ready() first")
             return spec.default
 
-        # Real handle path: call xp getters
         xp = self.xp
         h = spec.handle
         t = spec.type
@@ -236,31 +248,23 @@ class DataRefManager:
         if t == DRefType.FLOAT_ARRAY:
             out: list[float] = [0.0] * 8
             got = xp.getDatavf(h, out, 0, len(out))
-            if got is None:
-                return out
-            return out[:int(got)]
+            return out if got is None else out[:int(got)]
         if t == DRefType.INT_ARRAY:
             out: list[int] = [0] * 8
             got = xp.getDatavi(h, out, 0, len(out))
-            if got is None:
-                return out
-            return out[:int(got)]
+            return out if got is None else out[:int(got)]
         if t == DRefType.BYTE_ARRAY:
             out = bytearray(8)
             got = xp.getDatab(h, out, 0, len(out))
-            if got is None:
-                return out
-            return out[:int(got)]
+            return out if got is None else out[:int(got)]
 
-        raise TypeError(f"Unsupported dtype {t}")
+        raise TypeError(f"Unsupported dtype {t} for '{path}'")
 
-    # Value write
     def set_value(self, path: str, value: Any) -> None:
         spec = self.specs.get(path)
         if spec is None:
             raise KeyError(f"Unknown DataRef '{path}'")
 
-        # Just update default if no handle
         if spec.handle is None:
             spec.default = value
             return
@@ -269,7 +273,6 @@ class DataRefManager:
         h = spec.handle
         t = spec.type
 
-        # Scalars
         if t == DRefType.FLOAT:
             if not isinstance(value, (int, float)):
                 raise TypeError(f"Expected float for '{path}'")
@@ -288,7 +291,6 @@ class DataRefManager:
             xp.setDatad(h, float(value))
             return
 
-        # Arrays: forward lists/bytes to xp as-is (no strict length validation)
         if t == DRefType.FLOAT_ARRAY:
             if not isinstance(value, (list, tuple)):
                 raise TypeError(f"Expected list[float] for '{path}'")
@@ -307,20 +309,16 @@ class DataRefManager:
             xp.setDatab(h, value, 0, len(value))
             return
 
-        raise TypeError(f"Unsupported dtype {t}")
+        raise TypeError(f"Unsupported dtype {t} for '{path}'")
 
-    # Utility
-    def all_paths(self) -> Iterable[str]:
-        return self.specs.keys()
+    def all_paths(self) -> list[str]:
+        return list(self.specs.keys())
 
-    def list_specs(self) -> list[DataRefSpec]:
+    def all_specs(self) -> list[DataRefSpec]:
         return list(self.specs.values())
 
     def clear(self) -> None:
-        """
-        Reset all specs to unpromoted state; defaults remain on the spec.
-        """
-        for path, spec in list(self.specs.items()):
+        for _, spec in list(self.specs.items()):
             spec.is_dummy = True
             spec.handle = None
         self._start_time = None
@@ -328,28 +326,24 @@ class DataRefManager:
         self._timed_out = False
 
     def close(self) -> None:
-        """
-        Cleanup references; no xp side effects.
-        """
         self.specs.clear()
         self._start_time = None
         self._ready = False
         self._timed_out = False
 
-    # Startup resolution (non-blocking)
     def ready(self) -> bool:
         """
         Non-blocking: attempt to promote any unpromoted specs by querying xp.
-        Returns True when all required specs are promoted.
+        Returns True when all *required* specs are promoted.
         """
         if self._ready:
             return True
 
-        now = self.clock()
+        now = time.monotonic()
         if self._start_time is None:
             self._start_time = now
 
-        all_real = True
+        required_all_real = True
 
         for path, spec in list(self.specs.items()):
             if spec.handle:
@@ -357,38 +351,30 @@ class DataRefManager:
 
             handle = self.xp.findDataRef(path)
             if handle is None:
-                all_real = False
+                if spec.required:
+                    required_all_real = False
                 continue
 
             info = self.xp.getDataRefInfo(handle)
             if info is None:
-                all_real = False
-                continue
-
-            try:
-                # Validate dtype convertible
-                _ = DRefType(int(info.type))
-            except Exception:
-                self.xp.log(f"[DRM] WARN: invalid dtype for {path}: {info.type!r}")
-                all_real = False
+                if spec.required:
+                    required_all_real = False
                 continue
 
             try:
                 spec.promote(handle, info)
             except Exception as exc:
                 self.xp.log(f"[DRM] WARN: failed to promote {path}: {exc!r}")
-                all_real = False
+                if spec.required:
+                    required_all_real = False
 
-        if all_real:
+        if required_all_real:
             self._ready = True
             return True
 
         elapsed = now - (self._start_time or now)
         if elapsed > self.timeout:
-            missing = [
-                p for p, s in self.specs.items()
-                if (s.handle is None) and s.required
-            ]
+            missing = [p for p, s in self.specs.items() if (s.handle is None) and s.required]
             if missing:
                 self.xp.log(
                     f"[DRM] ERROR: Required DataRefs not available after {self.timeout} seconds: {missing}"
@@ -409,9 +395,6 @@ class DataRefManager:
         return self._timed_out
 
     def invalidate_ready(self) -> None:
-        """
-        External callers may call this when xp disconnects or handles become invalid.
-        """
         self._ready = False
         self._start_time = None
         self._timed_out = False

@@ -809,20 +809,15 @@ class XPBridgeClient:
 
     def __init__(
         self,
-        xp_interface: XPInterface
+        xp_interface: XPInterface,
+        host: str = BRIDGE_HOST,
+        port: int = BRIDGE_PORT,
     ) -> None:
-        """Initialize the bridge server.
-
-        Args:
-            xp_interface (XPInterface):
-                The XPPython3 interface used to access real X‑Plane
-                DataRefs and logging.
-        """
         self.xp: XPInterface = xp_interface
 
         # Production defaults (may be overridden by FakeXP)
-        self.host: str = BRIDGE_HOST
-        self.port: int = BRIDGE_PORT
+        self.host: str = host
+        self.port: int = port
 
         # TCP connection state
         self.sock: Optional[socket.socket] = None
@@ -901,7 +896,7 @@ class XPBridgeClient:
     # ------------------------------------------------------------------
     RECONNECT_INTERVAL = 10.0  # seconds
 
-    def poll(self) -> List[BridgeMsg]:
+    def poll_wire(self) -> List[BridgeMsg]:
         """
         Poll for inbound bridge messages.
 
@@ -988,7 +983,7 @@ class XPBridgeClient:
         Poll for inbound messages and return a user-friendly, path-based
         representation suitable for the simless runner and DataRefManager.
         """
-        wire_msgs = self.poll()
+        wire_msgs = self.poll_wire()
         out: List[BridgeData] = []
 
         for m in wire_msgs:

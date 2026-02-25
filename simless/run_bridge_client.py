@@ -4,7 +4,7 @@ import time
 
 import XPPython3
 
-from sshd_extensions.bridge_protocol import XPBridgeClient, BridgeData
+from sshd_extensions.bridge_protocol import XPBridgeClient, BRIDGE_HOST, BRIDGE_PORT
 from simless.libs.fake_xp import FakeXP
 
 
@@ -18,7 +18,7 @@ def run_bridge_client() -> None:
     xp = FakeXP(debug=True, enable_gui=True, enable_dataref_bridge=True)
     XPPython3.xp = xp
 
-    client = XPBridgeClient(xp)
+    client = XPBridgeClient(xp, host=BRIDGE_HOST, port=BRIDGE_PORT)
 
     try:
         client.connect()

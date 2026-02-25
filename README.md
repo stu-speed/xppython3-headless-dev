@@ -4,6 +4,9 @@
 A structured development environment for building and debugging XPPython3 plugins natively in
 an IDE (PyCharm) through runtime emulation of the XPPython3 API.
 
+XPPython3 is ideal for AI assisted coding of X-plane plugins.  The python syntax is highly compatible with LLM models
+as well as having a large validated public code base for training.
+
 This project provides:
 
 • A X‑Plane‑compatible plugin folder structure  
@@ -11,13 +14,14 @@ This project provides:
 • Live X‑Plane DataRef streaming through a bridge plugin  
 • A complete XPWidget + XPLMGraphics emulation layer (DearPyGui‑backed)  
 • Auto‑created, managed, and bridged DataRefs  
-• A multi‑plugin environment for integration testing  
+• stubs and .pyi files for strong datatyping and code introspection  
+• A simless multi‑plugin environment for integration testing  
 
 The goal is fast, maintainable plugin development with behavior identical inside and outside X‑Plane.
 
 ---
 
-# 📁 Directory Structure
+## 📁 Directory Structure
 ```
 xppython3-headless-dev/
 │
@@ -86,7 +90,7 @@ See **[GUI EMULATION NOTES](docs/GUI_EMULATION.md)** for special considerations 
 
 ---
 
-# 🧩 Managed DataRefs (XPPython3 extension)
+## 🧩 Managed DataRefs (XPPython3 extension)
 
 Managed DataRefs provide:
 
@@ -101,7 +105,7 @@ See **[MANAGED DATAREFS](docs/DATAREF_MODEL.md#managed-datarefs)** for full deta
 
 ---
 
-# 🔌 Bridged DataRefs (Live X‑Plane integration)
+## 🔌 Bridged DataRefs (Live X‑Plane integration)
 
 Bridged DataRefs allow a sim‑less FakeXP environment to mirror live X‑Plane DataRefs in real time.
 
@@ -132,28 +136,32 @@ No plugin code changes are required.
 
 ---
 
-# ▶️ Minimal Sim‑less Runner
+## ▶️ Minimal Sim‑less Runner
 
 A simple runner script is all that’s needed to execute plugins outside X‑Plane.
 ```python
-import XPPython3  
-from simless.libs.fake_xp import FakeXP  
-from pathlib import Path  
-import sys  
+import sys
+import XPPython3
+from simless.libs.fake_xp import FakeXP
+from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent  
-PLUGIN_ROOT = ROOT / "plugins"  
-sys.path.insert(0, str(PLUGIN_ROOT))  
+# Emulate plugin root dir
+ROOT = Path(__file__).resolve().parent.parent
+PLUGIN_ROOT = ROOT / "plugins"
+sys.path.insert(0, str(PLUGIN_ROOT))
 
-xp = FakeXP(debug=True)  
-XPPython3.xp = xp  
+def run_simless_oat_gui() -> None:
+    xp = FakeXP(debug=True, enable_gui=True)
+    XPPython3.xp = xp
 
-plugins = [  
-    "PI_sshd_OAT",  
-    "PI_sshd_dev_oat_gui",  
-]  
+    plugins = [
+        "PI_sshd_OAT",
+        "PI_sshd_dev_oat_gui",
+    ]
+    xp.simless_runner.run_plugin_lifecycle(plugins)
 
-xp.run_plugin_lifecycle(plugins, debug=True, enable_gui=True)
+if __name__ == "__main__":
+    run_simless_oat_gui()
 ```
 
 This runner:
@@ -165,7 +173,7 @@ This runner:
 
 ---
 
-# 🚀 Deployment to X‑Plane
+## 🚀 Deployment to X‑Plane
 
 Copy plugin contents into:
 

@@ -28,7 +28,7 @@ def run_simless_oat_gui() -> None:
         "PI_sshd_dev_oat_gui",
     ]
 
-    xp.run_plugin_lifecycle(plugins)
+    xp.simless_runner.run_plugin_lifecycle(plugins)
 
 
 if __name__ == "__main__":
