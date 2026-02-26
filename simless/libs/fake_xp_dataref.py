@@ -108,8 +108,19 @@ class FakeXPDataRef(FakeXPDataRefAPI):
     # -------------------------
 
     def get_handle(self, name: str) -> Optional[FakeDataRef]:
+        name_str = str(name)
         with self._handles_lock:
-            return self._handles.get(name)
+            return self._handles.get(name_str)
+
+    def add_handle(self, name: str, ref: FakeDataRef) -> None:
+        with self._handles_lock:
+            name_str = str(name)
+            self._handles[name_str] = ref
+
+    def del_handle(self, name) -> None:
+        with self._handles_lock:
+            name_str = str(name)
+            del self._handles[name_str]
 
     def all_handle_paths(self) -> list[str]:
         """Return a snapshot of all known DataRef handle paths."""

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any, List
 
 from XPPython3 import xp
@@ -20,7 +20,7 @@ from sshd_extlibs.serial_device import SerialOAT
 xp: XPInterface
 
 
-class MDR(str, Enum):
+class MDR(StrEnum):
     oat_c = "sim/cockpit2/temperature/outside_air_temp_degc"
     bus_volts = "sim/cockpit2/electrical/bus_volts"
 

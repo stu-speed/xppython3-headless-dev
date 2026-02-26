@@ -137,19 +137,18 @@ class FakeXPDataRefAPI:
     # Lookup / dummy creation
     # ------------------------------------------------------------------
     def findDataRef(self, name: str) -> Optional[FakeDataRef]:
-        with self._handles_lock:
-            existing = self._handles.get(name)
-            if existing is not None:
-                return existing
+        existing = self.xp.get_handle(name)
+        if existing is not None:
+            return existing
 
-            ref = FakeDataRef(
-                path=name,
-                type=DRefType.FLOAT,
-                writable=True,
-                size=1,
-                value=0.0,
-            )
-            self._handles[name] = ref
+        ref = FakeDataRef(
+            path=name,
+            type=DRefType.FLOAT,
+            writable=True,
+            size=1,
+            value=0.0,
+        )
+        self.xp.add_handle(name, ref)
 
         self._notify_handle_created(ref)
         return ref
@@ -191,11 +190,10 @@ class FakeXPDataRefAPI:
     def _resolve_ref(self, dataRef: FakeDataRef) -> FakeDataRef:
         if not isinstance(dataRef, FakeDataRef):
             raise TypeError("invalid dataRef")
-        with self._handles_lock:
-            ref = self._handles.get(dataRef.path)
-            if ref is None or ref is not dataRef:
-                raise TypeError("invalid dataRef")
-            return ref
+        ref = self.xp.get_handle(dataRef.path)
+        if ref is None or ref is not dataRef:
+            raise TypeError("invalid dataRef")
+        return ref
 
     # ------------------------------------------------------------------
     # Scalar accessors
@@ -552,19 +550,18 @@ class FakeXPDataRefAPI:
         dtype, is_array, size = self._choose_dtype_from_mask(mask)
         default_value = self._default_value_for(dtype, size)
 
-        with self._handles_lock:
-            existing = self._handles.get(name)
-            if existing is not None:
-                ref = existing
-            else:
-                ref = FakeDataRef(
-                    path=name,
-                    type=dtype,
-                    writable=bool(writable_flag),
-                    size=1,
-                    value=0.0,
-                )
-                self._handles[name] = ref
+        existing = self.xp.get_handle(name)
+        if existing is not None:
+            ref = existing
+        else:
+            ref = FakeDataRef(
+                path=name,
+                type=dtype,
+                writable=bool(writable_flag),
+                size=1,
+                value=0.0,
+            )
+            self.xp.add_handle(name, ref)
 
             # Explicit promotions: registration is authoritative.
             self.xp.promote_type(ref=ref, dtype=dtype, writable=bool(writable_flag))
@@ -601,12 +598,11 @@ class FakeXPDataRefAPI:
         """
         if not isinstance(dataRef, FakeDataRef):
             raise TypeError("invalid dataRef")
-        with self._handles_lock:
-            stored = self._handles.get(dataRef.path)
-            if stored is None or stored is not dataRef:
-                raise TypeError("invalid dataRef")
-            self._accessors.pop(dataRef.path, None)
-            del self._handles[dataRef.path]
+        stored = self.xp.get_handle(dataRef.path)
+        if stored is None or stored is not dataRef:
+            raise TypeError("invalid dataRef")
+        self._accessors.pop(dataRef.path, None)
+        self.xp.del_handle(dataRef.path)
 
     # -------------------------
     # Helpers for registerDataAccessor

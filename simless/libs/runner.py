@@ -77,10 +77,11 @@ class SimlessRunner:
         self.xp: FakeXPInterface = xp
         self._running: bool = False
         self._bridge_connected: bool = False
+        self._bridge_last_error: str | None = None
         self._bridge = None
 
         # Allow FakeXP to call back into us
-        setattr(self.xp, "_simless_runner", self)
+        setattr(self.xp, "simless_runner", self)
 
         # ------------------------------------------------------------------
         # Create the dataref bridge and manager helper
@@ -100,6 +101,17 @@ class SimlessRunner:
         self._next_flightloop_id: int = 1
         self._flightloops: Dict[int, Dict[str, Any]] = {}
         self._sim_time: float = 0.0
+
+    @property
+    def bridge_status(self) -> tuple[bool, bool, str | None]:
+        """
+        Return bridge status as (enabled, connected, last_error).
+        """
+        return (
+            self._bridge is not None,
+            self._bridge_connected,
+            self._bridge_last_error,
+        )
 
     # ----------------------------------------------------------------------
     # Bridge registration callback wiring
@@ -167,13 +179,15 @@ class SimlessRunner:
 
         try:
             events: List[BridgeData] = self._bridge.poll_data()
-        except ConnectionResetError:
+        except ConnectionResetError as exc:
             xp.log("[Runner] Bridge disconnected")
             self._bridge_connected = False
+            self._bridge_last_error = f"connection reset: {exc}"
             return
 
         if not self._bridge_connected:
             self._bridge_connected = True
+            self._bridge_last_error = None
             self._register_all_datarefs_with_bridge()
 
         for ev in events:
@@ -211,6 +225,7 @@ class SimlessRunner:
                 ref.value = value
 
             elif ev.type is BridgeDataType.ERROR:
+                self._bridge_last_error = ev.text
                 xp.log(f"[Bridge] ERROR: {ev.text}")
 
     # ----------------------------------------------------------------------

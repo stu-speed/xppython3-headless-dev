@@ -262,16 +262,22 @@ class FakeXPGraphics:
             except Exception as exc:
                 self.xp.log(f"[Graphics] draw callback error: {exc!r}")
 
-        # Render widgets if widget subsystem exists
+        # Render DPG frame FIRST (establishes valid item state/layout)
+        if self._dpg_initialized:
+            try:
+                dpg.render_dearpygui_frame()
+            except Exception as exc:
+                self.xp.log(f"[Graphics] frame render error: {exc!r}")
+                return
+
+        # Mark widget layout ready AFTER first successful frame
+        if hasattr(self, "_layout_ready") and not getattr(self, "_layout_ready"):
+            self._layout_ready = True
+
+        # Render widgets (safe now)
         if hasattr(self, "_draw_all_widgets"):
             try:
                 self._draw_all_widgets()
             except Exception as exc:
                 self.xp.log(f"[Graphics] widget render error: {exc!r}")
 
-        # Render DPG frame
-        if self._dpg_initialized:
-            try:
-                dpg.render_dearpygui_frame()
-            except Exception as exc:
-                self.xp.log(f"[Graphics] frame render error: {exc!r}")
