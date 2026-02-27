@@ -73,4 +73,3 @@ class XPInterface:
     Runtime placeholder for the XPInterface type.
     """
     pass
-

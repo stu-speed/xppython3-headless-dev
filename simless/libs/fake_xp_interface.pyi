@@ -17,14 +17,12 @@
 # ===========================================================================
 
 from __future__ import annotations
-from typing import Any, Protocol, runtime_checkable, Optional, List
 
-from simless.libs.simless_xp_interface import SimlessXPInterface
-from simless.libs.fake_xp_dataref_types import FakeDataRef
-from sshd_extensions.bridge_protocol import XPBridgeClient
-from simless.libs.runner import SimlessRunner
+from typing import Any, Protocol, runtime_checkable
+
 from simless.libs.fake_xp_widget import XPWidgetID
-from sshd_extensions.dataref_manager import DataRefManager
+from simless.libs.runner import SimlessRunner
+from simless.libs.simless_xp_interface import SimlessXPInterface
 
 
 @runtime_checkable

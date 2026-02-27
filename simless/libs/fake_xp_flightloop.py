@@ -35,10 +35,10 @@
 # ===========================================================================
 
 from __future__ import annotations
+
 from typing import Any, Callable, Dict, Optional
 
 from simless.libs.fake_xp_interface import FakeXPInterface
-
 
 # XP12-style struct dictionary
 FlightLoopStruct = Dict[str, Any]

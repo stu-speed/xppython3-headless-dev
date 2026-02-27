@@ -47,22 +47,20 @@ from __future__ import annotations
 from typing import Any, Callable
 
 import XPPython3
+from simless.libs.fake_xp_constants import bind_xp_constants
+from simless.libs.fake_xp_dataref import FakeXPDataRef
+from simless.libs.fake_xp_flightloop import FakeXPFlightLoop
+from simless.libs.fake_xp_graphics import FakeXPGraphics
+from simless.libs.fake_xp_interface import FakeXPInterface
+from simless.libs.fake_xp_utilities import FakeXPUtilities
+from simless.libs.fake_xp_widget import FakeXPWidget
+from simless.libs.runner import SimlessRunner
+from sshd_extensions.bridge_protocol import BRIDGE_HOST, BRIDGE_PORT
 from XPPython3.xp_typing import (
     XPLMFlightLoopID,
     XPLMFlightLoopPhaseType,
     XPWidgetID,
 )
-
-from sshd_extensions.bridge_protocol import BRIDGE_HOST, BRIDGE_PORT
-from simless.libs.runner import SimlessRunner
-from simless.libs.fake_xp_constants import bind_xp_constants
-from simless.libs.fake_xp_dataref import FakeXPDataRef
-from simless.libs.fake_xp_widget import FakeXPWidget
-from simless.libs.fake_xp_graphics import FakeXPGraphics
-from simless.libs.fake_xp_flightloop import FakeXPFlightLoop
-from simless.libs.fake_xp_utilities import FakeXPUtilities
-from simless.libs.fake_xp_interface import FakeXPInterface
-
 
 FlightLoopCallback = Callable[[float, float, int, Any], float]
 
@@ -160,11 +158,11 @@ class FakeXP(
 
         # Bind subsystem public APIs into xp.*
         for subsystem in (
-            FakeXPDataRef,
-            FakeXPWidget,
-            FakeXPGraphics,
-            FakeXPFlightLoop,
-            FakeXPUtilities,
+                FakeXPDataRef,
+                FakeXPWidget,
+                FakeXPGraphics,
+                FakeXPFlightLoop,
+                FakeXPUtilities,
         ):
             for name in getattr(subsystem, "public_api_names", []):
                 assert hasattr(self, name), f"Missing {subsystem} xp API method: {name}"
@@ -289,8 +287,8 @@ class FakeXP(
     def createFlightLoop(
         self,
         callback: FlightLoopCallback
-        | tuple[int, FlightLoopCallback, Any]
-        | list[Any],
+                  | tuple[int, FlightLoopCallback, Any]
+                  | list[Any],
         phase: XPLMFlightLoopPhaseType = XPLMFlightLoopPhaseType(0),
         refCon: Any | None = None,
     ) -> XPLMFlightLoopID:

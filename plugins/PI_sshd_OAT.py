@@ -9,13 +9,11 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, List
 
+from sshd_extensions.dataref_manager import DataRefManager
+from sshd_extensions.xp_interface import XPInterface
+from sshd_extlibs.serial_device import SerialOAT
 from XPPython3 import xp
 from XPPython3.xp_typing import XPLMFlightLoopID
-
-from sshd_extensions.xp_interface import XPInterface
-from sshd_extensions.dataref_manager import DataRefManager
-from sshd_extlibs.serial_device import SerialOAT
-
 
 xp: XPInterface
 
@@ -24,10 +22,11 @@ class MDR(StrEnum):
     oat_c = "sim/cockpit2/temperature/outside_air_temp_degc"
     bus_volts = "sim/cockpit2/electrical/bus_volts"
 
+
 # Default values used for simless testing
 MANAGED_DATAREFS = {
-    MDR.oat_c: { "required": True, "default": 10.0, },
-    MDR.bus_volts: { "required": True, "default": [0.0] * 6, },
+    MDR.oat_c: {"required": True, "default": 10.0, },
+    MDR.bus_volts: {"required": True, "default": [0.0] * 6, },
 }
 
 

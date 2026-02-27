@@ -8,10 +8,8 @@ import sys
 from pathlib import Path
 
 import XPPython3
-
-from sshd_extensions.bridge_protocol import BRIDGE_HOST, BRIDGE_PORT
 from simless.libs.fake_xp import FakeXP
-
+from sshd_extensions.bridge_protocol import BRIDGE_HOST, BRIDGE_PORT
 
 # Emulate plugin root dir
 ROOT = Path(__file__).resolve().parent.parent
@@ -20,7 +18,10 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 
 def run_simless_oat_gui() -> None:
-    xp = FakeXP(debug=True, enable_gui=True, enable_dataref_bridge=True, bridge_host=BRIDGE_HOST, bridge_port=BRIDGE_PORT)
+    xp = FakeXP(
+        debug=True, enable_gui=True, enable_dataref_bridge=True, bridge_host=BRIDGE_HOST,
+        bridge_port=BRIDGE_PORT
+    )
     XPPython3.xp = xp
 
     plugins = [

@@ -22,7 +22,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, List, Tuple, Sequence, Optional
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import dearpygui.dearpygui as dpg
 
@@ -100,15 +100,15 @@ class FakeXPGraphics:
 
             # Root window at top level
             with dpg.window(
-                    label="##gfx_root",
-                    pos=(0, 0),
-                    width=self._screen_w,
-                    height=self._screen_h,
-                    no_title_bar=True,
-                    no_resize=True,
-                    no_move=True,
-                    no_scrollbar=True,
-                    no_collapse=True,
+                label="##gfx_root",
+                pos=(0, 0),
+                width=self._screen_w,
+                height=self._screen_h,
+                no_title_bar=True,
+                no_resize=True,
+                no_move=True,
+                no_scrollbar=True,
+                no_collapse=True,
             ) as root:
                 self._graphics_window = root
 
@@ -280,4 +280,3 @@ class FakeXPGraphics:
                 self._draw_all_widgets()
             except Exception as exc:
                 self.xp.log(f"[Graphics] widget render error: {exc!r}")
-

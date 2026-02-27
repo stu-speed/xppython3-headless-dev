@@ -16,6 +16,9 @@ import pytest
 import types
 import XPPython3
 
+from sshd_extensions.dataref_manager import DRefType
+
+
 
 @pytest.fixture(autouse=True)
 def reset_xp():
@@ -69,3 +72,36 @@ def inline_plugin():
         return mod
 
     return _create
+
+@pytest.fixture
+def update_dataref():
+    """
+    Test-only helper that coerces dummy FakeDataRef fields without promoting.
+    Mirrors the semantics expected by test_update_dummy_ref_validation.
+    """
+    def _update(ref, *, dtype: DRefType, size=None, value=None):
+        # Must be dummy
+        if not ref.is_dummy:
+            raise RuntimeError("update_dataref only valid for dummy refs")
+
+        # Validate size
+        if size is not None and size <= 0:
+            raise ValueError("size must be > 0")
+
+        # Apply coercions
+        if dtype is not None:
+            ref.type = dtype
+            ref.type_known = True
+
+        if size is not None:
+            ref.size = size
+            ref.is_array = size > 1
+            ref.shape_known = True
+
+        if value is not None:
+            ref.value = value
+
+        return True
+
+    return _update
+

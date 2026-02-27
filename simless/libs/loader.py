@@ -20,7 +20,7 @@ import inspect
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Protocol, List
+from typing import List, Protocol
 
 from simless.libs.fake_xp_interface import FakeXPInterface
 
@@ -32,10 +32,13 @@ from simless.libs.fake_xp_interface import FakeXPInterface
 class PythonInterfaceProto(Protocol):
     def XPluginStart(self) -> tuple[str, str, str]:
         ...
+
     def XPluginEnable(self) -> int:
         ...
+
     def XPluginDisable(self) -> None:
         ...
+
     def XPluginStop(self) -> None:
         ...
 

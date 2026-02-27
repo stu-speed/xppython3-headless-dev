@@ -31,11 +31,10 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any, Dict, Optional
-
-import time
 
 from XPPython3.xp_typing import XPLMDataRef, XPLMDataRefInfo_t
 

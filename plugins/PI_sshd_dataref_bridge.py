@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from XPPython3 import xp
-from XPPython3.xp_typing import XPLMFlightLoopID
-
 from sshd_extensions.bridge_protocol import XPBridgeServer
 from sshd_extensions.xp_interface import XPInterface
-
+from XPPython3 import xp
+from XPPython3.xp_typing import XPLMFlightLoopID
 
 xp: XPInterface
 
