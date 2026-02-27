@@ -9,17 +9,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Pattern
 
-from XPPython3 import xp
-from XPPython3.xp_typing import XPWidgetID, XPWidgetMessage
-
-from simless.libs.fake_xp_interface import FakeXPInterface
 from simless.libs.fake_xp_dataref_types import DRefType, FakeDataRef
-
-LOG_PREFIX = "[FakeXPDataRefViewer]"
-
-
-def log(msg: str) -> None:
-    xp.log(f"{LOG_PREFIX} {msg}")
+from simless.libs.fake_xp_interface import FakeXPInterface
+from XPPython3.xp_typing import XPWidgetID, XPWidgetMessage
 
 
 # ============================================================
@@ -54,6 +46,8 @@ class ViewerState:
 # ============================================================
 
 class DataRefViewer:
+    LOG_PREFIX = "[FakeXPDataRefViewer]"
+
     def __init__(self, xp_: FakeXPInterface) -> None:
         self.xp = xp_
 
@@ -75,66 +69,69 @@ class DataRefViewer:
 
     # --------------------------------------------------------
 
+    def log(self, msg: str) -> None:
+        self.xp.log(f"{DataRefViewer.LOG_PREFIX} {msg}")
+
     def open(self) -> None:
         if self.win:
             return
 
-        self.win = xp.createWidget(
-            100, 800, 900, 200,
+        self.win = self.xp.createWidget(
+            100, 800, 1400, 200,
             1,
             "FakeXP DataRef Viewer",
             1,
             0,
-            xp.WidgetClass_MainWindow,
+            self.xp.WidgetClass_MainWindow,
         )
-        xp.setWidgetProperty(self.win, xp.Property_MainWindowHasCloseBoxes, 1)
+        self.xp.setWidgetProperty(self.win, self.xp.Property_MainWindowHasCloseBoxes, 1)
 
-        # STATUS
-        self.status_caption = xp.createWidget(
+        # STATUS (single line)
+        self.status_caption = self.xp.createWidget(
             110, 770, 850, 735,
-            1, "", 0, self.win, xp.WidgetClass_Caption
+            1, "", 0, self.win, self.xp.WidgetClass_Caption
         )
 
-        # FILTER (single line)
-        y_top = 720
-        y_bot = 700
+        # FILTER (single line, moved up)
+        y_top = 745
+        y_bot = 725
 
-        self.filter_label = xp.createWidget(
-            110, y_top, 260, y_bot,
-            1, "FILTER (regex):", 0, self.win, xp.WidgetClass_Caption
+        self.filter_label = self.xp.createWidget(
+            110, y_top, 220, y_bot,
+            1, "FILTER (regex):", 0, self.win, self.xp.WidgetClass_Caption
         )
 
-        self.filter_field = xp.createWidget(
-            270, y_top, 650, y_bot,
-            1, "", 0, self.win, xp.WidgetClass_TextField
+        self.filter_field = self.xp.createWidget(
+            225, y_top, 525, y_bot,
+            1, "", 0, self.win, self.xp.WidgetClass_TextField
         )
-        xp.setWidgetProperty(
+        self.xp.setWidgetProperty(
             self.filter_field,
-            xp.Property_TextFieldType,
-            xp.TextEntryField,
+            self.xp.Property_TextFieldType,
+            self.xp.TextEntryField,
         )
 
-        self.filter_button = xp.createWidget(
-            660, y_top, 740, y_bot,
-            1, "Apply", 0, self.win, xp.WidgetClass_Button
+        self.filter_button = self.xp.createWidget(
+            530, y_top, 610, y_bot,
+            1, "Apply", 0, self.win, self.xp.WidgetClass_Button
         )
 
-        # DATAREF LIST
-        self.data_caption = xp.createWidget(
-            110, 685, 850, 250,
-            1, "", 0, self.win, xp.WidgetClass_Caption
+        # DATAREF LIST (nudged up to match reclaimed space)
+        self.data_caption = self.xp.createWidget(
+            110, 705, 1390, 250,
+            1, "", 0, self.win, self.xp.WidgetClass_Caption
         )
 
         # Callbacks
-        xp.addWidgetCallback(self.win, self._widget_handler)
-        xp.addWidgetCallback(self.filter_field, self._widget_handler)
-        xp.addWidgetCallback(self.filter_button, self._widget_handler)
+        self.xp.addWidgetCallback(self.win, self._widget_handler)
+        self.xp.addWidgetCallback(self.filter_field, self._widget_handler)
+        self.xp.addWidgetCallback(self.filter_button, self._widget_handler)
 
         self._dirty = True
 
     def close(self) -> None:
         if self.win:
-            xp.destroyWidget(self.win, 1)
+            self.xp.destroyWidget(self.win, 1)
             self.win = None
 
     # --------------------------------------------------------
@@ -146,17 +143,17 @@ class DataRefViewer:
         p1: Any,
         p2: Any,
     ) -> int:
-        if msg == xp.Message_CloseButtonPushed and widget == self.win:
-            xp.hideWidget(self.win)
+        if msg == self.xp.Message_CloseButtonPushed and widget == self.win:
+            self.xp.hideWidget(self.win)
             return 1
 
         # TextField commits are event-driven
-        if msg == xp.Msg_TextFieldChanged and widget == self.filter_field:
+        if msg == self.xp.Msg_TextFieldChanged and widget == self.filter_field:
             self._filter_text = str(p1)
             return 1
 
         # Button presses are delivered to the parent window
-        if msg == xp.Msg_PushButtonPressed and widget == self.filter_button:
+        if msg == self.xp.Msg_PushButtonPressed and widget == self.filter_button:
             self._apply_filter(self._filter_text)
             return 1
 
@@ -177,22 +174,19 @@ class DataRefViewer:
 
     def _render_status(self) -> None:
         runner = self.xp.simless_runner
-        enabled, connected, last_error = runner.bridge_status
+        enabled, connected, conn_status = runner.bridge_status
 
         if not enabled:
-            text = "STATUS\nBridge: DISABLED"
-        elif connected:
-            text = "STATUS\nBridge: CONNECTED"
+            text = "Bridge: DISABLED"
         else:
-            reason = f"\nReason: {last_error}" if last_error else ""
-            text = f"STATUS\nBridge: DISCONNECTED{reason}"
+            text = f"Bridge: {"CONNECTED" if connected else "DISCONNECTED"} - {conn_status}"
 
-        xp.setWidgetDescriptor(self.status_caption, text)
+        self.xp.setWidgetDescriptor(self.status_caption, text)
 
     def _render_datarefs(self) -> None:
         lines: list[str] = []
-        lines.append("  D  IDX  NAME                                               W  VALUE")
-        lines.append("  -- ---- -------------------------------------------------- -  -----")
+        lines.append("  D IDX  NAME                                                         W VALUE")
+        lines.append("  - ---- ------------------------------------------------------------ - -----")
 
         for ref in sorted(self.state.refs.values(), key=lambda r: r.meta.idx):
             meta = ref.meta
@@ -203,11 +197,11 @@ class DataRefViewer:
             mark = "*" if ref.changed else " "
             dummy = "D" if meta.is_dummy else " "
             lines.append(
-                f"{mark}{dummy} {meta.idx:4d}  {meta.name:50s}  "
-                f"{'W' if meta.writable else '-'}  {ref.value}"
+                f"{mark} {dummy} {meta.idx:4d} {meta.name:60s} "
+                f"{'W' if meta.writable else '-'} {ref.value}"
             )
 
-        xp.setWidgetDescriptor(self.data_caption, "\n".join(lines))
+        self.xp.setWidgetDescriptor(self.data_caption, "\n".join(lines))
 
     def _apply_filter(self, text: str) -> None:
         text = (text or "").strip()
@@ -240,7 +234,6 @@ class FakeXPDataRefViewerClient:
 
         self.xp.attach_handle_callback(self._on_new_handle)
         self.viewer.open()
-        log("Viewer attached")
 
     def detach(self) -> None:
         if not self._attached:
@@ -249,9 +242,8 @@ class FakeXPDataRefViewerClient:
 
         self.xp.detach_handle_callback()
         self.viewer.close()
-        log("Viewer detached")
 
-    def poll(self) -> None:
+    def update(self) -> None:
         for state in self.viewer.state.refs.values():
             self._update_value(state)
         self.viewer.refresh()
@@ -263,16 +255,15 @@ class FakeXPDataRefViewerClient:
         if ref.path in self.viewer.state.refs:
             return
 
-        info = self.xp.getDataRefInfo(ref)
-        value = self._read_value(ref, info)
+        value = self._read_value(ref)
 
         meta = RefMeta(
             idx=self.viewer._next_idx,
             name=ref.path,
-            type=info.type,
-            writable=info.writable,
-            array_size=getattr(info, "size", 0),
-            is_dummy=getattr(ref, "is_dummy", False),
+            type=ref.type,
+            writable=ref.writable,
+            array_size=ref.size,
+            is_dummy=not ref.shape_known and not ref.type_known,
         )
 
         self.viewer.state.refs[ref.path] = RefState(
@@ -289,8 +280,7 @@ class FakeXPDataRefViewerClient:
         if ref is None:
             return
 
-        info = self.xp.getDataRefInfo(ref)
-        new_value = self._read_value(ref, info)
+        new_value = self._read_value(ref)
 
         state.last_value = state.value
         state.value = new_value
@@ -298,8 +288,8 @@ class FakeXPDataRefViewerClient:
         if state.changed:
             self.viewer._dirty = True
 
-    def _read_value(self, ref: FakeDataRef, info) -> Any:
-        t = info.type
+    def _read_value(self, ref: FakeDataRef) -> Any:
+        t = ref.type
         xp_ = self.xp
 
         if t & DRefType.FLOAT:
@@ -309,16 +299,16 @@ class FakeXPDataRefViewerClient:
         if t & DRefType.DOUBLE:
             return xp_.getDatad(ref)
         if t & DRefType.FLOAT_ARRAY:
-            buf = [0.0] * info.size
-            xp_.getDatavf(ref, buf, 0, info.size)
+            buf = [0.0] * ref.size
+            xp_.getDatavf(ref, buf, 0, ref.size)
             return buf
         if t & DRefType.INT_ARRAY:
-            buf = [0] * info.size
-            xp_.getDatavi(ref, buf, 0, info.size)
+            buf = [0] * ref.size
+            xp_.getDatavi(ref, buf, 0, ref.size)
             return buf
         if t & DRefType.BYTE_ARRAY:
-            buf = bytearray(info.size)
-            xp_.getDatab(ref, buf, 0, info.size)
+            buf = bytearray(ref.size)
+            xp_.getDatab(ref, buf, 0, ref.size)
             return buf
 
         return None

@@ -4,18 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from XPPython3 import xp
-from XPPython3.xp_typing import (
-    XPWidgetID,
-    XPWidgetMessage,
-    XPLMFlightLoopID,
-)
-
 from sshd_extensions.xp_interface import XPInterface
-
+from XPPython3 import xp
+from XPPython3.xp_typing import XPLMFlightLoopID, XPWidgetID
 
 xp: XPInterface
-
 
 XPWidgetMessageHandler_f = Callable[[int, int, Any, Any], int]
 
@@ -36,15 +29,14 @@ class PythonInterface:
     oat_handle: Any | None
     bus_array_handle: Any | None
 
-    _win_handler_cb: XPWidgetMessageHandler_f | None
     _fl_id: XPLMFlightLoopID | None
 
-    def XPluginStart(self) -> tuple[str, str, str]:
+    # ------------------------------------------------------------------
+    def XPluginStart(self):
         self.Name = "Dev OTA GUI"
         self.Sig = "simless.dev.ota.gui"
         self.Desc = "Development GUI for adjusting Outside Air Temperature"
 
-        # Widget handles
         self.win = None
         self.slider = None
         self.slider_label = None
@@ -53,23 +45,24 @@ class PythonInterface:
         self.bus_label = None
         self.quit_btn = None
 
-        # Datarefs
         self.oat_handle = None
         self.bus_array_handle = None
-
-        # Callbacks
-        self._win_handler_cb = None
         self._fl_id = None
 
         return self.Name, self.Sig, self.Desc
 
-    # ----------------------------------------------------------------------
-    # UI builder (moved out of XPluginEnable)
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # UI BUILD
+    # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        # Window
+        self._create_window()
+        self._create_oat_controls()
+        self._create_bus_controls()
+        self._create_quit_button()
+
+    def _create_window(self):
         self.win = xp.createWidget(
-            100, 500, 650, 100,
+            100, 500, 650, 240,
             1,
             "Simless OTA Control",
             1,
@@ -78,7 +71,16 @@ class PythonInterface:
         )
         xp.setWidgetProperty(self.win, xp.Property_MainWindowHasCloseBoxes, 1)
 
-        # --- OAT Caption ---
+        # Window handler only handles close box
+        def window_handler(msg, widget, p1, p2):
+            if msg == xp.Message_CloseButtonPushed:
+                xp.hideWidget(self.win)
+                return 1
+            return 0
+
+        xp.addWidgetCallback(self.win, window_handler)
+
+    def _create_oat_controls(self):
         xp.createWidget(
             120, 460, 480, 430,
             1,
@@ -88,7 +90,9 @@ class PythonInterface:
             xp.WidgetClass_Caption,
         )
 
-        # --- OAT Slider ---
+        oat_value = 10
+        xp.setDataf(self.oat_handle, oat_value)
+
         self.slider = xp.createWidget(
             120, 420, 480, 380,
             1,
@@ -101,34 +105,29 @@ class PythonInterface:
         xp.setWidgetProperty(self.slider, xp.Property_ScrollBarMin, -50)
         xp.setWidgetProperty(self.slider, xp.Property_ScrollBarMax, 50)
         xp.setWidgetProperty(self.slider, xp.Property_ScrollBarPageAmount, 1)
-        xp.setWidgetProperty(self.slider, xp.Property_ScrollBarSliderPosition, 10)
+        xp.setWidgetProperty(self.slider, xp.Property_ScrollBarSliderPosition, oat_value)
 
-        # --- OAT Value Label ---
         self.slider_label = xp.createWidget(
             500, 420, 620, 380,
             1,
-            "10°C",
+            f"{oat_value}°C",
             0,
             self.win,
             xp.WidgetClass_Caption,
         )
 
-        # --- Current OAT Display ---
-        try:
-            current_oat = int(xp.getDataf(self.oat_handle))
-        except Exception:
-            current_oat = 10
+        # Child callback for OAT slider
+        def oat_slider_handler(msg, widget, p1, p2):
+            if msg == xp.Msg_ScrollBarSliderPositionChanged:
+                temp = int(p2)
+                xp.setWidgetDescriptor(self.slider_label, f"{temp}°C")
+                xp.setDataf(self.oat_handle, float(temp))
+                return 1
+            return 0
 
-        self.current_oat_label = xp.createWidget(
-            120, 390, 480, 360,
-            1,
-            f"Current OAT: {current_oat}°C",
-            0,
-            self.win,
-            xp.WidgetClass_Caption,
-        )
+        xp.addWidgetCallback(self.slider, oat_slider_handler)
 
-        # --- Bus Volts Caption ---
+    def _create_bus_controls(self):
         xp.createWidget(
             120, 360, 480, 330,
             1,
@@ -138,7 +137,6 @@ class PythonInterface:
             xp.WidgetClass_Caption,
         )
 
-        # --- Bus Volts Slider ---
         self.bus_slider = xp.createWidget(
             120, 320, 480, 280,
             1,
@@ -153,7 +151,6 @@ class PythonInterface:
         xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollBarPageAmount, 1)
         xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollBarSliderPosition, 0)
 
-        # --- Bus Volts Value Label ---
         self.bus_label = xp.createWidget(
             500, 320, 620, 280,
             1,
@@ -163,9 +160,20 @@ class PythonInterface:
             xp.WidgetClass_Caption,
         )
 
-        # --- Quit Button ---
+        # Child callback for bus slider
+        def bus_slider_handler(msg, widget, p1, p2):
+            if msg == xp.Msg_ScrollBarSliderPositionChanged:
+                volts = int(p2)
+                xp.setWidgetDescriptor(self.bus_label, f"{volts} V")
+                xp.setDatavf(self.bus_array_handle, [float(volts)], 1, 1)
+                return 1
+            return 0
+
+        xp.addWidgetCallback(self.bus_slider, bus_slider_handler)
+
+    def _create_quit_button(self):
         self.quit_btn = xp.createWidget(
-            120, 240, 260, 200,
+            120, 280, 260, 240,
             1,
             "Quit",
             0,
@@ -174,10 +182,21 @@ class PythonInterface:
         )
         xp.setWidgetProperty(self.quit_btn, xp.Property_ButtonType, xp.PushButton)
 
-    # ----------------------------------------------------------------------
-    def XPluginEnable(self) -> int:
+        def quit_handler(msg, widget, p1, p2):
+            if msg == xp.Msg_PushButtonPressed:
+                xp.destroyWidget(self.win, 1)
+                self.win = None
+                if hasattr(xp, "simless_runner"):
+                    xp.simless_runner.end_run_loop()
+                return 1
+            return 0
 
-        # Datarefs
+        xp.addWidgetCallback(self.quit_btn, quit_handler)
+
+    # ------------------------------------------------------------------
+    # ENABLE
+    # ------------------------------------------------------------------
+    def XPluginEnable(self):
         self.oat_handle = xp.findDataRef("sim/cockpit2/temperature/outside_air_temp_degc")
         self.bus_array_handle = xp.findDataRef("sim/cockpit2/electrical/bus_volts")
 
@@ -185,87 +204,37 @@ class PythonInterface:
             xp.log("[dev_ota_gui] ERROR: Missing required datarefs")
             return 0
 
-        # Build UI
         self._build_ui()
 
-        # ---------------- WINDOW HANDLER ----------------
-        def window_handler(
-            msg: XPWidgetMessage,
-            widget: XPWidgetID,
-            param1: Any,
-            param2: Any,
-        ) -> int:
-
-            if msg == xp.Message_CloseButtonPushed and widget == self.win:
-                xp.hideWidget(self.win)
-                return 1
-
-            if msg == xp.Msg_ScrollBarSliderPositionChanged:
-
-                if param1 == self.slider:
-                    temp = xp.getWidgetProperty(self.slider, xp.Property_ScrollBarSliderPosition)
-                    xp.setWidgetDescriptor(self.slider_label, f"{temp}°C")
-                    xp.setDataf(self.oat_handle, float(temp))
-
-                    # Read back actual sim value
-                    try:
-                        real_oat = xp.getDataf(self.oat_handle)
-                        xp.setWidgetDescriptor(self.current_oat_label, f"Current OAT: {int(real_oat)}°C")
-                    except Exception:
-                        pass
-
-                    return 1
-
-                if param1 == self.bus_slider:
-                    volts = xp.getWidgetProperty(self.bus_slider, xp.Property_ScrollBarSliderPosition)
-                    xp.setWidgetDescriptor(self.bus_label, f"{volts} V")
-                    xp.setDatavf(self.bus_array_handle, [float(volts)], 1, 1)
-                    return 1
-
-            if msg == xp.Msg_PushButtonPressed and param1 == self.quit_btn:
-                xp.destroyWidget(self.win, 1)
-                self.win = None
-                if hasattr(xp, "simless_runner"):
-                    xp.simless_runner.end_run_loop()
-                return 1
-
-            return 0
-
-        self._win_handler_cb = window_handler
-        xp.addWidgetCallback(self.win, self._win_handler_cb)
-
-        # ---------------- FLIGHTLOOP: refresh Current OAT every second ----------------
-        def flightloop_cb(
-            since: float,
-            elapsed: float,
-            counter: int,
-            refcon: Any,
-        ) -> float:
+        # Flight loop unchanged
+        def flightloop_cb(since, elapsed, counter, refcon):
             if self.win and self.current_oat_label and self.oat_handle:
                 try:
                     real_oat = xp.getDataf(self.oat_handle)
-                    xp.setWidgetDescriptor(self.current_oat_label, f"Current OAT: {int(real_oat)}°C")
+                    xp.setWidgetDescriptor(
+                        self.current_oat_label,
+                        f"Current OAT: {int(real_oat)}°C",
+                    )
                 except Exception:
                     pass
-            return 1.0  # run again in 1 second
+            return 1.0
 
         self._fl_id = xp.createFlightLoop(flightloop_cb)
         xp.scheduleFlightLoop(self._fl_id, 1.0)
-
         return 1
 
-    # ----------------------------------------------------------------------
-    def XPluginDisable(self) -> None:
+    # ------------------------------------------------------------------
+    def XPluginDisable(self):
         if self.win:
             xp.destroyWidget(self.win, 1)
             self.win = None
 
-        if self._fl_id is not None:
+        if self._fl_id:
             try:
                 xp.destroyFlightLoop(self._fl_id)
             except Exception:
                 pass
             self._fl_id = None
 
-    def XPluginStop(self) -> None:
+    def XPluginStop(self):
         pass

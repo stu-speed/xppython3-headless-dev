@@ -5,7 +5,6 @@ from typing import Any
 
 from sshd_extensions.dataref_manager import DRefType
 
-
 # XPLM data type bitmask constants
 Type_Unknown = 0
 Type_Int = 1
@@ -69,3 +68,6 @@ class FakeDataRef:
     type_known: bool = False
     shape_known: bool = False
 
+    @property
+    def is_dummy(self) -> bool:
+        return not self.type_known or not self.shape_known

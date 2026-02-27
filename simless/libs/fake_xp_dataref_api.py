@@ -22,21 +22,14 @@
 from __future__ import annotations
 
 from threading import RLock
-from typing import Any, Dict, List, Optional, MutableSequence, Sequence, Callable, Tuple
+from typing import Any, Callable, Dict, List, MutableSequence, Optional, Sequence, Tuple
 
-from XPPython3.xp_typing import XPLMDataRefInfo_t
-from sshd_extensions.dataref_manager import DRefType
-from simless.libs.fake_xp_interface import FakeXPInterface
 from simless.libs.fake_xp_dataref_types import (
-    FakeDataRef,
-    Type_Unknown,
-    Type_Int,
-    Type_Float,
-    Type_Double,
-    Type_FloatArray,
-    Type_IntArray,
-    Type_Data,
+    FakeDataRef, Type_Data, Type_Double, Type_Float, Type_FloatArray, Type_Int, Type_IntArray, Type_Unknown
 )
+from simless.libs.fake_xp_interface import FakeXPInterface
+from sshd_extensions.dataref_manager import DRefType
+from XPPython3.xp_typing import XPLMDataRefInfo_t
 
 
 class FakeXPDataRefAPI:
@@ -118,20 +111,34 @@ class FakeXPDataRefAPI:
                 pass
 
     def _require_array(self, ref: FakeDataRef, api: str) -> None:
-        """
-        Enforce that array semantics are currently valid.
+        # Dummy refs have no authoritative shape — allow provisional arrays
+        if ref.is_dummy:
+            if not ref.is_array:
+                raise RuntimeError(f"{api} requires array-shaped dataRef")
+            return
 
-        We do not infer shape from dtype. Array access requires shape authority.
-        """
-        if not getattr(ref, "shape_known", False) or getattr(ref, "is_array", None) is not True:
-            raise RuntimeError(f"{api} requires array-shaped dataRef (shape not known or scalar)")
+        # Real refs must have authoritative shape
+        if not ref.shape_known or not ref.is_array:
+            raise RuntimeError(
+                f"{api} requires array-shaped dataRef (shape not known or scalar)"
+            )
 
     def _require_scalar(self, ref: FakeDataRef, api: str) -> None:
         """
         Enforce that scalar semantics are currently valid.
         """
+
+        # Dummy refs: allow provisional scalar behavior
+        if ref.is_dummy:
+            if getattr(ref, "is_array", False):
+                raise RuntimeError(f"{api} requires scalar-shaped dataRef")
+            return
+
+        # Real refs: require authoritative scalar shape
         if getattr(ref, "shape_known", False) and getattr(ref, "is_array", None) is True:
-            raise RuntimeError(f"{api} requires scalar-shaped dataRef (currently array)")
+            raise RuntimeError(
+                f"{api} requires scalar-shaped dataRef (currently array)"
+            )
 
     # ------------------------------------------------------------------
     # Lookup / dummy creation
@@ -206,17 +213,6 @@ class FakeXPDataRefAPI:
             return int(meta["readInt"](meta.get("readRefCon")))
         return int(ref.value)
 
-    def setDatai(self, dataRef: FakeDataRef, v: int) -> None:
-        ref = self._resolve_ref(dataRef)
-        self._require_scalar(ref, "setDatai")
-        if not ref.writable:
-            raise PermissionError("DataRef not writable")
-        meta = self._accessors.get(ref.path)
-        if meta and meta.get("writeInt"):
-            meta["writeInt"](meta.get("writeRefCon"), int(v))
-        else:
-            ref.value = int(v)
-
     def getDataf(self, dataRef: FakeDataRef) -> float:
         ref = self._resolve_ref(dataRef)
         self._require_scalar(ref, "getDataf")
@@ -226,23 +222,73 @@ class FakeXPDataRefAPI:
             return float(cb(meta.get("readRefCon")))
         return float(ref.value)
 
+    def getDatad(self, dataRef: FakeDataRef) -> float:
+        return self.getDataf(dataRef)
+
     def setDataf(self, dataRef: FakeDataRef, v: float) -> None:
         ref = self._resolve_ref(dataRef)
+
+        # Dummy has no contract — conform before enforcing
+        if ref.is_dummy:
+            self.xp.conform_dummy_to_value(ref, float(v))
+
+        # Now enforce scalar contract
         self._require_scalar(ref, "setDataf")
+
         if not ref.writable:
             raise PermissionError("DataRef not writable")
+
         meta = self._accessors.get(ref.path)
-        cb = meta.get("writeFloat") or meta.get("writeDouble") if meta else None
+        cb = None
+        if meta:
+            cb = meta.get("writeFloat") or meta.get("writeDouble")
+
         if cb:
             cb(meta.get("writeRefCon"), float(v))
         else:
             ref.value = float(v)
 
-    def getDatad(self, dataRef: FakeDataRef) -> float:
-        return self.getDataf(dataRef)
+    def setDatai(self, dataRef: FakeDataRef, v: int) -> None:
+        ref = self._resolve_ref(dataRef)
+
+        # Dummy has no contract — conform first
+        if ref.is_dummy:
+            self.xp.conform_dummy_to_value(ref, int(v))
+
+        # Enforce scalar contract
+        self._require_scalar(ref, "setDatai")
+
+        if not ref.writable:
+            raise PermissionError("DataRef not writable")
+
+        meta = self._accessors.get(ref.path)
+        cb = meta.get("writeInt") if meta else None
+
+        if cb:
+            cb(meta.get("writeRefCon"), int(v))
+        else:
+            ref.value = int(v)
 
     def setDatad(self, dataRef: FakeDataRef, v: float) -> None:
-        self.setDataf(dataRef, v)
+        ref = self._resolve_ref(dataRef)
+
+        # Dummy has no contract — conform first
+        if ref.is_dummy:
+            self.xp.conform_dummy_to_value(ref, float(v))
+
+        # Enforce scalar contract
+        self._require_scalar(ref, "setDatad")
+
+        if not ref.writable:
+            raise PermissionError("DataRef not writable")
+
+        meta = self._accessors.get(ref.path)
+        cb = meta.get("writeDouble") if meta else None
+
+        if cb:
+            cb(meta.get("writeRefCon"), float(v))
+        else:
+            ref.value = float(v)
 
     # ------------------------------------------------------------------
     # Array helpers
@@ -333,6 +379,11 @@ class FakeXPDataRefAPI:
         ref = self._resolve_ref(dataRef)
         if not ref.writable:
             raise PermissionError("DataRef not writable")
+
+        # Dummy has no contract — conform first
+        if ref.is_dummy:
+            self.xp.conform_dummy_to_value(ref, values, offset, count)
+
         if ref.type != DRefType.FLOAT_ARRAY:
             raise TypeError("setDatavf on non-float-array")
 
@@ -347,16 +398,6 @@ class FakeXPDataRefAPI:
         write_cb = meta.get("writeFloatArray") if meta else None
         refcon = meta.get("writeRefCon") if meta else None
 
-        # Provisional: establish shape from the write (only when no callback).
-        if not getattr(ref, "shape_known", False) and write_cb is None:
-            new_size = offset + count
-            buf = [0.0] * new_size
-            for i in range(count):
-                buf[offset + i] = float(values[i])
-            self.xp.promote_shape_from_value(ref=ref, value=buf)
-            return count
-
-        # Real: enforce array semantics and bounds.
         self._require_array(ref, "setDatavf")
         if offset + count > len(ref.value):
             raise RuntimeError("setDatavf would write past end of dataRef")
@@ -373,6 +414,10 @@ class FakeXPDataRefAPI:
         ref = self._resolve_ref(dataRef)
         if not ref.writable:
             raise PermissionError("DataRef not writable")
+
+        if ref.is_dummy:
+            self.xp.conform_dummy_to_value(ref, values, offset, count)
+
         if ref.type != DRefType.INT_ARRAY:
             raise TypeError("setDatavi on non-int-array")
 
@@ -386,14 +431,6 @@ class FakeXPDataRefAPI:
         meta = self._accessors.get(ref.path)
         write_cb = meta.get("writeIntArray") if meta else None
         refcon = meta.get("writeRefCon") if meta else None
-
-        if not getattr(ref, "shape_known", False) and write_cb is None:
-            new_size = offset + count
-            buf = [0] * new_size
-            for i in range(count):
-                buf[offset + i] = int(values[i])
-            self.xp.promote_shape_from_value(ref=ref, value=buf)
-            return count
 
         self._require_array(ref, "setDatavi")
         if offset + count > len(ref.value):
@@ -411,6 +448,10 @@ class FakeXPDataRefAPI:
         ref = self._resolve_ref(dataRef)
         if not ref.writable:
             raise PermissionError("DataRef not writable")
+
+        if ref.is_dummy:
+            self.xp.conform_dummy_to_value(ref, values, offset, count)
+
         if ref.type != DRefType.BYTE_ARRAY:
             raise TypeError("setDatab on non-byte-array")
 
@@ -424,14 +465,6 @@ class FakeXPDataRefAPI:
         meta = self._accessors.get(ref.path)
         write_cb = meta.get("writeData") if meta else None
         refcon = meta.get("writeRefCon") if meta else None
-
-        if not getattr(ref, "shape_known", False) and write_cb is None:
-            new_size = offset + count
-            buf = bytearray(new_size)
-            for i in range(count):
-                buf[offset + i] = int(values[i]) & 0xFF
-            self.xp.promote_shape_from_value(ref=ref, value=buf)
-            return count
 
         self._require_array(ref, "setDatab")
         if offset + count > len(ref.value):
@@ -500,25 +533,25 @@ class FakeXPDataRefAPI:
     # Registration / publishing
     # -------------------------
     def registerDataAccessor(
-            self,
-            name: str,
-            *,
-            dataType: int = 0,
-            writable: int = -1,
-            readInt: Optional[Callable[[Any], int]] = None,
-            writeInt: Optional[Callable[[Any, int], None]] = None,
-            readFloat: Optional[Callable[[Any], float]] = None,
-            writeFloat: Optional[Callable[[Any, float], None]] = None,
-            readDouble: Optional[Callable[[Any], float]] = None,
-            writeDouble: Optional[Callable[[Any, float], None]] = None,
-            readIntArray: Optional[Callable[[Any, MutableSequence[int], int, int], int]] = None,
-            writeIntArray: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
-            readFloatArray: Optional[Callable[[Any, MutableSequence[float], int, int], int]] = None,
-            writeFloatArray: Optional[Callable[[Any, Sequence[float], int, int], None]] = None,
-            readData: Optional[Callable[[Any, bytearray, int, int], int]] = None,
-            writeData: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
-            readRefCon: Optional[Any] = None,
-            writeRefCon: Optional[Any] = None,
+        self,
+        name: str,
+        *,
+        dataType: int = 0,
+        writable: int = -1,
+        readInt: Optional[Callable[[Any], int]] = None,
+        writeInt: Optional[Callable[[Any, int], None]] = None,
+        readFloat: Optional[Callable[[Any], float]] = None,
+        writeFloat: Optional[Callable[[Any, float], None]] = None,
+        readDouble: Optional[Callable[[Any], float]] = None,
+        writeDouble: Optional[Callable[[Any, float], None]] = None,
+        readIntArray: Optional[Callable[[Any, MutableSequence[int], int, int], int]] = None,
+        writeIntArray: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
+        readFloatArray: Optional[Callable[[Any, MutableSequence[float], int, int], int]] = None,
+        writeFloatArray: Optional[Callable[[Any, Sequence[float], int, int], None]] = None,
+        readData: Optional[Callable[[Any, bytearray, int, int], int]] = None,
+        writeData: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
+        readRefCon: Optional[Any] = None,
+        writeRefCon: Optional[Any] = None,
     ) -> FakeDataRef:
         """
         Register callbacks and return a dataref handle. Signature mirrors XPLMRegisterDataAccessor.
@@ -542,10 +575,12 @@ class FakeXPDataRefAPI:
         if writable != -1:
             writable_flag = bool(writable)
         else:
-            writable_flag = any((
-                writeInt, writeFloat, writeDouble,
-                writeIntArray, writeFloatArray, writeData
-            ))
+            writable_flag = any(
+                (
+                    writeInt, writeFloat, writeDouble,
+                    writeIntArray, writeFloatArray, writeData
+                )
+            )
 
         dtype, is_array, size = self._choose_dtype_from_mask(mask)
         default_value = self._default_value_for(dtype, size)

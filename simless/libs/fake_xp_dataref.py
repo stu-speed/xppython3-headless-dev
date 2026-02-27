@@ -10,6 +10,7 @@
 #   • Single handle type: FakeDataRef returned by findDataRef.
 #   • Dummy-first: findDataRef creates a dummy (is_dummy=True) so plugins get
 #     a handle immediately; runner/bridge promotes it later.
+#   • setters can reshape dummy datarefs as they are formed with a default.
 #   • In-place promotion: promote_handle flips is_dummy -> False and updates
 #     metadata on the same object.
 #   • Single global lock: one RLock protects _handles and all handle state.
@@ -23,13 +24,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Callable
 import threading
-import copy
+from typing import Any, Callable, Dict, Optional
 
+from simless.libs.fake_xp_dataref_api import FakeXPDataRefAPI
 from simless.libs.fake_xp_dataref_types import FakeDataRef
 from sshd_extensions.dataref_manager import DRefType
-from simless.libs.fake_xp_dataref_api import FakeXPDataRefAPI
 
 
 class FakeXPDataRef(FakeXPDataRefAPI):
@@ -70,7 +70,7 @@ class FakeXPDataRef(FakeXPDataRefAPI):
         # simless
         "all_handle_paths", "all_handles", "get_handle",
         "promote_type", "promote_shape_from_value",
-        "update_dataref",
+        "conform_dummy_to_value",
         "attach_handle_callback", "detach_handle_callback",
     ]
 
@@ -135,7 +135,6 @@ class FakeXPDataRef(FakeXPDataRefAPI):
     def promote_type(
         self,
         ref: FakeDataRef,
-        *,
         dtype: DRefType,
         writable: bool,
     ) -> None:
@@ -143,18 +142,24 @@ class FakeXPDataRef(FakeXPDataRefAPI):
         Promote type authority for an existing handle.
 
         This method is called when authoritative metadata (META) is received.
-        It establishes numeric type and writability.
+        It establishes numeric type and writability, and coerces the stored
+        value to match the promoted type.
 
         Semantics:
           • Promotion is in-place; the FakeDataRef object is preserved.
-          • Existing dummy values are preserved if compatible with the new type.
-          • Incompatible dummy values are replaced with a default value.
-          • Shape (scalar vs array, size) is NOT inferred or modified.
-          • Idempotent: safe to call multiple times.
+          • Scalar ↔ array transitions are allowed:
+                – Scalar → array wraps the scalar into a length‑1 array and casts.
+                – Array → scalar takes the first element and casts.
+          • Array → array and scalar → scalar transitions cast elements or the scalar.
+          • Array attributes (is_array, array_size) are updated to match the coerced value.
+          • No shape inference is performed; scalar → array always produces size 1.
+          • Incompatible or uncastable values fall back to a default value.
+          • Idempotent: safe to call multiple times with the same dtype.
 
         Raises:
           • TypeError if ref is invalid
         """
+
         if ref is None:
             raise TypeError("invalid dataRef")
 
@@ -162,30 +167,62 @@ class FakeXPDataRef(FakeXPDataRefAPI):
             ref.type = dtype
             ref.writable = bool(writable)
 
-            # Validate or coerce existing value
             try:
-                if isinstance(ref.value, (list, bytearray)):
-                    # Do not reshape here — only validate element type
-                    if dtype == DRefType.FLOAT_ARRAY:
-                        ref.value = [float(x) for x in ref.value]
-                    elif dtype == DRefType.INT_ARRAY:
-                        ref.value = [int(x) for x in ref.value]
-                    elif dtype == DRefType.BYTE_ARRAY:
-                        ref.value = bytearray(ref.value)
+                v = ref.value
+
+                # --- ARRAY TARGET TYPES ---
+                if dtype in (DRefType.FLOAT_ARRAY, DRefType.INT_ARRAY, DRefType.BYTE_ARRAY):
+                    if isinstance(v, (list, bytearray)):
+                        # Array → array: cast elements
+                        if dtype == DRefType.FLOAT_ARRAY:
+                            newv = [float(x) for x in v]
+                        elif dtype == DRefType.INT_ARRAY:
+                            newv = [int(x) for x in v]
+                        else:
+                            newv = bytearray(v)
                     else:
-                        # Scalar type cannot accept array value
-                        ref.value = self._default_value_for(dtype, 1)
+                        # Scalar → array: wrap scalar into length‑1 array
+                        if dtype == DRefType.FLOAT_ARRAY:
+                            newv = [float(v)]
+                        elif dtype == DRefType.INT_ARRAY:
+                            newv = [int(v)]
+                        else:
+                            newv = bytearray([int(v) & 0xFF])
+
+                    ref.value = newv
+                    ref.is_array = True
+                    ref.size = len(newv)
+
+                # --- SCALAR TARGET TYPES ---
                 else:
-                    # Scalar value
-                    if dtype in (DRefType.FLOAT, DRefType.DOUBLE):
-                        ref.value = float(ref.value)
-                    elif dtype == DRefType.INT:
-                        ref.value = int(ref.value)
+                    if isinstance(v, (list, bytearray)):
+                        # Array → scalar: take first element and cast
+                        first = v[0] if len(v) else 0
+                        if dtype in (DRefType.FLOAT, DRefType.DOUBLE):
+                            newv = float(first)
+                        elif dtype == DRefType.INT:
+                            newv = int(first)
+                        else:
+                            newv = self._default_value_for(dtype, 1)
                     else:
-                        ref.value = self._default_value_for(dtype, 1)
+                        # Scalar → scalar: cast normally
+                        if dtype in (DRefType.FLOAT, DRefType.DOUBLE):
+                            newv = float(v)
+                        elif dtype == DRefType.INT:
+                            newv = int(v)
+                        else:
+                            newv = self._default_value_for(dtype, 1)
+
+                    ref.value = newv
+                    ref.is_array = False
+                    ref.size = 1
+
             except (TypeError, ValueError):
-                # Replace incompatible dummy value
-                ref.value = self._default_value_for(dtype, 1)
+                # Fallback: default scalar or array of size 1
+                dv = self._default_value_for(dtype, 1)
+                ref.value = dv
+                ref.is_array = isinstance(dv, (list, bytearray))
+                ref.size = len(dv) if ref.is_array else 1
 
             ref.type_known = True
 
@@ -212,11 +249,10 @@ class FakeXPDataRef(FakeXPDataRefAPI):
         """
         if ref is None:
             raise TypeError("invalid dataRef")
+        if ref.shape_known:
+            return
 
         with self._handles_lock:
-            if ref.shape_known:
-                return
-
             if isinstance(value, (list, tuple, bytearray)):
                 ref.is_array = True
                 ref.size = len(value)
@@ -242,76 +278,83 @@ class FakeXPDataRef(FakeXPDataRefAPI):
 
             ref.shape_known = True
 
-    # -------------------------
-    # DataRef update helper
-    # -------------------------
-    def update_dataref(
+    def conform_dummy_to_value(
         self,
         ref: FakeDataRef,
-        dtype: Optional[DRefType] = None,
-        size: Optional[int] = None,
-        writable: Optional[bool] = None,
-        value: Optional[Any] = None,
-    ) -> FakeDataRef:
-        """
-        Update an existing FakeDataRef in-place (dummy or live).
+        value,
+        offset: int = 0,
+        count: int | None = None,
+    ) -> None:
+        if ref is None:
+            raise TypeError("invalid dataRef")
 
-        Semantics:
-          • Handle identity is preserved.
-          • is_dummy is NOT modified.
-          • dtype/size/writable updated if provided.
-          • Arrays replace the backing buffer atomically.
-          • Scalars are coerced.
-          • No promotion logic is applied.
+        if not ref.is_dummy:
+            return
 
-        Raises:
-          • ValueError on invalid size
-          • TypeError if ref is invalid
-        """
-        with self._handles_lock:
-            if ref is None:
-                raise TypeError("invalid dataRef")
+        # ------------------------------------------------------------
+        # Normalize array intent
+        # ------------------------------------------------------------
+        is_array_write = offset != 0 or isinstance(value, (list, tuple, bytearray))
 
-            if size is not None:
-                if size <= 0:
-                    raise ValueError("size must be > 0")
-                ref.size = int(size)
+        if isinstance(value, (list, tuple, bytearray)):
+            if count is None or count < 0:
+                count = len(value)
+            sample = value[0] if value else 0
+        else:
+            count = 1
+            sample = value
 
-            if dtype is not None:
-                ref.type = dtype
+        # ------------------------------------------------------------
+        # Determine provisional type
+        # ------------------------------------------------------------
+        if isinstance(sample, float):
+            dtype = DRefType.FLOAT_ARRAY if is_array_write else DRefType.FLOAT
+        elif isinstance(sample, int):
+            dtype = DRefType.INT_ARRAY if is_array_write else DRefType.INT
+        elif isinstance(sample, (bytes, bytearray)):
+            dtype = DRefType.BYTE_ARRAY
+            is_array_write = True
+        else:
+            raise TypeError(f"unsupported DataRef value type: {type(sample)}")
 
-            if writable is not None:
-                ref.writable = bool(writable)
+        ref.type = dtype
 
-            if value is None:
-                return ref
-
-            # Array types: replace backing buffer
-            if ref.type == DRefType.FLOAT_ARRAY:
-                buf = [float(x) for x in value]
-                buf = (buf + [0.0] * ref.size)[: ref.size]
-                ref.value = buf
-                return ref
-
-            if ref.type == DRefType.INT_ARRAY:
-                buf = [int(x) for x in value]
-                buf = (buf + [0] * ref.size)[: ref.size]
-                ref.value = buf
-                return ref
-
-            if ref.type == DRefType.BYTE_ARRAY:
-                buf = bytearray(value)
-                buf = (buf + b"\x00" * ref.size)[: ref.size]
-                ref.value = buf
-                return ref
-
-            # Scalar types
+        # ------------------------------------------------------------
+        # Scalar write
+        # ------------------------------------------------------------
+        if not is_array_write:
+            ref.is_array = False
             ref.size = 1
-            if ref.type in (DRefType.FLOAT, DRefType.DOUBLE):
-                ref.value = float(value)
-            elif ref.type == DRefType.INT:
-                ref.value = int(value)
-            else:
-                ref.value = copy.deepcopy(value)
+            ref.value = float(value) if dtype == DRefType.FLOAT else int(value)
+            return
 
-            return ref
+        # ------------------------------------------------------------
+        # Array write
+        # ------------------------------------------------------------
+        needed = offset + count
+        ref.is_array = True
+        ref.size = max(ref.size or 0, needed)
+
+        if dtype == DRefType.FLOAT_ARRAY:
+            if not isinstance(ref.value, list):
+                ref.value = [0.0] * needed
+            elif len(ref.value) < needed:
+                ref.value.extend([0.0] * (needed - len(ref.value)))
+            for i in range(count):
+                ref.value[offset + i] = float(value[i])
+
+        elif dtype == DRefType.INT_ARRAY:
+            if not isinstance(ref.value, list):
+                ref.value = [0] * needed
+            elif len(ref.value) < needed:
+                ref.value.extend([0] * (needed - len(ref.value)))
+            for i in range(count):
+                ref.value[offset + i] = int(value[i])
+
+        elif dtype == DRefType.BYTE_ARRAY:
+            if not isinstance(ref.value, bytearray):
+                ref.value = bytearray(needed)
+            elif len(ref.value) < needed:
+                ref.value.extend([0] * (needed - len(ref.value)))
+            for i in range(count):
+                ref.value[offset + i] = int(value[i]) & 0xFF

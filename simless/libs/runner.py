@@ -44,15 +44,10 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List
 
-from sshd_extensions.bridge_protocol import (
-    BridgeDataType,
-    BridgeData,
-    XPBridgeClient,
-    BRIDGE_HOST,
-    BRIDGE_PORT,
-)
-from simless.libs.loader import SimlessPluginLoader, LoadedPlugin
+from simless.libs.fake_xp_dataref_viewer import FakeXPDataRefViewerClient
 from simless.libs.fake_xp_interface import FakeXPInterface
+from simless.libs.loader import LoadedPlugin, SimlessPluginLoader
+from sshd_extensions.bridge_protocol import (BRIDGE_HOST, BRIDGE_PORT, BridgeData, BridgeDataType, XPBridgeClient)
 
 
 class SimlessRunner:
@@ -66,6 +61,7 @@ class SimlessRunner:
     """
 
     _bridge: XPBridgeClient | None
+    _dataref_viewer: FakeXPDataRefViewerClient | None
 
     def __init__(
         self,
@@ -79,6 +75,7 @@ class SimlessRunner:
         self._bridge_connected: bool = False
         self._bridge_last_error: str | None = None
         self._bridge = None
+        self._dataref_viewer = None
 
         # Allow FakeXP to call back into us
         setattr(self.xp, "simless_runner", self)
@@ -105,13 +102,11 @@ class SimlessRunner:
     @property
     def bridge_status(self) -> tuple[bool, bool, str | None]:
         """
-        Return bridge status as (enabled, connected, last_error).
+        Return bridge status as enabled, connected, last_error.
         """
-        return (
-            self._bridge is not None,
-            self._bridge_connected,
-            self._bridge_last_error,
-        )
+        if self._bridge is None:
+            return False, False, "Bridge not enabled"
+        return True, self._bridge.is_connected, self._bridge.conn_status
 
     # ----------------------------------------------------------------------
     # Bridge registration callback wiring
@@ -123,7 +118,6 @@ class SimlessRunner:
         whether and how those paths are synchronized externally.
         """
         self.xp.attach_handle_callback(self._on_dataref_handle_created)
-
 
     def _on_dataref_handle_created(self, ref: Any) -> None:
         """Called synchronously when FakeXPDataRef creates a handle."""
@@ -204,7 +198,7 @@ class SimlessRunner:
 
             elif ev.type is BridgeDataType.UPDATE:
                 ref = xp.get_handle(ev.path)
-                assert ref is not None
+                assert ref is not None, f"Unknown handle: {ev.path}"
                 value = ev.value
 
                 is_array = isinstance(value, (list, tuple, bytearray))
@@ -220,9 +214,8 @@ class SimlessRunner:
                         ref=ref,
                         value=value,
                     )
-
-                # Fast path: write value
-                ref.value = value
+                else:
+                    ref.value = value
 
             elif ev.type is BridgeDataType.ERROR:
                 self._bridge_last_error = ev.text
@@ -319,7 +312,11 @@ class SimlessRunner:
                     fl["interval"] = float(next_interval)
                     fl["next_call"] = sim_time + float(next_interval)
 
-        # 4. Graphics frame
+        # 4. viewer
+        if self._dataref_viewer:
+            self._dataref_viewer.update()
+
+        # 5. Graphics frame
         try:
             if xp.enable_gui:
                 xp.draw_frame()
@@ -345,11 +342,9 @@ class SimlessRunner:
             return
 
         # Optional FakeXP DataRef viewer (observer only)
-        dataref_viewer = None
         if enable_dataref_viewer:
-            from simless.libs.fake_xp_dataref_viewer import FakeXPDataRefViewerClient
-            dataref_viewer = FakeXPDataRefViewerClient(xp)
-            dataref_viewer.attach()
+            self._dataref_viewer = FakeXPDataRefViewerClient(xp)
+            self._dataref_viewer.attach()
 
         # 1. Initialize graphics BEFORE plugin load/start/enable
         if xp.enable_gui:
@@ -390,10 +385,6 @@ class SimlessRunner:
                 xp.log("[Runner] Main loop exit: GUI closed or fatal error")
                 break
 
-            # Viewer is value-only; no discovery here
-            if dataref_viewer:
-                dataref_viewer.poll()
-
             if 0 <= run_time <= (time.time() - start):
                 xp.log("[Runner] Main loop exit: run_time reached")
                 break
@@ -431,9 +422,9 @@ class SimlessRunner:
         xp.log("[Runner] === XPluginStop END ===")
 
         # Tear down viewer
-        if dataref_viewer:
-            dataref_viewer.detach()
-            dataref_viewer = None
+        if self._dataref_viewer:
+            self._dataref_viewer.detach()
+            self._dataref_viewer = None
 
         if xp.enable_gui:
             self.shutdown_gui()

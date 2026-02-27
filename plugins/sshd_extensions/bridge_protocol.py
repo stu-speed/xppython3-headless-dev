@@ -829,6 +829,9 @@ class XPBridgeClient:
         # Client-side idx → path mapping (for user-friendly BridgeData events)
         self._idx_to_path: Dict[int, str] = {}
 
+        self._conn_status: str = "Initialized"
+        self._prev_conn_status: str = ""
+
     # ------------------------------------------------------------------
     # Connection lifecycle
     # ------------------------------------------------------------------
@@ -836,12 +839,21 @@ class XPBridgeClient:
     def is_connected(self) -> bool:
         return self.sock is not None
 
+    @property
+    def conn_status(self) -> str:
+        return self._conn_status
+
+    def set_conn_status(self, status: str) -> None:
+        self._conn_status = status
+        if self._conn_status != self._prev_conn_status:
+            self.xp.log(f"[Bridge] {self._conn_status}")
+
     def connect(self) -> None:
         self.disconnect()
 
-        self.xp.log(f"[Bridge] Connecting to {self.host}:{self.port}")
+        self.set_conn_status(f"Connecting to {self.host}:{self.port}")
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2.0)
+        sock.settimeout(1.0)
         sock.connect((self.host, self.port))
 
         self.sock = sock
@@ -894,7 +906,7 @@ class XPBridgeClient:
     # ------------------------------------------------------------------
     # Poll for inbound messages (wire format)
     # ------------------------------------------------------------------
-    RECONNECT_INTERVAL = 10.0  # seconds
+    RECONNECT_INTERVAL = 30.0  # seconds
 
     def poll_wire(self) -> List[BridgeMsg]:
         """
@@ -919,19 +931,18 @@ class XPBridgeClient:
             try:
                 self.connect()
             except Exception as exc:
-                self.xp.log(f"[Bridge] connect failed to host {BRIDGE_HOST}: {exc}")
+                self.set_conn_status(f"Connect failed to host {BRIDGE_HOST}: {exc}")
                 self._last_activity = now
                 return []
-            self.xp.log(f"[Bridge] connect succeeded to host {BRIDGE_HOST}")
+            self.set_conn_status(f"Processing bridge messages")
 
         # --------------------------------------------------------------
         # 2. Connected: heartbeat timeout → disconnect + raise
         # --------------------------------------------------------------
         if now - self._last_activity > HEARTBEAT_TIMEOUT:
             self.disconnect()
-            raise ConnectionResetError(
-                f"heartbeat timeout after {HEARTBEAT_TIMEOUT} seconds"
-            )
+            self.set_conn_status(f"Heartbeat timeout after {HEARTBEAT_TIMEOUT} seconds")
+            raise ConnectionResetError(self.conn_status)
 
         # --------------------------------------------------------------
         # 3. Check for inbound data (raise on select errors)
@@ -946,7 +957,8 @@ class XPBridgeClient:
         line = self.file.readline()
         if line == "":
             self.disconnect()
-            raise ConnectionResetError("server closed connection")
+            self.set_conn_status("Server closed connection")
+            raise ConnectionResetError(self.conn_status)
 
         self._last_activity = now
 
