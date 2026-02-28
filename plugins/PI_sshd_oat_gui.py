@@ -58,7 +58,8 @@ class PythonInterface:
         self._create_window()
         self._create_oat_controls()
         self._create_bus_controls()
-        self._create_quit_button()
+        if hasattr(xp, "simless_runner"):
+            self._create_quit_button()
 
     def _create_window(self):
         self.win = xp.createWidget(
@@ -119,8 +120,11 @@ class PythonInterface:
         # Child callback for OAT slider
         def oat_slider_handler(msg, widget, p1, p2):
             if msg == xp.Msg_ScrollBarSliderPositionChanged:
-                temp = int(p2)
+                pos = xp.getWidgetProperty(self.slider, xp.Property_ScrollBarSliderPosition)
+                temp = int(pos)
                 xp.setWidgetDescriptor(self.slider_label, f"{temp}°C")
+                xp.showWidget(self.slider_label)
+
                 xp.setDataf(self.oat_handle, float(temp))
                 return 1
             return 0
@@ -163,8 +167,11 @@ class PythonInterface:
         # Child callback for bus slider
         def bus_slider_handler(msg, widget, p1, p2):
             if msg == xp.Msg_ScrollBarSliderPositionChanged:
-                volts = int(p2)
+                pos = xp.getWidgetProperty(self.bus_slider, xp.Property_ScrollBarSliderPosition)
+                volts = int(pos)
                 xp.setWidgetDescriptor(self.bus_label, f"{volts} V")
+                xp.showWidget(self.slider_label)
+
                 xp.setDatavf(self.bus_array_handle, [float(volts)], 1, 1)
                 return 1
             return 0
@@ -206,21 +213,6 @@ class PythonInterface:
 
         self._build_ui()
 
-        # Flight loop unchanged
-        def flightloop_cb(since, elapsed, counter, refcon):
-            if self.win and self.current_oat_label and self.oat_handle:
-                try:
-                    real_oat = xp.getDataf(self.oat_handle)
-                    xp.setWidgetDescriptor(
-                        self.current_oat_label,
-                        f"Current OAT: {int(real_oat)}°C",
-                    )
-                except Exception:
-                    pass
-            return 1.0
-
-        self._fl_id = xp.createFlightLoop(flightloop_cb)
-        xp.scheduleFlightLoop(self._fl_id, 1.0)
         return 1
 
     # ------------------------------------------------------------------

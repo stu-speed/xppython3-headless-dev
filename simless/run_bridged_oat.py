@@ -1,7 +1,8 @@
 # ===========================================================================
 # SIM-LESS OAT TEST HARNESS WITH LIVE DATAREFS
 # Allows user to test OAT with live datarefs and monitor with viewer
-# Note that oat does not register any datarefs if there is no serial device found
+#
+# *REQUIRED: PL_sshd_dataref_bridge plugin running in X-plane
 # ===========================================================================
 
 import sys

@@ -202,28 +202,47 @@ class FakeXPWidget:
     # PROPERTIES
     # ------------------------------------------------------------------
     def setWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID, value: Any) -> None:
-        """Set an XPWidget property value."""
-        if wid not in self._widgets:
-            return
+        """
+        Set an XPWidget property value using real X‑Plane semantics.
 
-        # Store property
+        This method updates the internal property store, marks the widget tree
+        for redraw, synchronizes the DearPyGui representation, and delegates
+        scrollbar slider-position updates to a real‑SDK‑accurate handler.
+
+        Real X‑Plane scrollbars do not send the absolute slider position in p2
+        when Msg_ScrollBarSliderPositionChanged fires. Instead:
+
+            p1 = the scrollbar widget ID
+            p2 = the delta (change amount), often zero during drag events
+
+        The actual slider position is stored only in the widget property
+        Property_ScrollBarSliderPosition and must be read from there by plugins.
+        """
+        if wid not in self._widgets:
+            return None
+
+        # Update internal property
         self._widgets[wid]["properties"][prop] = value
         self._needs_redraw = True
 
+        wclass = self._classes.get(wid)
+        dpg_id = self._dpg_ids.get(wid)
+
         # ------------------------------------------------------------------
-        # ScrollBar live updates (XP semantics)
+        # ScrollBar (delegate slider-position updates)
         # ------------------------------------------------------------------
-        if self._classes.get(wid) == self.xp.WidgetClass_ScrollBar:
-            dpg_id = self._dpg_ids.get(wid)
-            if dpg_id and dpg.is_item_ok(dpg_id):
-                if prop == self.xp.Property_ScrollBarMin:
-                    dpg.configure_item(dpg_id, min_value=int(value))
-                elif prop == self.xp.Property_ScrollBarMax:
-                    dpg.configure_item(dpg_id, max_value=int(value))
-                elif prop == self.xp.Property_ScrollBarSliderPosition:
-                    # NOTE: DPG slider value should be updated without re-triggering callbacks.
-                    # DPG's configure_item(default_value=...) is used here to avoid callback loops.
-                    dpg.configure_item(dpg_id, default_value=int(value))
+        if wclass == self.xp.WidgetClass_ScrollBar:
+
+            # Min/max updates stay inline
+            if prop == self.xp.Property_ScrollBarMin and dpg_id and dpg.is_item_ok(dpg_id):
+                dpg.configure_item(dpg_id, min_value=int(value))
+
+            if prop == self.xp.Property_ScrollBarMax and dpg_id and dpg.is_item_ok(dpg_id):
+                dpg.configure_item(dpg_id, max_value=int(value))
+
+            # Delegate slider-position updates to real‑SDK‑accurate handler
+            if prop == self.xp.Property_ScrollBarSliderPosition:
+                return self._fakexp_scrollbar_set_position(wid, value)
 
     def getWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID) -> Any:
         """Retrieve an XPWidget property value."""
@@ -617,3 +636,46 @@ class FakeXPWidget:
                 self._dispatch_draw(wid)
 
         self._needs_redraw = False
+
+    def _fakexp_scrollbar_set_position(self, wid, new_pos):
+        """
+        Update a scrollbar's slider position using real X‑Plane semantics.
+
+        Real X‑Plane does NOT send the absolute slider position in p2 when
+        Msg_ScrollBarSliderPositionChanged is dispatched. Instead:
+
+            p1 = the scrollbar widget ID
+            p2 = the delta (change amount), which is often zero during drag events
+
+        The actual slider position is stored only in the widget property
+        Property_ScrollBarSliderPosition and must be read from there by plugins.
+
+        This function updates the internal property, computes the delta relative
+        to the previous position, synchronizes the DearPyGui slider without
+        triggering callbacks, and dispatches a real‑SDK‑accurate message.
+        """
+        # Retrieve previous slider position
+        old_pos = int(
+            self._widgets[wid]["properties"].get(
+                self.xp.Property_ScrollBarSliderPosition, 0
+            )
+        )
+
+        new_pos = int(new_pos)
+        delta = new_pos - old_pos
+
+        # Update internal property
+        self._widgets[wid]["properties"][self.xp.Property_ScrollBarSliderPosition] = new_pos
+
+        # Sync DPG slider without triggering callbacks
+        dpg_id = self._dpg_ids.get(wid)
+        if dpg_id and dpg.is_item_ok(dpg_id):
+            dpg.configure_item(dpg_id, default_value=new_pos)
+
+        # Dispatch real‑SDK‑accurate message
+        self.sendMessageToWidget(
+            wid,
+            self.xp.Msg_ScrollBarSliderPositionChanged,
+            wid,  # p1 = widget ID
+            delta,  # p2 = delta (NOT absolute value)
+        )
