@@ -117,8 +117,7 @@ AI can interpret:
 - log output  
 - error messages  
 
-It can often identify obvious issues.  
-However, for deeper bugs:
+It can often identify obvious issues.  However, for deeper bugs:
 
 - AI may confidently suggest incorrect or destructive changes  
 - AI may misinterpret the root cause  
@@ -147,5 +146,5 @@ AI is **not** reliable at:
 - validating correctness without tests  
 
 You set the direction.  
-AI accelerates execution.
+AI accelerates execution of the plan.
 

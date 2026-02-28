@@ -1,9 +1,13 @@
 # 🖥️ GUI Emulation in FakeXP  
-How FakeXP simulates X‑Plane’s widget + graphics stack using DearPyGui
+## How FakeXP simulates X‑Plane’s widget + graphics stack using DearPyGui
 
 FakeXP provides a complete GUI emulation layer that mirrors X‑Plane’s
 XPWidgets and XPLMGraphics systems. This enables plugin authors to build and
 debug GUI‑heavy plugins without launching X‑Plane.
+
+FakeXP Widgets are anchored on an older DearPyGui (1.11.x) for one core reason:
+it is the only version whose behavior is predictable enough to emulate X‑Plane’s
+1990s‑era XPWidgets model without fighting the framework.
 
 This document explains:
 
@@ -15,7 +19,7 @@ This document explains:
 
 ---
 
-# ⚠️ Critical Warning: FakeXPRunner Must Own DearPyGui
+## ⚠️ Critical Warning: FakeXPRunner Must Own DearPyGui
 
 Plugins and scripts must never call DearPyGui APIs directly.  
 Only FakeXPRunner manages the DPG context, viewport, and render loop.
@@ -35,7 +39,7 @@ FakeXPRunner must manage all DPG operations to ensure stability and determinism.
 
 ---
 
-# 🧩 Architecture Overview
+## 🧩 Architecture Overview
 
 ```
 Plugins (PythonInterface)  
@@ -71,7 +75,7 @@ This separation ensures:
 
 ---
 
-# 🪟 DearPyGui Lifecycle (Owned Exclusively by FakeXPRunner)
+## 🪟 DearPyGui Lifecycle (Owned Exclusively by FakeXPRunner)
 
 When GUI mode is enabled (enable_gui=True), FakeXPRunner performs:
 
@@ -95,7 +99,7 @@ plugins never interact with the graphics backend directly.
 
 ---
 
-# 🧱 XPWidget Emulation Layer
+## 🧱 XPWidget Emulation Layer
 
 FakeXP implements a full XPWidget simulation:
 
@@ -113,7 +117,7 @@ FakeXPRunner simply triggers the draw pass each frame.
 
 ---
 
-# 🎨 Graphics Overlay (XPLMDisplay Simulation)
+## 🎨 Graphics Overlay (XPLMDisplay Simulation)
 
 FakeXP simulates:
 
@@ -128,7 +132,7 @@ FakeXPRunner invokes these callbacks during each frame.
 
 ---
 
-# 🔄 Unified 60 Hz Simulation Loop (Owned by FakeXPRunner)
+## 🔄 Unified 60 Hz Simulation Loop (Owned by FakeXPRunner)
 
 FakeXPRunner runs a deterministic loop shared by GUI and headless modes:
 
@@ -146,7 +150,7 @@ This matches real X‑Plane environment.
 
 ---
 
-# 🧪 Headless Mode (No GUI)
+## 🧪 Headless Mode (No GUI)
 
 When enable_gui=False:
 
@@ -164,7 +168,7 @@ Headless mode is ideal for:
 
 ---
 
-# 🧭 Summary
+## 🧭 Summary
 
 FakeXP’s GUI emulation system provides:
 

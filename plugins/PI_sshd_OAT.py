@@ -6,28 +6,25 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any, List
 
+from sshd_extensions.dataref_manager import DataRefManager
+from sshd_extlibs.serial_device import SerialOAT
 from XPPython3 import xp
 from XPPython3.xp_typing import XPLMFlightLoopID
 
-from sshd_extensions.xp_interface import XPInterface
-from sshd_extensions.datarefs import DataRefManager
-from sshd_extlibs.serial_device import SerialOAT
 
 
-xp: XPInterface
-
-
-class MDR(str, Enum):
+class MDR(StrEnum):
     oat_c = "sim/cockpit2/temperature/outside_air_temp_degc"
     bus_volts = "sim/cockpit2/electrical/bus_volts"
 
+
 # Default values used for simless testing
 MANAGED_DATAREFS = {
-    MDR.oat_c: { "required": True, "default": 10.0, },
-    MDR.bus_volts: { "required": True, "default": [0.0] * 6, },
+    MDR.oat_c: {"required": True, "default": 10.0, },
+    MDR.bus_volts: {"required": True, "default": [0.0] * 6, },
 }
 
 
@@ -67,8 +64,8 @@ class PythonInterface:
     device: SerialOAT | None
 
     def __init__(self) -> None:
-        self.Name = "OTA display v1.0"
-        self.Sig = "ota.speedsim.xppython3"
+        self.Name = "OAT display v1.0"
+        self.Sig = "oat.speedsim.xppython3"
         self.Desc = "Display Outside Air Temp to serial device"
 
         self.manager = DataRefManager(xp, MANAGED_DATAREFS, timeout_seconds=30.0)
@@ -78,11 +75,11 @@ class PythonInterface:
 
     def _ensure_device(self) -> bool:
         if self.device is None:
-            xp.log("OTA: creating SerialOTA device")
+            xp.log("[OAT] creating SerialOTA device")
             self.device = SerialOAT(serial_number="F1TECH_ARCHER_OHP")
 
         if not self.device.conn_ready():
-            xp.log("OTA: serial device unavailable")
+            xp.log("[OAT] serial device unavailable")
             return False
 
         return True
@@ -99,7 +96,7 @@ class PythonInterface:
         refcon: Any | None = None,
     ) -> float:
         # If managed datarefs, must always be at top of flightloop
-        if not self.manager.ready(counter):
+        if not self.manager.ready():
             return 0.5  # required datarefs not available yet
 
         # Handle device reconnects
@@ -114,7 +111,7 @@ class PythonInterface:
             av_volts = avionics_bus_volts(volts_list)
             avionic_on = float(av_volts) > 8.0
         except Exception as exc:
-            xp.log(f"OTA: avionics bus detection error: {exc!r}")
+            xp.log(f"[OAT] avionics bus detection error: {exc!r}")
             avionic_on = False
 
         self.device.send_data(f"{int(temp_c)}", power_on=avionic_on)
@@ -129,7 +126,10 @@ class PythonInterface:
 
     def XPluginEnable(self) -> int:
         if not self._ensure_device():
-            xp.log("OTA: serial device not found")
+            xp.log("[OAT] serial device not found")
+            if hasattr(xp, "simless_runner"):
+                xp.log("[OAT] prime bridge datarefs for viewer anyway")
+                self.manager.ready()
             return 0
 
         self.floop = xp.createFlightLoop(self.flightloop_callback)

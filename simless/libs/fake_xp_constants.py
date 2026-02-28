@@ -401,22 +401,22 @@ def bind_xp_constants(xp: FakeXPInterface) -> None:
     # ----------------------------------------------------------------------
     base = 9000
     names = [
-        "VK_0","VK_1","VK_2","VK_3","VK_4","VK_5","VK_6","VK_7","VK_8","VK_9",
-        "VK_A","VK_ADD","VK_B","VK_BACK","VK_BACKQUOTE","VK_BACKSLASH","VK_C",
-        "VK_CLEAR","VK_COMMA","VK_D","VK_DECIMAL","VK_DELETE","VK_DIVIDE",
-        "VK_DOWN","VK_E","VK_END","VK_ENTER","VK_EQUAL","VK_ESCAPE","VK_EXECUTE",
-        "VK_F10","VK_F11","VK_F12","VK_F13","VK_F14","VK_F15","VK_F16","VK_F17",
-        "VK_F18","VK_F19","VK_F1","VK_F20","VK_F21","VK_F22","VK_F23","VK_F24",
-        "VK_F2","VK_F3","VK_F4","VK_F5","VK_F6","VK_F7","VK_F8","VK_F9","VK_F",
-        "VK_G","VK_H","VK_HELP","VK_HOME","VK_I","VK_INSERT","VK_J","VK_K",
-        "VK_L","VK_LBRACE","VK_LEFT","VK_M","VK_MINUS","VK_MULTIPLY","VK_N",
-        "VK_NEXT","VK_NUMPAD0","VK_NUMPAD1","VK_NUMPAD2","VK_NUMPAD3",
-        "VK_NUMPAD4","VK_NUMPAD5","VK_NUMPAD6","VK_NUMPAD7","VK_NUMPAD8",
-        "VK_NUMPAD9","VK_NUMPAD_ENT","VK_NUMPAD_EQ","VK_O","VK_P","VK_PERIOD",
-        "VK_PRINT","VK_PRIOR","VK_Q","VK_QUOTE","VK_R","VK_RBRACE","VK_RETURN",
-        "VK_RIGHT","VK_S","VK_SELECT","VK_SEMICOLON","VK_SEPARATOR","VK_SLASH",
-        "VK_SNAPSHOT","VK_SPACE","VK_SUBTRACT","VK_T","VK_TAB","VK_U","VK_UP",
-        "VK_V","VK_W","VK_X","VK_Y","VK_Z"
+        "VK_0", "VK_1", "VK_2", "VK_3", "VK_4", "VK_5", "VK_6", "VK_7", "VK_8", "VK_9",
+        "VK_A", "VK_ADD", "VK_B", "VK_BACK", "VK_BACKQUOTE", "VK_BACKSLASH", "VK_C",
+        "VK_CLEAR", "VK_COMMA", "VK_D", "VK_DECIMAL", "VK_DELETE", "VK_DIVIDE",
+        "VK_DOWN", "VK_E", "VK_END", "VK_ENTER", "VK_EQUAL", "VK_ESCAPE", "VK_EXECUTE",
+        "VK_F10", "VK_F11", "VK_F12", "VK_F13", "VK_F14", "VK_F15", "VK_F16", "VK_F17",
+        "VK_F18", "VK_F19", "VK_F1", "VK_F20", "VK_F21", "VK_F22", "VK_F23", "VK_F24",
+        "VK_F2", "VK_F3", "VK_F4", "VK_F5", "VK_F6", "VK_F7", "VK_F8", "VK_F9", "VK_F",
+        "VK_G", "VK_H", "VK_HELP", "VK_HOME", "VK_I", "VK_INSERT", "VK_J", "VK_K",
+        "VK_L", "VK_LBRACE", "VK_LEFT", "VK_M", "VK_MINUS", "VK_MULTIPLY", "VK_N",
+        "VK_NEXT", "VK_NUMPAD0", "VK_NUMPAD1", "VK_NUMPAD2", "VK_NUMPAD3",
+        "VK_NUMPAD4", "VK_NUMPAD5", "VK_NUMPAD6", "VK_NUMPAD7", "VK_NUMPAD8",
+        "VK_NUMPAD9", "VK_NUMPAD_ENT", "VK_NUMPAD_EQ", "VK_O", "VK_P", "VK_PERIOD",
+        "VK_PRINT", "VK_PRIOR", "VK_Q", "VK_QUOTE", "VK_R", "VK_RBRACE", "VK_RETURN",
+        "VK_RIGHT", "VK_S", "VK_SELECT", "VK_SEMICOLON", "VK_SEPARATOR", "VK_SLASH",
+        "VK_SNAPSHOT", "VK_SPACE", "VK_SUBTRACT", "VK_T", "VK_TAB", "VK_U", "VK_UP",
+        "VK_V", "VK_W", "VK_X", "VK_Y", "VK_Z"
     ]
 
     for i, name in enumerate(names):
@@ -498,7 +498,7 @@ def bind_xp_constants(xp: FakeXPInterface) -> None:
     # ----------------------------------------------------------------------
     # INTERNAL / PYTHON / SYSTEM (12700–12999)
     # ----------------------------------------------------------------------
-    xp.ModuleMTimes = object()   # 12700
+    xp.ModuleMTimes = object()  # 12700
     xp.pythonDebugLevel = 12701
     xp.pythonExecutable = ""
 
@@ -570,4 +570,3 @@ def bind_xp_constants(xp: FakeXPInterface) -> None:
     xp.VERSION = xp.Version = "12.4"
     xp.kVersion = 15100
     xp.kXPLM_Version = 15101
-

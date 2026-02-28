@@ -13,7 +13,6 @@
 #   - Loader must not infer plugin behavior; it only instantiates and binds.
 # ===========================================================================
 
-
 from __future__ import annotations
 
 import importlib
@@ -21,7 +20,7 @@ import inspect
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Protocol, List
+from typing import List, Protocol
 
 from simless.libs.fake_xp_interface import FakeXPInterface
 
@@ -33,10 +32,13 @@ from simless.libs.fake_xp_interface import FakeXPInterface
 class PythonInterfaceProto(Protocol):
     def XPluginStart(self) -> tuple[str, str, str]:
         ...
+
     def XPluginEnable(self) -> int:
         ...
+
     def XPluginDisable(self) -> None:
         ...
+
     def XPluginStop(self) -> None:
         ...
 
@@ -66,6 +68,7 @@ class LoadedPlugin:
         self.description = desc
         self.module = module
         self.instance = instance
+        self.enabled = False
 
     def __repr__(self) -> str:
         return f"<LoadedPlugin id={self.plugin_id} name={self.name}>"
@@ -105,15 +108,30 @@ class SimlessPluginLoader:
     # Public API (internal to runner)
     # ----------------------------------------------------------------------
 
-    def load_plugins(self, module_names: List[str]) -> List[LoadedPlugin]:
+    def load_plugins(self, modules: List[str | ModuleType]) -> List[LoadedPlugin]:
+        """
+        Load plugins given either:
+          • string module names (e.g. "my_plugin")
+          • inline module objects (already imported)
+        """
         self._ensure_sys_path()
 
         plugins: List[LoadedPlugin] = []
 
-        for name in module_names:
-            self._validate(name)
-            full_name = f"plugins.{name}"
-            plugin = self._load_single(full_name)
+        for item in modules:
+            if isinstance(item, str):
+                # Normal plugin name
+                self._validate(item)
+                full_name = f"plugins.{item}"
+                plugin = self._load_single(full_name)
+
+            elif isinstance(item, ModuleType):
+                # Inline plugin module
+                plugin = self._load_inline(item)
+
+            else:
+                raise TypeError(f"[Loader] Unsupported plugin spec: {item!r}")
+
             plugins.append(plugin)
 
         self._loaded_plugins = plugins
@@ -143,38 +161,48 @@ class SimlessPluginLoader:
         return -1
 
     # ----------------------------------------------------------------------
-    # Single plugin load
+    # Single plugin load (string‑based)
     # ----------------------------------------------------------------------
 
     def _load_single(self, full_name: str) -> LoadedPlugin:
         self.xp.log(f"[Loader] Loading module {full_name}")
 
-        # Import module
         try:
             module: ModuleType = importlib.import_module(full_name)
         except Exception as exc:
             raise RuntimeError(f"[Loader] Import failed for {full_name}: {exc!r}")
 
-        # Validate PythonInterface class
+        return self._load_inline(module)
+
+    # ----------------------------------------------------------------------
+    # Inline plugin load (ModuleType‑based)
+    # ----------------------------------------------------------------------
+
+    def _load_inline(self, module: ModuleType) -> LoadedPlugin:
+        """
+        Load a plugin from an already-imported module.
+        Used for simless inline plugin tests.
+        """
+        self.xp.log(f"[Loader] Loading inline module {module.__name__}")
+
         iface_cls = getattr(module, "PythonInterface", None)
         if iface_cls is None or not inspect.isclass(iface_cls):
-            raise RuntimeError(f"[Loader] {full_name} has no PythonInterface class")
+            raise RuntimeError(f"[Loader] Inline module {module.__name__} has no PythonInterface class")
 
-        # Instantiate plugin
         try:
             instance: PythonInterfaceProto = iface_cls()
         except Exception as exc:
-            raise RuntimeError(f"[Loader] Failed to instantiate PythonInterface: {exc!r}")
+            raise RuntimeError(f"[Loader] Failed to instantiate inline PythonInterface: {exc!r}")
 
-        # Call XPluginStart
+        self.xp.log("[Loader] === XPluginStart BEGIN ===")
+        instance.xp = self.xp
         try:
+            self.xp.log(f"[Loader] → XPluginStart: {module.__name__}")
             name, sig, desc = instance.XPluginStart()
         except Exception as exc:
-            raise RuntimeError(f"[Loader] XPluginStart failed for {full_name}: {exc!r}")
+            raise RuntimeError(f"[Loader] XPluginStart failed for inline module {module.__name__}: {exc!r}")
+        self.xp.log("[Runner] === XPluginStart END ===")
 
-        self.xp.log(f"[Loader] Loaded plugin {name} ({sig}) — {desc}")
-
-        # Assign plugin ID (per‑loader, not global)
         plugin_id = self._next_id
         self._next_id += 1
 
