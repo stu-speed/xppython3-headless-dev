@@ -239,9 +239,7 @@ class FakeXPDataRefAPI:
             raise PermissionError("DataRef not writable")
 
         meta = self._accessors.get(ref.path)
-        cb = None
-        if meta:
-            cb = meta.get("writeFloat") or meta.get("writeDouble")
+        cb = (meta.get("writeFloat") or meta.get("writeDouble")) if meta else None
 
         if cb:
             cb(meta.get("writeRefCon"), float(v))

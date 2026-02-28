@@ -9,6 +9,10 @@
 #
 # CORE DESIGN DISCOVERIES
 #
+#   FakeXP Widgets are anchored on an older DearPyGui (1.11.x) for one core reason:
+#   it is the only version whose behavior is predictable enough to emulate X‑Plane’s
+#   1990s‑era XPWidgets model without fighting the framework.
+#
 #   1. XPWidgets geometry is GLOBAL / SCREEN‑SPACE
 #      All XPWidget geometry (including children) is expressed in global
 #      screen coordinates. Parent‑relative geometry must be computed manually.

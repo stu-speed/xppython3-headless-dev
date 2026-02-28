@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from sshd_extensions.xp_interface import XPInterface
 from XPPython3 import xp
 from XPPython3.xp_typing import XPLMFlightLoopID, XPWidgetID
 
-xp: XPInterface
 
 XPWidgetMessageHandler_f = Callable[[int, int, Any, Any], int]
 
@@ -33,8 +31,8 @@ class PythonInterface:
 
     # ------------------------------------------------------------------
     def XPluginStart(self):
-        self.Name = "Dev OTA GUI"
-        self.Sig = "simless.dev.ota.gui"
+        self.Name = "OAT GUI"
+        self.Sig = "sshd.oat.gui"
         self.Desc = "Development GUI for adjusting Outside Air Temperature"
 
         self.win = None
@@ -65,7 +63,7 @@ class PythonInterface:
         self.win = xp.createWidget(
             100, 500, 650, 240,
             1,
-            "Simless OTA Control",
+            "Simless OAT Control",
             1,
             0,
             xp.WidgetClass_MainWindow,

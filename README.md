@@ -25,7 +25,7 @@ The goal is fast, maintainable plugin development with behavior identical inside
 ```
 xppython3-headless-dev/
 │
-├── plugins/                                # All XPPython3 plugins (production-style)
+├── plugins/                                # All XPPython3 plugins
 │   ├── PI_sshd_ota.py                      # Example plugin with managed DataRefs
 │   ├── PI_sshd_dev_ota_gui                 # Example XPWidget GUI plugin
 │   │
@@ -33,15 +33,15 @@ xppython3-headless-dev/
 │   │   ├── ss_serial_device.py
 │   │   └── ...
 │   │
-│   └── sshd_extensions/                    # Shared plugin architecture (namespaced)
+│   └── sshd_extensions/                    # Shared plugin architecture
 │       ├── datarefs.py                     # Managed DataRefs
-│       ├── xp_interface.py                 # Runtime placeholder for XPInterface (prod-safe)
+│       ├── xp_interface.py                 # Runtime placeholder for XPInterface
 │       └── ...
 │
 ├── simless/                                # Sim‑less execution harnesses
 │   ├── __init__.pyi                        # Declares xp: FakeXPInterface for IDE/mypy visibility
 │   │
-│   ├── run_standalone_oat.py               # FakeXP only (no bridge)
+│   ├── run_standalone_oat.py               # FakeXP only + GUI dataref updates
 │   ├── run_bridged_oat.py                  # FakeXP + live DataRef bridge
 │   │
 │   └── libs/                               # Simless-only runtime + typing contracts

@@ -36,7 +36,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict
 
 from simless.libs.fake_xp_interface import FakeXPInterface
 
@@ -61,7 +61,6 @@ class FakeXPFlightLoop:
         "scheduleFlightLoop",
         "unscheduleFlightLoop",
         "getNextFlightLoopCallbackTime",
-        "_get_flightloop_struct",
     ]
 
     # ------------------------------------------------------------------
@@ -80,18 +79,6 @@ class FakeXPFlightLoop:
 
         # Runner-populated timing mirror: fid → next_call_time
         self._flightloop_times: Dict[int, float] = {}
-
-    # ------------------------------------------------------------------
-    # Runner-facing helper
-    # ------------------------------------------------------------------
-    def _get_flightloop_struct(self, fid: int) -> Optional[FlightLoopStruct]:
-        """
-        Fetch the XP12-style struct for a given flightloop ID.
-
-        This is the ONLY entry point SimlessRunner uses to obtain callback,
-        refcon, phase, and other metadata needed to build scheduler entries.
-        """
-        return self._flightloop_structs.get(fid)
 
     # ------------------------------------------------------------------
     # CREATE / DESTROY

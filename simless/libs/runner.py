@@ -85,7 +85,7 @@ class SimlessRunner:
         # ------------------------------------------------------------------
         if enable_dataref_bridge:
             self._bridge = XPBridgeClient(
-                self.xp,
+                self.xp,  # type: ignore[arg-type]
                 host=bridge_host,
                 port=bridge_port,
             )

@@ -49,7 +49,6 @@ from XPPython3.xp_typing import XPLMFlightLoopID
 from sshd_extensions.xp_interface import XPInterface
 from sshd_extensions.dataref_manager import DataRefSpec, DataRefManager, DRefType
 
-
 EPSILON: float = float(os.getenv("XPBRIDGE_EPSILON", "0.001"))
 RECONNECT_INTERVAL: float = float(os.getenv("XPBRIDGE_RECONNECT_INTERVAL", "10.0"))
 HEARTBEAT_TIMEOUT: float = float(os.getenv("XPBRIDGE_HEARTBEAT_TIMEOUT", "10.0"))
@@ -90,12 +89,12 @@ class BridgeMsgType(str, Enum):
 
 Meta = namedtuple("Meta", "idx name type writable array_size")
 UpdateEntry = namedtuple("UpdateEntry", "idx value")
-Update = namedtuple("Update", "entries")          # entries: List[UpdateEntry]
-Add = namedtuple("Add", "paths")                  # paths: List[str]
-Reset = namedtuple("Reset", "")                   # no fields
-Ping = namedtuple("Ping", "")                     # no fields
-Pong = namedtuple("Pong", "")                     # no fields
-ErrorMsg = namedtuple("ErrorMsg", "text")         # text: str
+Update = namedtuple("Update", "entries")  # entries: List[UpdateEntry]
+Add = namedtuple("Add", "paths")  # paths: List[str]
+Reset = namedtuple("Reset", "")  # no fields
+Ping = namedtuple("Ping", "")  # no fields
+Pong = namedtuple("Pong", "")  # no fields
+ErrorMsg = namedtuple("ErrorMsg", "text")  # text: str
 
 BridgeMsgValue = Union[Meta, Update, Add, Reset, Ping, Pong, ErrorMsg]
 
@@ -149,11 +148,13 @@ class BridgeMsg:
             Callable: A decorator that registers the payload class and
             its encode/decode functions.
         """
+
         def decorator(payload_cls):
             enc = getattr(payload_cls, "_encode")
             dec = getattr(payload_cls, "_decode")
             cls._registry[msg_type] = (payload_cls, enc, dec)
             return payload_cls
+
         return decorator
 
     # ------------------------------------------------------------------
@@ -786,13 +787,12 @@ class BridgeData:
             UPDATE events.
     """
     type: BridgeDataType
-    path: Optional[str]          # None for errors
-    dtype: Optional[DRefType]    # Only for META
-    writable: Optional[bool]     # Only for META
-    array_size: Optional[int]    # Only for META
-    value: Any                   # Only for UPDATE
-    text: Optional[str]          # Only for ERROR
-
+    path: Optional[str]  # None for errors
+    dtype: Optional[DRefType]  # Only for META
+    writable: Optional[bool]  # Only for META
+    array_size: Optional[int]  # Only for META
+    value: Any  # Only for UPDATE
+    text: Optional[str]  # Only for ERROR
 
 
 # =======================================================================
