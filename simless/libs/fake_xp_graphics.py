@@ -47,8 +47,11 @@ class FakeXPGraphics:
         "bindTexture2d",
         "generateTextureNumbers",
         "deleteTexture",
-        "draw_frame"
     ]
+
+    _dpg_initialized: bool
+    _graphics_window: Optional[int]
+    _drawlist_id: Optional[int]
 
     # ----------------------------------------------------------------------
     # INITIALIZATION
@@ -76,19 +79,25 @@ class FakeXPGraphics:
         self._drawlist_id: Optional[int] = None
 
     # ----------------------------------------------------------------------
-    # DPG INITIALIZATION (PRODUCTION-PARITY)
+    # DPG INITIALIZATION
     # ----------------------------------------------------------------------
     def init_graphics_root(self) -> None:
         """
-        Initialize DearPyGui context, viewport, and root graphics surface
-        BEFORE any plugin enable. This matches production X-Plane behavior:
-        the widget system is fully ready before plugins run.
+        Initialize the DearPyGui context, the OS-level viewport, and the
+        FakeXP graphics root window. The viewport is the true root surface
+        (the OS window). The graphics root window is a child surface that
+        always matches the viewport's size and position exactly.
+
+        This mirrors real X‑Plane behavior: the OS window may resize at any
+        time, but XPWidget geometry does not change unless plugins explicitly
+        modify it. The graphics root window and its drawlist are resized to
+        match the viewport, ensuring consistent hit‑testing and drag behavior.
         """
         if self._dpg_initialized:
             return
 
         try:
-            # Create DPG context + viewport
+            # Create DPG context + OS viewport
             dpg.create_context()
             dpg.create_viewport(
                 title="Fake X-Plane",
@@ -98,7 +107,7 @@ class FakeXPGraphics:
             dpg.setup_dearpygui()
             dpg.show_viewport()
 
-            # Root window at top level
+            # Graphics root window: always pinned to (0,0) and sized to viewport
             with dpg.window(
                 label="##gfx_root",
                 pos=(0, 0),
@@ -112,7 +121,7 @@ class FakeXPGraphics:
             ) as root:
                 self._graphics_window = root
 
-                # Drawlist inside the root window
+                # Background drawlist inside the graphics root
                 self._drawlist_id = dpg.add_drawlist(
                     parent=self._graphics_window,
                     width=self._screen_w,
@@ -120,10 +129,41 @@ class FakeXPGraphics:
                 )
 
             dpg.set_primary_window(self._graphics_window, True)
+
+            # Keep graphics root perfectly aligned with the viewport
+            def _on_viewport_resize(sender, app_data):
+                if not getattr(self, "_dpg_initialized", False):
+                    return
+
+                w = dpg.get_viewport_width()
+                h = dpg.get_viewport_height()
+                print(f"[resize] viewport -> {w}x{h}")
+
+                # Resize graphics root to match viewport exactly
+                if dpg.is_item_ok(self._graphics_window):
+                    dpg.configure_item(
+                        self._graphics_window,
+                        pos=(0, 0),
+                        width=w,
+                        height=h,
+                    )
+
+                # Resize drawlist to match graphics root
+                if dpg.is_item_ok(self._drawlist_id):
+                    dpg.configure_item(self._drawlist_id, width=w, height=h)
+
+                # XPWidget geometry is NOT touched here.
+                # No _needs_redraw, no _main_geometry_applied.
+
+                dpg.set_primary_window(self._graphics_window, True)
+
+            dpg.set_viewport_resize_callback(_on_viewport_resize)
+
             self._dpg_initialized = True
 
         except Exception as exc:
             self.xp.log(f"[Graphics] DPG init error: {exc!r}")
+
 
     # ----------------------------------------------------------------------
     # DRAW CALLBACK REGISTRATION
@@ -227,10 +267,10 @@ class FakeXPGraphics:
     # SCREEN + MOUSE
     # ----------------------------------------------------------------------
     def getScreenSize(self) -> Tuple[int, int]:
-        return (self._screen_w, self._screen_h)
+        return self._screen_w, self._screen_h
 
     def getMouseLocation(self) -> Tuple[int, int]:
-        return (self._mouse_x, self._mouse_y)
+        return self._mouse_x, self._mouse_y
 
     def _update_mouse(self) -> None:
         if not self._dpg_initialized:
@@ -246,37 +286,42 @@ class FakeXPGraphics:
     # ----------------------------------------------------------------------
     def draw_frame(self) -> None:
         """
-        Called by SimlessRunner once per frame.
-        Executes draw callbacks, renders widgets, and renders DearPyGui.
+        Called once per frame by the SimlessRunner.
+
+        Clean ordering:
+        - Render one DearPyGui frame first (this establishes valid layout).
+        - Skip geometry until both:
+            (1) widgets have been created, and
+            (2) at least one DPG frame has rendered.
         """
+
+        # If DPG window closed, end run loop
         if self._dpg_initialized and not dpg.is_dearpygui_running():
             self.xp.simless_runner.end_run_loop()
             return
 
         self._update_mouse()
 
-        # Execute draw callbacks
+        # Execute draw callbacks (pre-DPG-frame)
         for cb, phase, wantsBefore in list(self._draw_callbacks):
             try:
                 cb(phase, wantsBefore)
             except Exception as exc:
                 self.xp.log(f"[Graphics] draw callback error: {exc!r}")
 
-        # Render DPG frame FIRST (establishes valid item state/layout)
-        if self._dpg_initialized:
-            try:
-                dpg.render_dearpygui_frame()
-            except Exception as exc:
-                self.xp.log(f"[Graphics] frame render error: {exc!r}")
-                return
+        # --- Render DPG frame FIRST ---
+        try:
+            dpg.render_dearpygui_frame()
+        except Exception as exc:
+            self.xp.log(f"[Graphics] frame render error: {exc!r}")
+            return
 
-        # Mark widget layout ready AFTER first successful frame
-        if hasattr(self, "_layout_ready") and not getattr(self, "_layout_ready"):
-            self._layout_ready = True
+        # First frame: mark layout valid, skip geometry
+        if not self._dpg_initialized:
+            self._dpg_initialized = True
+            return
 
-        # Render widgets (safe now)
-        if hasattr(self, "_draw_all_widgets"):
-            try:
-                self._draw_all_widgets()
-            except Exception as exc:
-                self.xp.log(f"[Graphics] widget render error: {exc!r}")
+        # Only render widgets after:
+        #   - at least one DPG frame has rendered
+        self.xp.render_widget_frame()
+

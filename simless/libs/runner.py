@@ -261,16 +261,6 @@ class SimlessRunner:
         self.xp.log("[Runner] end_run_loop() called — stopping main loop")
 
     # ----------------------------------------------------------------------
-    # GUI lifecycle
-    # ----------------------------------------------------------------------
-    def init_gui(self) -> None:
-        """Initialize GUI (FakeXPGraphics handles DearPyGui)."""
-        self.xp.log("[Runner] GUI enabled (FakeXPGraphics manages DearPyGui)")
-
-    def shutdown_gui(self) -> None:
-        self.xp.log("[Runner] GUI shutdown requested (no‑op for runner)")
-
-    # ----------------------------------------------------------------------
     # One frame
     # ----------------------------------------------------------------------
     def run_one_frame(self) -> bool:
@@ -346,15 +336,21 @@ class SimlessRunner:
             self._dataref_viewer = FakeXPDataRefViewerClient(xp)
             self._dataref_viewer.attach()
 
+        # ------------------------------------------------------------
         # 1. Initialize graphics BEFORE plugin load/start/enable
+        # ------------------------------------------------------------
         if xp.enable_gui:
             xp.init_graphics_root()
-            self.init_gui()
+            xp.log("[Runner] GUI enabled (FakeXPGraphics manages DearPyGui)")
 
-        # 2. XPluginStart done by loader
+        # ------------------------------------------------------------
+        # 2. XPluginStart (done by loader)
+        # ------------------------------------------------------------
         plugins: List[LoadedPlugin] = self.loader.load_plugins(plugin_names)
 
+        # ------------------------------------------------------------
         # 3. XPluginEnable
+        # ------------------------------------------------------------
         xp.log("[Runner] === XPluginEnable BEGIN ===")
 
         for p in plugins:
@@ -372,7 +368,15 @@ class SimlessRunner:
 
         xp.log("[Runner] === XPluginEnable END ===")
 
-        # 4. Main loop
+        # ------------------------------------------------------------
+        # 4. Initialize XP widget → DPG window mapping
+        # ------------------------------------------------------------
+        if xp.enable_gui:
+            xp.map_widgets_to_dpg()
+
+        # ------------------------------------------------------------
+        # 5. Main loop
+        # ------------------------------------------------------------
         xp.log("[Runner] === Main loop BEGIN ===")
         self._running = True
         start = time.monotonic()
@@ -396,7 +400,9 @@ class SimlessRunner:
 
         xp.log("[Runner] === Main loop END ===")
 
-        # 5. XPluginDisable
+        # ------------------------------------------------------------
+        # 6. XPluginDisable
+        # ------------------------------------------------------------
         xp.log("[Runner] === XPluginDisable BEGIN ===")
         for p in plugins:
             try:
@@ -409,7 +415,9 @@ class SimlessRunner:
                 )
         xp.log("[Runner] === XPluginDisable END ===")
 
-        # 6. XPluginStop
+        # ------------------------------------------------------------
+        # 7. XPluginStop
+        # ------------------------------------------------------------
         xp.log("[Runner] === XPluginStop BEGIN ===")
         for p in plugins:
             try:
@@ -427,4 +435,5 @@ class SimlessRunner:
             self._dataref_viewer = None
 
         if xp.enable_gui:
-            self.shutdown_gui()
+            xp.log("[Runner] === GUI Teardown ===")
+

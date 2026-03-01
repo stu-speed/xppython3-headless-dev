@@ -18,11 +18,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
-from simless.libs.fake_xp_widget import XPWidgetID
+from simless.libs.fake_xp_dataref_types import FakeDataRef
 from simless.libs.runner import SimlessRunner
 from simless.libs.simless_xp_interface import SimlessXPInterface
+from sshd_extensions.dataref_manager import DRefType
+from XPPython3.xp_typing import (
+    XPWidgetID
+)
 
 
 @runtime_checkable
@@ -52,6 +56,7 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
 
     # Runner
     _simless_runner: SimlessRunner
+    _graphics_window: int | None
 
     # ------------------------------------------------------------------
     # DataRefManager binding (simless only)
@@ -75,6 +80,14 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
         """
         ...
 
+    def draw_frame(self) -> None: ...
+
+    def all_widget_ids(self) -> list[XPWidgetID]: ...
+
+    def map_widgets_to_dpg(self) -> None: ...
+
+    def render_widget_frame(self) -> None: ...
+
     # ------------------------------------------------------------------
     # Simless lifecycle control (public simless API)
     # ------------------------------------------------------------------
@@ -97,6 +110,8 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
         """
         ...
 
+    def quit_runner(self) -> None: ...
+
     # ------------------------------------------------------------------
     # Internal debug helper (private)
     # ------------------------------------------------------------------
@@ -105,3 +120,52 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
         Internal debug logging helper.
         """
         ...
+
+    # ------------------------------------------------------------------
+    # Dataref helpers
+    # ------------------------------------------------------------------
+
+    def update_dataref(
+        self,
+        ref: FakeDataRef,
+        dtype: Optional[DRefType] = None,
+        size: Optional[int] = None,
+        writable: Optional[bool] = None,
+        value: Optional[Any] = None,
+    ) -> FakeDataRef: ...
+
+    def add_handle(self, name: str, ref: FakeDataRef) -> None: ...
+
+    def get_handle(self, name: str) -> Optional[FakeDataRef]: ...
+
+    def del_handle(self, name) -> None: ...
+
+    def all_handle_paths(self) -> list[str]: ...
+
+    def all_handles(self) -> list[FakeDataRef]: ...
+
+    def conform_dummy_to_value(
+        self,
+        ref: FakeDataRef,
+        value,
+        offset: int = 0,
+        count: int | None = None,
+    ) -> None: ...
+
+    def promote_shape_from_value(
+        self,
+        ref: FakeDataRef,
+        value: Any,
+    ) -> None: ...
+
+    def promote_type(
+        self,
+        ref: FakeDataRef,
+        dtype: DRefType,
+        writable: bool,
+    ) -> None: ...
+
+    def attach_handle_callback(self, cb: Optional[Callable[[FakeDataRef], None]]) -> None: ...
+
+    def detach_handle_callback(self) -> None: ...
+
