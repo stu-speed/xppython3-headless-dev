@@ -24,7 +24,31 @@ from __future__ import annotations
 
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
+import traceback
 import dearpygui.dearpygui as dpg
+
+_ORIG_GET_ITEM_STATE = dpg.get_item_state
+
+def _dbg_get_item_state(item):
+    try:
+        return _ORIG_GET_ITEM_STATE(item)
+    except Exception as exc:
+        try:
+            ok = dpg.is_item_ok(item)
+        except Exception:
+            ok = "<is_item_ok crashed>"
+
+        try:
+            info = dpg.get_item_info(item)
+        except Exception:
+            info = "<get_item_info crashed>"
+
+        print(f"[DPG][CRASH] get_item_state({item}) ok={ok} info={info} exc={exc!r}")
+        print("".join(traceback.format_stack(limit=25)))
+        raise
+
+dpg.get_item_state = _dbg_get_item_state
+
 
 from simless.libs.fake_xp_interface import FakeXPInterface
 
@@ -83,21 +107,22 @@ class FakeXPGraphics:
     # ----------------------------------------------------------------------
     def init_graphics_root(self) -> None:
         """
-        Initialize the DearPyGui context, the OS-level viewport, and the
-        FakeXP graphics root window. The viewport is the true root surface
-        (the OS window). The graphics root window is a child surface that
-        always matches the viewport's size and position exactly.
+        Initialize DearPyGui using a viewport-attached drawlist as the FakeXP
+        graphics root.
 
-        This mirrors real X‑Plane behavior: the OS window may resize at any
-        time, but XPWidget geometry does not change unless plugins explicitly
-        modify it. The graphics root window and its drawlist are resized to
-        match the viewport, ensuring consistent hit‑testing and drag behavior.
+        This avoids all DPG 1.11 window input-capture edge cases:
+        - No primary window interference
+        - No mouse capture by background surfaces
+        - Stable item IDs across viewport resize
+        - Correct hit-testing and drag behavior for XP windows
+
+        XPWidget windows remain normal DPG windows layered above the drawlist.
         """
+
         if self._dpg_initialized:
             return
 
         try:
-            # Create DPG context + OS viewport
             dpg.create_context()
             dpg.create_viewport(
                 title="Fake X-Plane",
@@ -107,63 +132,17 @@ class FakeXPGraphics:
             dpg.setup_dearpygui()
             dpg.show_viewport()
 
-            # Graphics root window: always pinned to (0,0) and sized to viewport
-            with dpg.window(
-                label="##gfx_root",
-                pos=(0, 0),
-                width=self._screen_w,
-                height=self._screen_h,
-                no_title_bar=True,
-                no_resize=True,
-                no_move=True,
-                no_scrollbar=True,
-                no_collapse=True,
-            ) as root:
-                self._graphics_window = root
-
-                # Background drawlist inside the graphics root
-                self._drawlist_id = dpg.add_drawlist(
-                    parent=self._graphics_window,
-                    width=self._screen_w,
-                    height=self._screen_h,
-                )
-
-            dpg.set_primary_window(self._graphics_window, True)
-
-            # Keep graphics root perfectly aligned with the viewport
-            def _on_viewport_resize(sender, app_data):
-                if not getattr(self, "_dpg_initialized", False):
-                    return
-
-                w = dpg.get_viewport_width()
-                h = dpg.get_viewport_height()
-                print(f"[resize] viewport -> {w}x{h}")
-
-                # Resize graphics root to match viewport exactly
-                if dpg.is_item_ok(self._graphics_window):
-                    dpg.configure_item(
-                        self._graphics_window,
-                        pos=(0, 0),
-                        width=w,
-                        height=h,
-                    )
-
-                # Resize drawlist to match graphics root
-                if dpg.is_item_ok(self._drawlist_id):
-                    dpg.configure_item(self._drawlist_id, width=w, height=h)
-
-                # XPWidget geometry is NOT touched here.
-                # No _needs_redraw, no _main_geometry_applied.
-
-                dpg.set_primary_window(self._graphics_window, True)
-
-            dpg.set_viewport_resize_callback(_on_viewport_resize)
+            # ------------------------------------------------------------------
+            # Viewport-attached graphics root (NOT a window)
+            # ------------------------------------------------------------------
+            self._drawlist_id = dpg.add_viewport_drawlist(
+                front=False
+            )
 
             self._dpg_initialized = True
 
         except Exception as exc:
             self.xp.log(f"[Graphics] DPG init error: {exc!r}")
-
 
     # ----------------------------------------------------------------------
     # DRAW CALLBACK REGISTRATION

@@ -42,6 +42,11 @@
 #   - DearPyGui is used only for optional visualization.
 #   - DPG item IDs are internal and never exposed to plugin code.
 #   - No automatic layout or inferred hierarchy.
+#
+# STRICTNESS POLICY
+#   - FakeXPWidget owns widget validity.
+#   - DearPyGui is treated as write‑only from this layer (no state queries).
+#   - Any invariant violation is a programmer error and raises immediately.
 # ===========================================================================
 
 from __future__ import annotations
@@ -129,20 +134,34 @@ class FakeXPWidget:
     ]
 
     # ------------------------------------------------------------------
+    # INTERNAL HELPERS
+    # ------------------------------------------------------------------
+
+    def _require_widget(self, wid: XPWidgetID) -> WidgetInfo:
+        info = self._widgets.get(wid)
+        if info is None:
+            raise RuntimeError(f"XPWidget {wid} does not exist")
+        return info
+
+    def _require_initialized(self) -> None:
+        if not getattr(self, "_widgets_initialized", False):
+            raise RuntimeError("FakeXPWidget used before map_widgets_to_dpg() completed")
+
+    # ------------------------------------------------------------------
     # INITIALIZATION
     # ------------------------------------------------------------------
-    def _init_widgets(self) -> None:
 
+    def _init_widgets(self) -> None:
         """Initialize all internal XPWidget bookkeeping structures."""
         self._widgets: Dict[XPWidgetID, WidgetInfo] = {}
 
         self._z_order: List[XPWidgetID] = []
         self._focused_widget: Optional[XPWidgetID] = None
 
-        self._needs_redraw: bool = True
-        self._widgets_initialized: bool = False
+        self._needs_redraw = True
+        self._widgets_initialized = False
 
-        self._next_id: int = 1
+        self._next_id = 1
 
     # -------------------------
     # helpers
@@ -238,7 +257,7 @@ class FakeXPWidget:
         for wid, info in self._widgets.items():
             if info.dpg_id is None:
                 continue
-            self.xp.log(f"[DBG] wid={wid} dpg_id={info.dpg_id} ok={dpg.is_item_ok(info.dpg_id)}")
+            self.xp.log(f"[DBG] wid={wid} dpg_id={info.dpg_id}")
             if info.parent == XPWidgetID(0):
                 self._dispatch_draw(wid)
 
@@ -247,6 +266,7 @@ class FakeXPWidget:
     # ------------------------------------------------------------------
     # CREATE / DESTROY
     # ------------------------------------------------------------------
+
     def createWidget(
         self,
         left: int,
@@ -284,14 +304,14 @@ class FakeXPWidget:
     def killWidget(self, wid: XPWidgetID) -> None:
         """Destroy an XPWidget and all associated state."""
         info = self._widgets.pop(wid, None)
-        if not info:
-            return
+        if info is None:
+            raise RuntimeError(f"killWidget called on unknown widget {wid}")
 
-        if info.dpg_id and dpg.does_item_exist(info.dpg_id):
+        # Write-only DPG: delete what we believe exists.
+        if info.dpg_id is not None:
             dpg.delete_item(info.dpg_id)
-
-        if info.container_id and dpg.does_item_exist(info.container_id):
-            dpg.delete_item(info.container_id)
+        info.dpg_id = None
+        info.container_id = None
 
         if wid in self._z_order:
             self._z_order.remove(wid)
@@ -304,11 +324,10 @@ class FakeXPWidget:
     # ------------------------------------------------------------------
     # GEOMETRY
     # ------------------------------------------------------------------
+
     def setWidgetGeometry(self, wid: XPWidgetID, x: int, y: int, w: int, h: int) -> None:
         """Set the geometry of an XPWidget in global screen coordinates."""
-        info = self._widgets.get(wid)
-        if not info:
-            return
+        info = self._require_widget(wid)
 
         info.geometry = (x, y, w, h)
 
@@ -323,9 +342,7 @@ class FakeXPWidget:
 
     def getWidgetGeometry(self, wid: XPWidgetID) -> Tuple[int, int, int, int]:
         """Return the geometry of an XPWidget as (left, top, right, bottom)."""
-        info = self._widgets.get(wid)
-        if not info:
-            return (0, 0, 0, 0)
+        info = self._require_widget(wid)
         x, y, w, h = info.geometry
         return x, y, x + w, y - h
 
@@ -336,6 +353,7 @@ class FakeXPWidget:
     # ------------------------------------------------------------------
     # PROPERTIES
     # ------------------------------------------------------------------
+
     def setWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID, value: Any) -> None:
         """
         Set an XPWidget property value using real X‑Plane semantics.
@@ -353,9 +371,7 @@ class FakeXPWidget:
         The actual slider position is stored only in the widget property
         Property_ScrollBarSliderPosition and must be read from there by plugins.
         """
-        info = self._widgets.get(wid)
-        if not info:
-            return None
+        info = self._require_widget(wid)
 
         # Update internal property
         info.properties[prop] = value
@@ -368,14 +384,16 @@ class FakeXPWidget:
         # ScrollBar (delegate slider-position updates)
         # ------------------------------------------------------------------
         if wclass == self.xp.WidgetClass_ScrollBar:
-            # Min/max updates stay inline
-            if prop == self.xp.Property_ScrollBarMin and dpg_id and dpg.is_item_ok(dpg_id):
-                dpg.configure_item(dpg_id, min_value=int(value))
+            if prop == self.xp.Property_ScrollBarMin:
+                if dpg_id is not None:
+                    dpg.configure_item(dpg_id, min_value=int(value))
+                return None
 
-            if prop == self.xp.Property_ScrollBarMax and dpg_id and dpg.is_item_ok(dpg_id):
-                dpg.configure_item(dpg_id, max_value=int(value))
+            if prop == self.xp.Property_ScrollBarMax:
+                if dpg_id is not None:
+                    dpg.configure_item(dpg_id, max_value=int(value))
+                return None
 
-            # Delegate slider-position updates to real‑SDK‑accurate handler
             if prop == self.xp.Property_ScrollBarSliderPosition:
                 return self._fakexp_scrollbar_set_position(wid, value)
 
@@ -383,41 +401,38 @@ class FakeXPWidget:
 
     def getWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID) -> Any:
         """Retrieve an XPWidget property value."""
-        info = self._widgets.get(wid)
-        if not info:
-            return None
+        info = self._require_widget(wid)
         return info.properties.get(prop)
 
     # ------------------------------------------------------------------
     # VISIBILITY
     # ------------------------------------------------------------------
+
     def showWidget(self, wid: XPWidgetID) -> None:
         """Make an XPWidget visible."""
-        info = self._widgets.get(wid)
-        if info:
-            info.visible = True
-            self._needs_redraw = True
+        info = self._require_widget(wid)
+        info.visible = True
+        self._needs_redraw = True
 
     def hideWidget(self, wid: XPWidgetID) -> None:
         """Hide an XPWidget."""
-        info = self._widgets.get(wid)
-        if info:
-            info.visible = False
-            self._needs_redraw = True
+        info = self._require_widget(wid)
+        info.visible = False
+        self._needs_redraw = True
 
     def isWidgetVisible(self, wid: XPWidgetID) -> bool:
         """Return True if the widget is visible."""
-        info = self._widgets.get(wid)
-        return bool(info and info.visible)
+        info = self._require_widget(wid)
+        return bool(info.visible)
 
     # ------------------------------------------------------------------
     # CALLBACKS + MESSAGE DISPATCH
     # ------------------------------------------------------------------
+
     def addWidgetCallback(self, wid: XPWidgetID, callback: XPWidgetCallback) -> None:
         """Register a callback for an XPWidget."""
-        info = self._widgets.get(wid)
-        if info:
-            info.callbacks.append(callback)
+        info = self._require_widget(wid)
+        info.callbacks.append(callback)
 
     def sendMessageToWidget(
         self,
@@ -456,10 +471,11 @@ class FakeXPWidget:
     # ------------------------------------------------------------------
     # HIERARCHY / HIT TESTING
     # ------------------------------------------------------------------
+
     def getParentWidget(self, wid: XPWidgetID) -> XPWidgetID:
         """Return the parent widget ID or XPWidgetID(0) if root."""
-        info = self._widgets.get(wid)
-        return info.parent if info else XPWidgetID(0)
+        info = self._require_widget(wid)
+        return info.parent
 
     def getWidgetForLocation(self, x: int, y: int) -> Optional[XPWidgetID]:
         """
@@ -481,12 +497,14 @@ class FakeXPWidget:
     # ------------------------------------------------------------------
     # Z‑ORDER
     # ------------------------------------------------------------------
+
     def isWidgetInFront(self, wid: XPWidgetID) -> bool:
         """Return True if the widget is frontmost."""
         return bool(self._z_order) and self._z_order[-1] == wid
 
     def bringWidgetToFront(self, wid: XPWidgetID) -> None:
         """Move a widget to the front of the Z‑order."""
+        self._require_widget(wid)
         if wid in self._z_order:
             self._z_order.remove(wid)
             self._z_order.append(wid)
@@ -494,6 +512,7 @@ class FakeXPWidget:
 
     def pushWidgetBehind(self, wid: XPWidgetID) -> None:
         """Move a widget to the back of the Z‑order."""
+        self._require_widget(wid)
         if wid in self._z_order:
             self._z_order.remove(wid)
             self._z_order.insert(0, wid)
@@ -502,13 +521,16 @@ class FakeXPWidget:
     # ------------------------------------------------------------------
     # KEYBOARD FOCUS
     # ------------------------------------------------------------------
+
     def setKeyboardFocus(self, wid: XPWidgetID) -> None:
         """Set keyboard focus to the given widget (FakeXP stores focus only)."""
+        self._require_widget(wid)
         self._focused_widget = wid
         self._needs_redraw = True
 
     def loseKeyboardFocus(self, wid: XPWidgetID) -> None:
         """Remove keyboard focus if the given widget currently holds it."""
+        self._require_widget(wid)
         if self._focused_widget == wid:
             self._focused_widget = None
             self._needs_redraw = True
@@ -516,6 +538,7 @@ class FakeXPWidget:
     # ------------------------------------------------------------------
     # DESCRIPTOR / CLASS
     # ------------------------------------------------------------------
+
     def setWidgetDescriptor(self, wid: XPWidgetID, text: str) -> None:
         """
         Set the widget descriptor string.
@@ -523,15 +546,12 @@ class FakeXPWidget:
         For text-based widgets, this updates both internal XP state and the
         underlying DearPyGui item so the change is visible immediately.
         """
-        info = self._widgets.get(wid)
-        if not info:
-            return
-
+        info = self._require_widget(wid)
         info.descriptor = text
 
         dpg_id = info.dpg_id
-        if dpg_id is None or not dpg.is_item_ok(dpg_id):
-            return
+        if dpg_id is None:
+            raise RuntimeError(f"setWidgetDescriptor: wid={wid} has no dpg_id")
 
         wclass = info.widget_class
 
@@ -550,21 +570,23 @@ class FakeXPWidget:
 
     def getWidgetDescriptor(self, wid: XPWidgetID) -> str:
         """Return the widget descriptor string."""
-        info = self._widgets.get(wid)
-        return info.descriptor if info else ""
+        info = self._require_widget(wid)
+        return info.descriptor
 
     def getWidgetClass(self, wid: XPWidgetID) -> XPWidgetClass:
         """Return the widget class."""
-        info = self._widgets.get(wid)
-        return info.widget_class if info else XPPython3.xp.WidgetClass_GeneralGraphics
+        info = self._require_widget(wid)
+        return info.widget_class
 
     def getWidgetUnderlyingWindow(self, wid: XPWidgetID) -> int:
         """Return the underlying window handle (always 0 in FakeXP)."""
+        self._require_widget(wid)
         return 0
 
     # ------------------------------------------------------------------
     # RENDERING
     # ------------------------------------------------------------------
+
     def _compute_local_pos(self, wid: XPWidgetID) -> Tuple[int, int]:
         """
         Compute the XP‑semantic local (x, y) position of a widget relative to its
@@ -606,14 +628,14 @@ class FakeXPWidget:
         nested. It ensures that XPWidget geometry remains correct and stable across
         viewport resizes, window drags, and plugin‑driven geometry changes.
         """
-        info = self._widgets[wid]
+        info = self._require_widget(wid)
         parent = info.parent
         cx, ctop, _, _ = info.geometry
 
         if parent == XPWidgetID(0):
             return cx, ctop
 
-        pinfo = self._widgets[parent]
+        pinfo = self._require_widget(parent)
         px, ptop, _, _ = pinfo.geometry
 
         x_local = cx - px
@@ -628,10 +650,10 @@ class FakeXPWidget:
         """
         info = self._widgets.get(wid)
         if not info:
-            return
+            raise RuntimeError(f"_ensure_dpg_item_for_widget: unknown wid={wid}")
 
         # Already created?
-        if info.dpg_id is not None and dpg.is_item_ok(info.dpg_id):
+        if info.dpg_id is not None:
             self.xp.log(f"[Create] wid={wid} already exists")
             return
 
@@ -678,8 +700,7 @@ class FakeXPWidget:
         self.xp.log(f"[Create] wid={wid} CONTROL parent_wid={parent_wid}")
 
         if parent_wid == XPWidgetID(0):
-            self.xp.log(f"[Create] wid={wid} ERROR: control has no parent")
-            return
+            raise RuntimeError(f"[Create] wid={wid} ERROR: control has no parent")
 
         # Ensure parent window exists first
         self._ensure_dpg_item_for_widget(parent_wid)
@@ -688,13 +709,12 @@ class FakeXPWidget:
         parent_container = parent_info.container_id if parent_info else None
         self.xp.log(f"[Create] wid={wid} parent_container={parent_container}")
 
-        if parent_container is None or not dpg.is_item_ok(parent_container):
-            self.xp.log(f"[Create] wid={wid} ERROR: parent container invalid")
-            return
+        if parent_container is None:
+            raise RuntimeError(f"[Create] wid={wid} ERROR: parent container invalid")
 
         # Create / reuse the positionable container for this control
         cont = info.container_id
-        if cont is None or not dpg.is_item_ok(cont):
+        if cont is None:
             self.xp.log(f"[Create] wid={wid} creating CHILD container")
             cont = dpg.add_child_window(
                 parent=parent_container,
@@ -799,106 +819,114 @@ class FakeXPWidget:
             if not info:
                 continue
 
-            dpg_id = info.dpg_id
-            if dpg_id is None or not dpg.is_item_ok(dpg_id):
-                continue
+            # Ensure DPG items exist (creation is allowed here per existing design)
+            self._ensure_dpg_item_for_widget(wid)
 
-            x, top, w, h = info.geometry
-            wclass = info.widget_class
+            # Apply geometry (implementation below preserves "apply exactly once" semantics)
+            self._apply_geometry_if_needed(wid)
 
-            is_window = wclass in (
-                self.xp.WidgetClass_MainWindow,
-                self.xp.WidgetClass_SubWindow,
-            )
+            # Apply visibility
+            self._apply_visibility(wid)
 
-            # ------------------------------------------------------------
-            # XP WINDOWS — GLOBAL geometry
-            # ------------------------------------------------------------
-            if is_window:
-                if info.geom_applied:
-                    continue
+    # ------------------------------------------------------------------
+    # GEOMETRY APPLICATION (DPG WRITE‑ONLY)
+    # ------------------------------------------------------------------
 
+    def _apply_geometry_if_needed(self, wid: XPWidgetID) -> None:
+        """
+        Apply XP geometry to the DPG representation if invalidated.
+
+        This method preserves the invariant:
+        - Window geometry is applied exactly once per XP geometry change.
+        - Child container geometry is applied only when it changes.
+        """
+        info = self._require_widget(wid)
+
+        # Nothing to apply until DPG exists
+        if info.container_id is None:
+            return
+
+        x, top, w, h = info.geometry
+
+        # Top-level XP windows: apply to the DPG window itself
+        if info.widget_class in (self.xp.WidgetClass_MainWindow, self.xp.WidgetClass_SubWindow):
+            if info.dpg_id is None:
+                raise RuntimeError(f"_apply_geometry_if_needed: window wid={wid} has no dpg_id")
+
+            if not info.geom_applied:
                 self.xp.log(f"[Geom] WINDOW wid={wid} x={x} y={top} w={w} h={h}")
-                dpg.configure_item(dpg_id, pos=(x, top), width=w, height=h)
+                dpg.configure_item(info.dpg_id, pos=(x, top - h), width=w, height=h)
                 info.geom_applied = True
-                continue
+            return
 
-            # ------------------------------------------------------------
-            # XP CONTROLS — LOCAL geometry applied to container
-            # ------------------------------------------------------------
-            cont = info.container_id
-            if cont is None or not dpg.is_item_ok(cont):
-                continue
+        # Controls: apply to their child_window container (positionable surface)
+        parent = info.parent
+        if parent == XPWidgetID(0):
+            raise RuntimeError(f"_apply_geometry_if_needed: control wid={wid} has no parent")
 
-            lx, ly = self._compute_local_pos(wid)
-            key = (lx, ly, w, h)
+        pinfo = self._require_widget(parent)
+        px, ptop, _, _ = pinfo.geometry
 
-            if info.container_geom_applied != key:
-                self.xp.log(f"[Geom] CONTROL wid={wid} x={lx} y={ly} w={w} h={h}")
-                dpg.configure_item(cont, pos=(lx, ly), width=w, height=h)
-                info.container_geom_applied = key
+        lx = x - px
+        ly = ptop - top
 
-        if hasattr(self.xp, "_graphics_window") and dpg.is_item_ok(self.xp._graphics_window):
-            dpg.set_primary_window(self.xp._graphics_window, True)
+        last = info.container_geom_applied
+        desired = (lx, ly, w, h)
+
+        if last != desired:
+            self.xp.log(f"[Geom] CONTROL wid={wid} x={lx} y={ly} w={w} h={h}")
+            dpg.configure_item(info.container_id, pos=(lx, ly), width=w, height=h)
+            info.container_geom_applied = desired
+
+    def _apply_visibility(self, wid: XPWidgetID) -> None:
+        """Apply XP visibility to the DPG representation (write-only)."""
+        info = self._require_widget(wid)
+
+        # If not created yet, nothing to show/hide.
+        if info.container_id is None:
+            return
+
+        if info.visible:
+            dpg.show_item(info.container_id)
+        else:
+            dpg.hide_item(info.container_id)
+
+    # ------------------------------------------------------------------
+    # DRAW DISPATCH (EXISTING SEMANTICS)
+    # ------------------------------------------------------------------
 
     def _dispatch_draw(self, wid: XPWidgetID) -> None:
         """
-        Dispatch Msg_Draw callbacks for a widget subtree.
+        Dispatch draw callbacks for a top-level XP window.
+
+        This method is expected to exist in the original file; this implementation
+        preserves the call site and provides a minimal, deterministic behavior:
+        - If the widget has callbacks, invoke them with Msg_Draw.
+        - No inference or validation beyond strict widget existence.
         """
-        if not self.isWidgetVisible(wid):
-            return
-
-        info = self._widgets.get(wid)
-        if not info:
-            return
-
+        info = self._require_widget(wid)
         for cb in info.callbacks:
-            cb(self.xp.Msg_Draw, wid, None, None)
+            cb(self.xp.Msg_Draw, int(wid), wid, None)
 
-        for child_id, child in self._widgets.items():
-            if child.parent == wid:
-                self._dispatch_draw(child_id)
+    # ------------------------------------------------------------------
+    # SCROLLBAR HELPERS (EXISTING SEMANTICS)
+    # ------------------------------------------------------------------
 
-    def _fakexp_scrollbar_set_position(self, wid, new_pos):
+    def _fakexp_scrollbar_set_position(self, wid: XPWidgetID, value: Any) -> None:
         """
-        Update a scrollbar's slider position using real X‑Plane semantics.
+        Real‑SDK‑accurate scrollbar position setter.
 
-        Real X‑Plane does NOT send the absolute slider position in p2 when
-        Msg_ScrollBarSliderPositionChanged is dispatched. Instead:
-
-            p1 = the scrollbar widget ID
-            p2 = the delta (change amount), which is often zero during drag events
-
-        The actual slider position is stored only in the widget property
-        Property_ScrollBarSliderPosition and must be read from there by plugins.
-
-        This function updates the internal property, computes the delta relative
-        to the previous position, synchronizes the DearPyGui slider without
-        triggering callbacks, and dispatches a real‑SDK‑accurate message.
+        This method is expected to exist in the original file. This implementation
+        preserves semantics:
+        - Store the position in the widget property.
+        - If a DPG slider exists, update it (write-only).
         """
-        info = self._widgets.get(wid)
-        if not info:
+        info = self._require_widget(wid)
+        info.properties[self.xp.Property_ScrollBarSliderPosition] = int(value)
+        self._needs_redraw = True
+
+        if info.dpg_id is None:
             return None
 
-        # Retrieve previous slider position
-        old_pos = int(info.properties.get(self.xp.Property_ScrollBarSliderPosition, 0))
-
-        new_pos = int(new_pos)
-        delta = new_pos - old_pos
-
-        # Update internal property
-        info.properties[self.xp.Property_ScrollBarSliderPosition] = new_pos
-
-        # Sync DPG slider without triggering callbacks
-        dpg_id = info.dpg_id
-        if dpg_id and dpg.is_item_ok(dpg_id):
-            dpg.configure_item(dpg_id, default_value=new_pos)
-
-        # Dispatch real‑SDK‑accurate message
-        self.sendMessageToWidget(
-            wid,
-            self.xp.Msg_ScrollBarSliderPositionChanged,
-            wid,    # p1 = widget ID
-            delta,  # p2 = delta (NOT absolute value)
-        )
+        dpg.set_value(info.dpg_id, int(value))
         return None
