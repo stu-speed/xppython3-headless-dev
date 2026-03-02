@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, Protocol, runtime_checkable, Sequence
 
-from simless.libs.fake_xp_dataref_types import FakeDataRef
+from simless.libs.fake_xp_types import FakeDataRef
 from simless.libs.runner import SimlessRunner
 from sshd_extensions.dataref_manager import DRefType
 from XPPython3.xp_typing import (

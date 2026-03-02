@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Pattern
 
-from simless.libs.fake_xp_dataref_types import DRefType, FakeDataRef
+from simless.libs.fake_xp_types import DRefType, FakeDataRef
 from simless.libs.fake_xp_interface import FakeXPInterface
 from XPPython3.xp_typing import XPWidgetID, XPWidgetMessage
 

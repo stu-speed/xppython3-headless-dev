@@ -24,7 +24,7 @@ from __future__ import annotations
 from threading import RLock
 from typing import Any, Callable, Dict, List, MutableSequence, Optional, Sequence, Tuple
 
-from simless.libs.fake_xp_dataref_types import (
+from simless.libs.fake_xp_types import (
     FakeDataRef, Type_Data, Type_Double, Type_Float, Type_FloatArray, Type_Int, Type_IntArray, Type_Unknown
 )
 from simless.libs.fake_xp_interface import FakeXPInterface

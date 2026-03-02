@@ -28,7 +28,7 @@ import threading
 from typing import Any, Callable, Dict, Optional
 
 from simless.libs.fake_xp_dataref_api import FakeXPDataRefAPI
-from simless.libs.fake_xp_dataref_types import FakeDataRef
+from simless.libs.fake_xp_types import FakeDataRef
 from sshd_extensions.dataref_manager import DRefType
 
 
