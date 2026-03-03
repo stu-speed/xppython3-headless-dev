@@ -402,6 +402,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         elif wclass == xp.WidgetClass_Button:
             def _on_button(sender, app_data, user_data):
                 widget_id = XPWidgetID(user_data)
+                # XP semantics: param1 identifies the pressed button.
                 self.sendMessageToWidget(
                     widget_id,
                     xp.Msg_PushButtonPressed,

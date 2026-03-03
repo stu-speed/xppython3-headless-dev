@@ -150,7 +150,7 @@ class FakeXPGraphics:
             raise RuntimeError("DearPyGui is not running (viewport closed or shutdown).")
 
     # ----------------------------------------------------------------------
-    # DPG INITIALIZATION
+    # DPG INITIALIZATION (PRODUCTION-PARITY)
     # ----------------------------------------------------------------------
     def init_graphics_root(self) -> None:
         """Initialize DearPyGui and create the viewport-attached graphics root.

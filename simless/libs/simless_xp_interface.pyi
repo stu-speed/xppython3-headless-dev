@@ -857,3 +857,56 @@ class SimlessXPInterface(Protocol):
     def getPrefsPath(self) -> str: ...
 
     def getDirectorySeparator(self) -> str: ...
+
+    # ------------------------------------------------------------------
+    # Simless-only helpers (FakeXP test/runner utilities)
+    # ------------------------------------------------------------------
+    def bind_dataref_manager(self, mgr: Any) -> None: ...
+
+    def update_dataref(
+        self,
+        ref: FakeDataRef,
+        dtype: Optional[DRefType] = None,
+        size: Optional[int] = None,
+        writable: Optional[bool] = None,
+        value: Optional[Any] = None,
+    ) -> FakeDataRef: ...
+
+    def add_handle(self, name: str, ref: FakeDataRef) -> None: ...
+
+    def get_handle(self, name: str) -> Optional[FakeDataRef]: ...
+
+    def del_handle(self, name) -> None: ...
+
+    def all_handle_paths(self) -> list[str]: ...
+
+    def all_handles(self) -> list[FakeDataRef]: ...
+
+    def conform_dummy_to_value(
+        self,
+        ref: FakeDataRef,
+        value,
+        offset: int = 0,
+        count: int | None = None,
+    ) -> None: ...
+
+    def promote_shape_from_value(
+        self,
+        ref: FakeDataRef,
+        value: Any,
+    ) -> None: ...
+
+    def promote_type(
+        self,
+        ref: FakeDataRef,
+        dtype: DRefType,
+        writable: bool,
+    ) -> None: ...
+
+    def attach_handle_callback(self, cb: Optional[Callable[[FakeDataRef], None]]) -> None: ...
+
+    def detach_handle_callback(self) -> None: ...
+
+    def draw_frame(self) -> None: ...
+
+    def quit_runner(self) -> None: ...
