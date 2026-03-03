@@ -17,11 +17,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, Protocol, runtime_checkable, Sequence
+from typing import Any, Callable, Protocol, runtime_checkable, Sequence, Tuple
 
 from simless.libs.fake_xp_types import FakeDataRef
 from simless.libs.runner import SimlessRunner
-from sshd_extensions.dataref_manager import DRefType
 from XPPython3.xp_typing import (
     XPDispatchMode,
     XPElementStyle,
@@ -76,6 +75,7 @@ DataRefInfo = XPLMDataRefInfo_t | FakeDataRef
 # Flight loop callback type (XP11 legacy signature)
 # ===========================================================================
 FlightLoopCallback = Callable[[float, float, int, Any], float]
+
 
 # ===========================================================================
 # SimlessXPInterface Protocol

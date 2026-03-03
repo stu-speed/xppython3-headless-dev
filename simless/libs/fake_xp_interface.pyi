@@ -82,8 +82,6 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
 
     def draw_frame(self) -> None: ...
 
-    def all_widget_ids(self) -> list[XPWidgetID]: ...
-
     def map_widgets_to_dpg(self) -> None: ...
 
     def render_widget_frame(self) -> None: ...
@@ -314,6 +312,51 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
         **kwargs: Any,
     ) -> list[int] | tuple[int, ...]: ...
 
+    def dpg_is_dearpygui_running(self) -> bool: ...
+
+    def dpg_add_drawlist(
+        self,
+        width: int,
+        height: int,
+        *,
+        label: str | None = None,
+        user_data: Any | None = None,
+        use_internal_label: bool = True,
+        tag: int | str = 0,
+        parent: int | str = 0,
+        before: int | str = 0,
+        callback: Callable[[int | str, Any, Any], Any] | None = None,
+        show: bool = True,
+        pos: tuple[int, ...] | None = None,
+        filter_key: str = "",
+        delay_search: bool = False,
+        tracked: bool = False,
+        track_offset: float = 0.5,
+        **kwargs: Any,
+    ) -> int | str: ...
+
+    def dpg_draw_text(
+        self,
+        pos: list[float] | tuple[float, ...],
+        text: str,
+        *,
+        label: str | None = None,
+        user_data: Any | None = None,
+        use_internal_label: bool = True,
+        tag: int | str = 0,
+        parent: int | str = 0,
+        before: int | str = 0,
+        show: bool = True,
+        color: list[int] | tuple[int, ...] = (255, 255, 255, 255),
+        size: float = 10.0,
+        **kwargs: Any
+    ) -> int | str: ...
+
+    def dpg_does_item_exist(self, item: int | str) -> bool: ...
+
+    def dpg_get_viewport_width(self) -> int: ...
+
+    def dpg_get_viewport_height(self) -> int: ...
 
     # ------------------------------------------------------------------
     # Simless lifecycle control (public simless API)
@@ -395,4 +438,3 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
     def attach_handle_callback(self, cb: Optional[Callable[[FakeDataRef], None]]) -> None: ...
 
     def detach_handle_callback(self) -> None: ...
-

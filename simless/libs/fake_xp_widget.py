@@ -52,17 +52,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from simless.libs.fake_xp_interface import FakeXPInterface
 from simless.libs.fake_xp_types import WidgetInfo
 from simless.libs.fake_xp_widget_api import FakeXPWidgetsAPI
 from XPPython3.xp_typing import XPWidgetID
 
 
 class FakeXPWidget(FakeXPWidgetsAPI):
-    xp: FakeXPInterface  # established in FakeXP
-
     public_api_names = [
         "createWidget",
         "killWidget",
@@ -87,7 +84,6 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         "getWidgetClass",
         "getWidgetUnderlyingWindow",
         "getWidgetExposedGeometry",
-        "all_widget_ids",
         "map_widgets_to_dpg",
         "render_widget_frame",
     ]
@@ -111,10 +107,6 @@ class FakeXPWidget(FakeXPWidgetsAPI):
     # -------------------------
     # helpers
     # -------------------------
-
-    def all_widget_ids(self) -> list[XPWidgetID]:
-        """Return a snapshot of all known widget IDs."""
-        return list(self._widgets.keys())
 
     def map_widgets_to_dpg(self) -> None:
         if self._widgets_initialized:
@@ -153,33 +145,35 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             ):
                 continue
 
-            wx, wy, ww, wh = info.geometry
+            left, top, right, bottom = info.geometry
 
-            max_right = wx + ww
-            max_bottom = wy - wh
+            max_right = right
+            min_bottom = bottom
 
             for child_id in iter_descendants(wid):
                 if not self.isWidgetVisible(child_id):
                     continue
 
                 child = self._widgets.get(child_id)
-                if not child:
+                if child is None:
                     continue
 
-                cx, cy, cw, ch = child.geometry
-                max_right = max(max_right, cx + cw)
-                max_bottom = min(max_bottom, cy - ch)
+                cleft, ctop, cright, cbottom = child.geometry
+                max_right = max(max_right, cright)
+                min_bottom = min(min_bottom, cbottom)
 
-            new_w = max_right - wx
-            new_h = wy - max_bottom
+            new_right = max_right
+            new_bottom = min_bottom
 
-            if new_w > ww or new_h > wh:
+            if new_right > right or new_bottom < bottom:
                 self.xp.log(
                     f"[Normalize] window wid={wid} "
-                    f"expanded from {ww}x{wh} to {new_w}x{new_h}"
+                    f"expanded from "
+                    f"{right - left}x{top - bottom} to "
+                    f"{new_right - left}x{top - new_bottom}"
                 )
 
-                info.geometry = (wx, wy, new_w, new_h)
+                info.geometry = (left, top, new_right, new_bottom)
                 info.geom_applied = False
                 self._needs_redraw = True
 
@@ -444,47 +438,59 @@ class FakeXPWidget(FakeXPWidgetsAPI):
     # ------------------------------------------------------------------
 
     def _apply_geometry_if_needed(self, wid: XPWidgetID) -> None:
-        """
-        Apply XP geometry to the DPG representation if invalidated.
-
-        This method preserves the invariant:
-        - Window geometry is applied exactly once per XP geometry change.
-        - Child container geometry is applied only when it changes.
-        """
         info = self._require_widget(wid)
 
         # Nothing to apply until DPG exists
         if info.container_id is None:
             return
 
-        x, top, w, h = info.geometry
+        left, top, right, bottom = info.geometry
+        width = right - left
+        height = top - bottom
 
-        # Top-level XP windows: apply to the DPG window itself
-        if info.widget_class in (self.xp.WidgetClass_MainWindow, self.xp.WidgetClass_SubWindow):
+        # Top-level XP windows
+        if info.widget_class in (
+                self.xp.WidgetClass_MainWindow,
+                self.xp.WidgetClass_SubWindow,
+        ):
             if info.dpg_id is None:
-                raise RuntimeError(f"_apply_geometry_if_needed: window wid={wid} has no dpg_id")
+                raise RuntimeError(
+                    f"_apply_geometry_if_needed: window wid={wid} has no dpg_id"
+                )
 
             if not info.geom_applied:
-                self.xp.dpg_configure_item(info.dpg_id, pos=(x, top - h), width=w, height=h)
+                self.xp.dpg_configure_item(
+                    info.dpg_id,
+                    pos=(left, top - height),
+                    width=width,
+                    height=height,
+                )
                 info.geom_applied = True
             return
 
-        # Controls: apply to their child_window container (positionable surface)
+        # Controls: apply to child_window container
         parent = info.parent
         if parent == XPWidgetID(0):
-            raise RuntimeError(f"_apply_geometry_if_needed: control wid={wid} has no parent")
+            raise RuntimeError(
+                f"_apply_geometry_if_needed: control wid={wid} has no parent"
+            )
 
         pinfo = self._require_widget(parent)
-        px, ptop, _, _ = pinfo.geometry
+        pleft, ptop, _, _ = pinfo.geometry
 
-        lx = x - px
+        lx = left - pleft
         ly = ptop - top
 
+        desired = (lx, ly, width, height)
         last = info.container_geom_applied
-        desired = (lx, ly, w, h)
 
         if last != desired:
-            self.xp.dpg_configure_item(info.container_id, pos=(lx, ly), width=w, height=h)
+            self.xp.dpg_configure_item(
+                info.container_id,
+                pos=(lx, ly),
+                width=width,
+                height=height,
+            )
             info.container_geom_applied = desired
 
     def _apply_visibility(self, wid: XPWidgetID) -> None:
@@ -516,26 +522,3 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         info = self._require_widget(wid)
         for cb in info.callbacks:
             cb(self.xp.Msg_Draw, wid, wid, None)
-
-    # ------------------------------------------------------------------
-    # SCROLLBAR HELPERS (EXISTING SEMANTICS)
-    # ------------------------------------------------------------------
-
-    def _fakexp_scrollbar_set_position(self, wid: XPWidgetID, value: Any) -> None:
-        """
-        Real‑SDK‑accurate scrollbar position setter.
-
-        This method is expected to exist in the original file. This implementation
-        preserves semantics:
-        - Store the position in the widget property.
-        - If a DPG slider exists, update it (write-only).
-        """
-        info = self._require_widget(wid)
-        info.properties[self.xp.Property_ScrollBarSliderPosition] = int(value)
-        self._needs_redraw = True
-
-        if info.dpg_id is None:
-            return None
-
-        self.xp.dpg_set_value(info.dpg_id, int(value))
-        return None

@@ -39,16 +39,7 @@ class FakeXPWidgetsAPI:
     _needs_redraw: bool
     _focused_widget: Optional[XPWidgetID]
     _next_id: int
-
-    # ------------------------------------------------------------------
-    # INTERNAL
-    # ------------------------------------------------------------------
-
-    def _require_widget(self, wid: XPWidgetID) -> WidgetInfo:
-        info = self._widgets.get(wid)
-        if info is None:
-            raise RuntimeError(f"XPWidget {wid} does not exist")
-        return info
+    _widgets_initialized: bool
 
     # ------------------------------------------------------------------
     # CREATE / DESTROY
@@ -74,7 +65,7 @@ class FakeXPWidgetsAPI:
             widget_class=widget_class,
             parent=XPWidgetID(parent),
             descriptor=descriptor,
-            geometry=(left, top, right - left, top - bottom),
+            geometry=(left, top, right, bottom),
             visible=bool(visible),
         )
 
@@ -84,12 +75,17 @@ class FakeXPWidgetsAPI:
         self._widgets[wid] = info
         self._z_order.append(wid)
         self._needs_redraw = True
+
         return wid
 
     def killWidget(self, wid: XPWidgetID) -> None:
         info = self._widgets.pop(wid, None)
         if info is None:
             return
+
+        for child in self._widgets.values():
+            if child.parent == wid:
+                child.parent = XPWidgetID(0)
 
         if info.dpg_id is not None:
             self.xp.dpg_delete_item(info.dpg_id)
@@ -105,23 +101,56 @@ class FakeXPWidgetsAPI:
 
         self._needs_redraw = True
 
+    def destroyWidget(self, wid: XPWidgetID, destroy_children: int = 1) -> None:
+        if destroy_children:
+            children = [
+                w for w, info in self._widgets.items()
+                if info.parent == wid
+            ]
+            for child in children:
+                self.destroyWidget(child, destroy_children=1)
+
+        self.killWidget(wid)
+
     # ------------------------------------------------------------------
     # GEOMETRY
     # ------------------------------------------------------------------
 
-    def setWidgetGeometry(self, wid: XPWidgetID, x: int, y: int, w: int, h: int) -> None:
+    def setWidgetGeometry(
+        self,
+        wid: XPWidgetID,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+    ) -> None:
+        """
+        Set widget geometry in global XP screen coordinates.
+
+        Geometry is stored as (left, top, right, bottom).
+        """
         info = self._require_widget(wid)
-        info.geometry = (x, y, w, h)
+
+        info.geometry = (left, top, right, bottom)
+
+        # Invalidate backend-applied geometry
         info.geom_applied = False
         info.container_geom_applied = None
+
         self._needs_redraw = True
 
     def getWidgetGeometry(self, wid: XPWidgetID) -> Tuple[int, int, int, int]:
+        """
+        Return widget geometry as (left, top, right, bottom),
+        matching XPPython3 behavior.
+        """
         info = self._require_widget(wid)
-        x, y, w, h = info.geometry
-        return x, y, x + w, y - h
+        return info.geometry
 
     def getWidgetExposedGeometry(self, wid: XPWidgetID) -> Tuple[int, int, int, int]:
+        """
+        XPWidgets exposes the same geometry as getWidgetGeometry().
+        """
         return self.getWidgetGeometry(wid)
 
     # ------------------------------------------------------------------
@@ -170,7 +199,9 @@ class FakeXPWidgetsAPI:
     # ------------------------------------------------------------------
 
     def addWidgetCallback(self, wid: XPWidgetID, callback: XPWidgetCallback) -> None:
-        self._require_widget(wid).callbacks.append(callback)
+        info = self._require_widget(wid)
+        if callback not in info.callbacks:
+            info.callbacks.append(callback)
 
     def sendMessageToWidget(
         self,
@@ -179,16 +210,27 @@ class FakeXPWidgetsAPI:
         param1: Any,
         param2: Any,
     ) -> None:
+        """
+        Send a message to an XPWidget and bubble it up the parent chain.
+
+        XPWidgets message delivery is hierarchical: the message is delivered
+        to the target widget, then to its parent, and so on until the root.
+
+        The `widget` argument passed to callbacks is always the originating
+        widget ID, matching production X-Plane behavior.
+        """
+        origin = wid
         current = wid
         visited: set[XPWidgetID] = set()
 
         while current and current not in visited:
             visited.add(current)
-            info = self._widgets.get(current)
-            if not info:
-                break
+
+            info = self._require_widget(current)
+
             for cb in info.callbacks:
-                cb(msg, int(current), param1, param2)
+                cb(msg, origin, param1, param2)
+
             current = info.parent
 
         self._needs_redraw = True
@@ -202,12 +244,14 @@ class FakeXPWidgetsAPI:
 
     def getWidgetForLocation(self, x: int, y: int) -> Optional[XPWidgetID]:
         for wid in reversed(self._z_order):
-            info = self._widgets.get(wid)
-            if not info or not info.visible:
+            info = self._require_widget(wid)
+            if not info or not self._is_widget_effectively_visible(wid):
                 continue
-            gx, gy, gw, gh = info.geometry
-            if gx <= x <= gx + gw and gy <= y <= gy + gh:
+
+            left, top, right, bottom = info.geometry
+            if left <= x < right and bottom <= y < top:
                 return wid
+
         return None
 
     # ------------------------------------------------------------------
@@ -234,6 +278,9 @@ class FakeXPWidgetsAPI:
     # ------------------------------------------------------------------
     # KEYBOARD FOCUS
     # ------------------------------------------------------------------
+
+    def getKeyboardFocus(self) -> XPWidgetID | None:
+        return self._focused_widget
 
     def setKeyboardFocus(self, wid: XPWidgetID) -> None:
         self._require_widget(wid)
@@ -274,3 +321,41 @@ class FakeXPWidgetsAPI:
     def getWidgetUnderlyingWindow(self, wid: XPWidgetID) -> int:
         self._require_widget(wid)
         return 0
+
+    # ------------------------------------------------------------------
+    # INTERNAL
+    # ------------------------------------------------------------------
+
+    def _require_widget(self, wid: XPWidgetID) -> WidgetInfo:
+        info = self._widgets.get(wid)
+        if info is None:
+            raise RuntimeError(f"XPWidget {wid} does not exist")
+        return info
+
+    def _fakexp_scrollbar_set_position(self, wid: XPWidgetID, value: Any) -> None:
+        """
+        Real‑SDK‑accurate scrollbar position setter.
+
+        This method is expected to exist in the original file. This implementation
+        preserves semantics:
+        - Store the position in the widget property.
+        - If a DPG slider exists, update it (write-only).
+        """
+        info = self._require_widget(wid)
+        info.properties[self.xp.Property_ScrollBarSliderPosition] = int(value)
+        self._needs_redraw = True
+
+        if info.dpg_id is None:
+            return None
+
+        self.xp.dpg_set_value(info.dpg_id, int(value))
+        return None
+
+    def _is_widget_effectively_visible(self, wid: XPWidgetID) -> bool:
+        current = wid
+        while current:
+            info = self._require_widget(current)
+            if info is None or not info.visible:
+                return False
+            current = info.parent
+        return True

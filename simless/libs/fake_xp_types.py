@@ -1,10 +1,16 @@
+# simless/libs/fake_xp_types.py
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sshd_extensions.dataref_manager import DRefType
-from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetPropertyID
+from XPPython3.xp_typing import (
+    XPLMCursorStatus, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer,
+    XPWidgetClass, XPWidgetID, XPWidgetPropertyID
+)
 
 # XPLM data type bitmask constants
 Type_Unknown = 0
@@ -76,58 +82,175 @@ class FakeDataRef:
         return not self.type_known or not self.shape_known
 
 
-@dataclass
+@dataclass(slots=True)
 class WidgetInfo:
-    """Authoritative record for a single XPWidget.
+    """
+    Authoritative record for a single XPWidget.
 
-    This dataclass represents the complete, XP‑semantic and XP-geometry state of a widget.
-    It is the single source of truth for widget identity, hierarchy, geometry,
-    visibility, properties, and callbacks.
+    Geometry is stored in global XP screen coordinates as:
+        (left, top, right, bottom)
 
-    DearPyGui‑specific fields are included only as opaque handles for a
-    rendering backend. They are never interpreted or mutated by the XP
-    widget API layer.
-
-    Attributes:
-        wid: Unique XPWidget identifier.
-        widget_class: XPWidgetClass enum value describing the widget type.
-        parent: Parent widget ID, or XPWidgetID(0) if this widget is a root.
-        descriptor: Human‑readable descriptor string (label, caption, etc.).
-        geometry: Global XP screen‑space geometry as (x, top, width, height).
-        visible: Whether the widget is currently visible.
-        properties: Mapping of XPWidgetPropertyID to property values.
-        callbacks: List of registered XPWidget callbacks.
-
-        dpg_id: Internal DearPyGui item ID for this widget, if any.
-        container_id: DearPyGui child_window container ID for controls;
-            for XP windows, this is equal to dpg_id.
-
-        geom_applied: Whether the current geometry has been applied by the
-            rendering backend.
-        container_geom_applied: Last applied container geometry as
-            (local_x, local_y, width, height), or None if not applied.
-
-        edit_buffer: Temporary text buffer for editable widgets such as
-            text fields.
+    Width and height are always derived; they are never stored.
     """
 
-    # XP authoritative state
+    # ------------------------------------------------------------------
+    # XP authoritative identity and hierarchy
+    # ------------------------------------------------------------------
     wid: XPWidgetID
     widget_class: XPWidgetClass
-    parent: XPWidgetID
+    parent: XPWidgetID  # XPWidgetID(0) for root widgets
     descriptor: str
-    geometry: Tuple[int, int, int, int]
+
+    # ------------------------------------------------------------------
+    # XP authoritative geometry and visibility
+    # ------------------------------------------------------------------
+    geometry: Tuple[int, int, int, int]  # (left, top, right, bottom)
     visible: bool = True
+
+    # ------------------------------------------------------------------
+    # XP widget properties and callbacks
+    # ------------------------------------------------------------------
     properties: Dict[XPWidgetPropertyID, Any] = field(default_factory=dict)
     callbacks: List[XPWidgetCallback] = field(default_factory=list)
 
-    # DearPyGui representation (internal only)
+    # ------------------------------------------------------------------
+    # DearPyGui backend handles (opaque to XP layer)
+    # ------------------------------------------------------------------
     dpg_id: Optional[int] = None
     container_id: Optional[int] = None
 
-    # Geometry lifecycle
+    # ------------------------------------------------------------------
+    # Geometry lifecycle tracking (backend-facing only)
+    # ------------------------------------------------------------------
     geom_applied: bool = False
     container_geom_applied: Optional[Tuple[int, int, int, int]] = None
 
+    # ------------------------------------------------------------------
     # Interaction state
+    # ------------------------------------------------------------------
     edit_buffer: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # Derived geometry helpers (XP semantics)
+    # ------------------------------------------------------------------
+    @property
+    def left(self) -> int:
+        return self.geometry[0]
+
+    @property
+    def top(self) -> int:
+        return self.geometry[1]
+
+    @property
+    def right(self) -> int:
+        return self.geometry[2]
+
+    @property
+    def bottom(self) -> int:
+        return self.geometry[3]
+
+    @property
+    def width(self) -> int:
+        return max(0, self.right - self.left)
+
+    @property
+    def height(self) -> int:
+        return max(0, self.top - self.bottom)
+
+
+@dataclass(slots=True)
+class WindowExInfo:
+    """
+    Graphics-owned representation of an XPLM WindowEx window.
+
+    This is NOT a widget and does not participate in XPWidgets.
+    It exists solely to define a drawable region and route callbacks.
+    """
+
+    # ------------------------------------------------------------------
+    # XP-visible identity and geometry
+    # ------------------------------------------------------------------
+    wid: XPLMWindowID
+    geometry: Tuple[int, int, int, int]  # (left, top, right, bottom)
+    visible: bool
+    decoration: XPLMWindowDecoration
+    layer: XPLMWindowLayer
+
+    # ------------------------------------------------------------------
+    # XP callback hooks (verbatim, no wrapping)
+    # ------------------------------------------------------------------
+    draw_cb: Optional[Callable[[XPLMWindowID, Any], None]]
+    click_cb: Optional[
+        Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+    ]
+    right_click_cb: Optional[
+        Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+    ]
+    key_cb: Optional[
+        Callable[[XPLMWindowID, int, int, int, Any, int], int]
+    ]
+    cursor_cb: Optional[
+        Callable[[XPLMWindowID, int, int, Any], XPLMCursorStatus]
+    ]
+    wheel_cb: Optional[
+        Callable[[XPLMWindowID, int, int, int, int, Any], int]
+    ]
+    refcon: Any
+
+    # ------------------------------------------------------------------
+    # Graphics backend ownership (DearPyGui)
+    # ------------------------------------------------------------------
+    dpg_window_id: int  # DPG window acting as a canvas
+    drawlist_id: int  # Window-local drawlist
+
+
+class EventKind(StrEnum):
+    MOUSE_BUTTON = "mouse_button"
+    MOUSE_WHEEL = "mouse_wheel"
+    CURSOR = "cursor"
+    KEY = "key"
+
+
+@dataclass(slots=True)
+class EventInfo:
+    """Normalized backend input event.
+
+    Represents *what happened* in backend space.
+    XP semantics are applied later by FakeXPInput.
+    """
+
+    # ------------------------------------------------------------------
+    # Event identity
+    # ------------------------------------------------------------------
+    kind: EventKind
+
+    # ------------------------------------------------------------------
+    # Pointer location (screen space)
+    # ------------------------------------------------------------------
+    x: Optional[int] = None
+    y: Optional[int] = None
+
+    # ------------------------------------------------------------------
+    # Mouse button
+    # ------------------------------------------------------------------
+    state: Optional[str] = None  # "down" | "up"
+    button: Optional[int] = None
+    right: bool = False
+
+    # ------------------------------------------------------------------
+    # Mouse wheel
+    # ------------------------------------------------------------------
+    wheel: Optional[int] = None
+    clicks: Optional[int] = None
+
+    # ------------------------------------------------------------------
+    # Keyboard
+    # ------------------------------------------------------------------
+    key: Optional[int] = None
+    flags: Optional[int] = None
+    vKey: Optional[int] = None
+
+    # ------------------------------------------------------------------
+    # Backend passthrough (unused by XP semantics)
+    # ------------------------------------------------------------------
+    user_data: Any = None
