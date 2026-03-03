@@ -141,9 +141,9 @@ No plugin code changes are required.
 A simple runner script is all that’s needed to execute plugins outside X‑Plane.
 ```python
 import sys
+from pathlib import Path
 import XPPython3
 from simless.libs.fake_xp import FakeXP
-from pathlib import Path
 
 # Emulate plugin root dir
 ROOT = Path(__file__).resolve().parent.parent
@@ -156,9 +156,10 @@ def run_simless_oat_gui() -> None:
 
     plugins = [
         "PI_sshd_OAT",
-        "PI_sshd_dev_oat_gui",
+        "PI_sshd_oat_gui",
     ]
-    xp.simless_runner.run_plugin_lifecycle(plugins)
+
+    xp.simless_runner.run_plugin_lifecycle(plugins, enable_dataref_viewer=True)
 
 if __name__ == "__main__":
     run_simless_oat_gui()

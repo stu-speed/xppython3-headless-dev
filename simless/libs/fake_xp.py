@@ -91,6 +91,8 @@ class FakeXP(
     _sim_time: float
     _keyboard_focus: XPWidgetID | None
 
+    _graphics_window: int | None
+
     xp: FakeXPInterface
     simless_runner: SimlessRunner
 

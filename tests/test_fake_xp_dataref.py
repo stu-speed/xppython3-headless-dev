@@ -5,13 +5,13 @@ from typing import List
 
 import XPPython3
 from simless.libs.fake_xp import FakeXP
-from simless.libs.fake_xp_dataref_types import (
+from simless.libs.fake_xp_types import (
     Type_Unknown,
     Type_Float,
     Type_Int,
     Type_Data,
 )
-from simless.libs.fake_xp_dataref_types import FakeDataRef
+from simless.libs.fake_xp_types import FakeDataRef
 from sshd_extensions.dataref_manager import DRefType
 
 
