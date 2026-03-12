@@ -25,7 +25,7 @@ def run_gui_sample() -> None:
         "PI_sshd_gui_sample",
     ]
 
-    xp.simless_runner.run_plugin_lifecycle(plugins, enable_dataref_viewer=True)
+    xp.simless_runner.run_plugin_lifecycle(plugins)
 
 
 if __name__ == "__main__":

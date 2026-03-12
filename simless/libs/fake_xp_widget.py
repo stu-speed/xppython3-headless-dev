@@ -54,7 +54,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from simless.libs.fake_xp_types import WidgetInfo
+from simless.libs.fake_xp_types import DPGCommand, DPGOp, WidgetInfo
 from simless.libs.fake_xp_widget_api import FakeXPWidgetsAPI
 from XPPython3.xp_typing import XPWidgetID
 
@@ -264,19 +264,25 @@ class FakeXPWidget(FakeXPWidgetsAPI):
     def _ensure_dpg_item_for_widget(self, wid: XPWidgetID) -> None:
         """
         Ensure that a DearPyGui representation exists for the given XPWidget.
-        (Logging-enabled diagnostic version)
+
+        This performs immediate structural realization using the
+        xp.execute_dpg_command() helper. No commands are enqueued.
         """
         info = self._widgets.get(wid)
         if not info:
             raise RuntimeError(f"_ensure_dpg_item_for_widget: unknown wid={wid}")
 
-        # Already created?
+        # Already realized?
         if info.dpg_id is not None:
             return
 
         xp = self.xp
         wclass = info.widget_class
-        desc = info.descriptor
+        desc = info.descriptor or ""
+
+        # Deterministic backend IDs
+        dpg_id = f"xp_widget_{wid}"
+        container_id = f"xp_widget_container_{wid}"
 
         is_window = wclass in (
             xp.WidgetClass_MainWindow,
@@ -284,17 +290,23 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         )
 
         # ------------------------------------------------------------
-        # XP WINDOWS -> real top-level DPG windows (siblings)
+        # XP WINDOWS → top-level DPG windows
         # ------------------------------------------------------------
         if is_window:
-            dpg_id = self.xp.dpg_add_window(
-                label=desc or "Window",
-                width=200,
-                height=100,
-                no_scrollbar=True,
-                no_collapse=True,
-                no_resize=False,
-                no_move=False,
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.ADD_WINDOW,
+                    kwargs=dict(
+                        tag=dpg_id,
+                        label=desc or "Window",
+                        width=200,
+                        height=100,
+                        no_scrollbar=True,
+                        no_collapse=True,
+                        no_resize=False,
+                        no_move=False,
+                    ),
+                )
             )
 
             info.dpg_id = dpg_id
@@ -304,42 +316,53 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             return
 
         # ------------------------------------------------------------
-        # XP CONTROLS -> child_window container inside XP parent window
+        # XP CONTROLS → child_window inside parent window
         # ------------------------------------------------------------
         parent_wid = info.parent
-
         if parent_wid == XPWidgetID(0):
             raise RuntimeError(f"[Create] wid={wid} ERROR: control has no parent")
 
-        # Ensure parent window exists first
+        # Ensure parent exists first
         self._ensure_dpg_item_for_widget(parent_wid)
 
         parent_info = self._widgets.get(parent_wid)
         parent_container = parent_info.container_id if parent_info else None
-
         if parent_container is None:
             raise RuntimeError(f"[Create] wid={wid} ERROR: parent container invalid")
 
-        # Create / reuse the positionable container for this control
-        cont = info.container_id
-        if cont is None:
-            cont = self.xp.dpg_add_child_window(
-                parent=parent_container,
-                width=200,
-                height=100,
-                no_scrollbar=True,
-                border=False,
-                autosize_x=False,
-                autosize_y=False,
+        # Create container if needed
+        if info.container_id is None:
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.ADD_CHILD_WINDOW,
+                    kwargs=dict(
+                        tag=container_id,
+                        parent=parent_container,
+                        width=200,
+                        height=100,
+                        no_scrollbar=True,
+                        border=False,
+                        autosize_x=False,
+                        autosize_y=False,
+                    ),
+                )
             )
-            info.container_id = cont
+            info.container_id = container_id
             info.container_geom_applied = None
 
-        # Create the actual control inside the container
+        # ------------------------------------------------------------
+        # Create actual control
+        # ------------------------------------------------------------
         if wclass == xp.WidgetClass_Caption:
-            dpg_id = self.xp.dpg_add_text(
-                default_value=(desc or "").strip(),
-                parent=cont,
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.ADD_TEXT,
+                    kwargs=dict(
+                        tag=dpg_id,
+                        default_value=desc.strip(),
+                        parent=info.container_id,
+                    ),
+                )
             )
 
         elif wclass == xp.WidgetClass_TextField:
@@ -355,18 +378,27 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     app_data,
                 )
 
-            dpg_id = self.xp.dpg_add_input_text(
-                default_value=(desc or "").strip(),
-                parent=cont,
-                callback=_on_text,
-                user_data=wid,
-                no_spaces=True,
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.ADD_INPUT_TEXT,
+                    kwargs=dict(
+                        tag=dpg_id,
+                        default_value=desc.strip(),
+                        parent=info.container_id,
+                        callback=_on_text,
+                        user_data=wid,
+                        no_spaces=True,
+                    ),
+                )
             )
 
         elif wclass == xp.WidgetClass_ScrollBar:
             min_v = int(self.getWidgetProperty(wid, xp.Property_ScrollBarMin) or 0)
             max_v = int(self.getWidgetProperty(wid, xp.Property_ScrollBarMax) or 100)
-            cur_v = int(self.getWidgetProperty(wid, xp.Property_ScrollBarSliderPosition) or min_v)
+            cur_v = int(
+                self.getWidgetProperty(wid, xp.Property_ScrollBarSliderPosition)
+                or min_v
+            )
 
             def _on_scroll(sender, app_data, user_data):
                 widget_id = XPWidgetID(user_data)
@@ -383,14 +415,20 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     new_pos,
                 )
 
-            dpg_id = self.xp.dpg_add_slider_int(
-                label=desc or "Slider",
-                parent=cont,
-                min_value=min_v,
-                max_value=max_v,
-                default_value=cur_v,
-                callback=_on_scroll,
-                user_data=wid,
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.ADD_SLIDER_INT,
+                    kwargs=dict(
+                        tag=dpg_id,
+                        label=desc or "Slider",
+                        parent=info.container_id,
+                        min_value=min_v,
+                        max_value=max_v,
+                        default_value=cur_v,
+                        callback=_on_scroll,
+                        user_data=wid,
+                    ),
+                )
             )
 
         elif wclass == xp.WidgetClass_Button:
@@ -403,17 +441,29 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     None,
                 )
 
-            dpg_id = self.xp.dpg_add_button(
-                label=desc or "",
-                parent=cont,
-                callback=_on_button,
-                user_data=wid,
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.ADD_BUTTON,
+                    kwargs=dict(
+                        tag=dpg_id,
+                        label=desc,
+                        parent=info.container_id,
+                        callback=_on_button,
+                        user_data=wid,
+                    ),
+                )
             )
 
         else:
-            dpg_id = self.xp.dpg_add_text(
-                desc or f"Widget {wid}",
-                parent=cont,
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.ADD_TEXT,
+                    kwargs=dict(
+                        tag=dpg_id,
+                        default_value=desc or f"Widget {wid}",
+                        parent=info.container_id,
+                    ),
+                )
             )
 
         info.dpg_id = dpg_id
@@ -438,9 +488,19 @@ class FakeXPWidget(FakeXPWidgetsAPI):
     # ------------------------------------------------------------------
 
     def _apply_geometry_if_needed(self, wid: XPWidgetID) -> None:
+        """Apply XP widget geometry to the DearPyGui backend if it has changed.
+
+        This method performs *immediate* geometry mutation using the
+        _execute_dpg_command() helper. Geometry application is write-only
+        and idempotent: repeated calls with unchanged geometry are no-ops.
+
+        Preconditions:
+          - Widget must already be structurally realized (container_id exists)
+          - Layout must be ready (geometry is meaningful)
+        """
         info = self._require_widget(wid)
 
-        # Nothing to apply until DPG exists
+        # Nothing to apply until DPG objects exist
         if info.container_id is None:
             return
 
@@ -448,7 +508,9 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         width = right - left
         height = top - bottom
 
-        # Top-level XP windows
+        # --------------------------------------------------
+        # Top-level XP windows → configure the DPG window
+        # --------------------------------------------------
         if info.widget_class in (
                 self.xp.WidgetClass_MainWindow,
                 self.xp.WidgetClass_SubWindow,
@@ -459,16 +521,23 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                 )
 
             if not info.geom_applied:
-                self.xp.dpg_configure_item(
-                    info.dpg_id,
-                    pos=(left, top - height),
-                    width=width,
-                    height=height,
+                self.xp.execute_dpg_command(
+                    DPGCommand(
+                        op=DPGOp.CONFIGURE_ITEM,
+                        args=(info.dpg_id,),
+                        kwargs=dict(
+                            pos=(left, top - height),
+                            width=width,
+                            height=height,
+                        ),
+                    )
                 )
                 info.geom_applied = True
             return
 
-        # Controls: apply to child_window container
+        # --------------------------------------------------
+        # Controls → configure their child_window container
+        # --------------------------------------------------
         parent = info.parent
         if parent == XPWidgetID(0):
             raise RuntimeError(
@@ -485,26 +554,45 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         last = info.container_geom_applied
 
         if last != desired:
-            self.xp.dpg_configure_item(
-                info.container_id,
-                pos=(lx, ly),
-                width=width,
-                height=height,
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.CONFIGURE_ITEM,
+                    args=(info.container_id,),
+                    kwargs=dict(
+                        pos=(lx, ly),
+                        width=width,
+                        height=height,
+                    ),
+                )
             )
             info.container_geom_applied = desired
 
     def _apply_visibility(self, wid: XPWidgetID) -> None:
-        """Apply XP visibility to the DPG representation (write-only)."""
+        """Apply XP visibility state to the DearPyGui backend.
+
+        Visibility is write-only and does not require layout readiness.
+        If the widget has not yet been realized, this is a no-op.
+        """
         info = self._require_widget(wid)
 
-        # If not created yet, nothing to show/hide.
+        # If not created yet, nothing to show/hide
         if info.container_id is None:
             return
 
         if info.visible:
-            self.xp.dpg_show_item(info.container_id)
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.SHOW_ITEM,
+                    args=(info.container_id,),
+                )
+            )
         else:
-            self.xp.dpg_hide_item(info.container_id)
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.HIDE_ITEM,
+                    args=(info.container_id,),
+                )
+            )
 
     # ------------------------------------------------------------------
     # DRAW DISPATCH (EXISTING SEMANTICS)

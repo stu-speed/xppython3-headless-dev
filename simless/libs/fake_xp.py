@@ -57,7 +57,6 @@ from simless.libs.fake_xp_utilities import FakeXPUtilities
 from simless.libs.fake_xp_widget import FakeXPWidget
 from simless.libs.runner import SimlessRunner
 from sshd_extensions.bridge_protocol import BRIDGE_HOST, BRIDGE_PORT
-from XPPython3.xp_typing import XPWidgetID
 
 FlightLoopCallback = Callable[[float, float, int, Any], float]
 
@@ -87,9 +86,6 @@ class FakeXP(
     bridge_port: int
 
     _sim_time: float
-    _keyboard_focus: XPWidgetID | None
-
-    _graphics_window: int | None
 
     xp: FakeXPInterface
     simless_runner: SimlessRunner
@@ -137,7 +133,6 @@ class FakeXP(
         self.debug = debug
         self.enable_gui = enable_gui
         self._sim_time = 0.0
-        self._keyboard_focus = None
 
         # ------------------------------------------------------------------
         # Initialize subsystems
@@ -147,6 +142,7 @@ class FakeXP(
         self._init_graphics()
         self._init_flightloop()
         self._init_utilities()
+        self._init_input()
 
         # ------------------------------------------------------------------
         # Bind xp.* namespace

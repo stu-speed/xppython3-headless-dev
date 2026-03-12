@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from simless.libs.fake_xp_interface import FakeXPInterface
-from simless.libs.fake_xp_types import WidgetInfo
+from simless.libs.fake_xp_types import DPGCommand, DPGOp, WidgetInfo
 from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage, XPWidgetPropertyID
 
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
@@ -83,22 +83,32 @@ class FakeXPWidgetsAPI:
         if info is None:
             return
 
+        # Reparent children to root (XP semantics)
         for child in self._widgets.values():
             if child.parent == wid:
                 child.parent = XPWidgetID(0)
 
+        # Destroy backend representation if it exists
         if info.dpg_id is not None:
-            self.xp.dpg_delete_item(info.dpg_id)
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.DELETE_ITEM,
+                    args=(info.dpg_id,),
+                )
+            )
 
         info.dpg_id = None
         info.container_id = None
 
+        # Remove from z-order tracking
         if wid in self._z_order:
             self._z_order.remove(wid)
 
+        # Clear focus if needed
         if self._focused_widget == wid:
             self._focused_widget = None
 
+        # Mark graphics as needing redraw
         self._needs_redraw = True
 
     def destroyWidget(self, wid: XPWidgetID, destroy_children: int = 1) -> None:
@@ -160,15 +170,29 @@ class FakeXPWidgetsAPI:
     def showWidget(self, wid: XPWidgetID) -> None:
         info = self._require_widget(wid)
         info.visible = True
+
         if info.container_id is not None:
-            self.xp.dpg_show_item(info.container_id)
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.SHOW_ITEM,
+                    args=(info.container_id,),
+                )
+            )
+
         self._needs_redraw = True
 
     def hideWidget(self, wid: XPWidgetID) -> None:
         info = self._require_widget(wid)
         info.visible = False
+
         if info.container_id is not None:
-            self.xp.dpg_hide_item(info.container_id)
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.HIDE_ITEM,
+                    args=(info.container_id,),
+                )
+            )
+
         self._needs_redraw = True
 
     def isWidgetVisible(self, wid: XPWidgetID) -> bool:
@@ -185,9 +209,23 @@ class FakeXPWidgetsAPI:
 
         if info.widget_class == self.xp.WidgetClass_ScrollBar and info.dpg_id is not None:
             if prop == self.xp.Property_ScrollBarMin:
-                self.xp.dpg_configure_item(info.dpg_id, min_value=int(value))
+                self.xp.execute_dpg_command(
+                    DPGCommand(
+                        op=DPGOp.CONFIGURE_ITEM,
+                        args=(info.dpg_id,),
+                        kwargs=dict(min_value=int(value)),
+                    )
+                )
+
             elif prop == self.xp.Property_ScrollBarMax:
-                self.xp.dpg_configure_item(info.dpg_id, max_value=int(value))
+                self.xp.execute_dpg_command(
+                    DPGCommand(
+                        op=DPGOp.CONFIGURE_ITEM,
+                        args=(info.dpg_id,),
+                        kwargs=dict(max_value=int(value)),
+                    )
+                )
+
             elif prop == self.xp.Property_ScrollBarSliderPosition:
                 self._fakexp_scrollbar_set_position(wid, value)
 
@@ -309,11 +347,31 @@ class FakeXPWidgetsAPI:
             return
 
         if info.widget_class == self.xp.WidgetClass_TextField:
-            self.xp.dpg_set_value(info.dpg_id, text.strip())
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.SET_VALUE,
+                    args=(info.dpg_id,),
+                    kwargs=dict(value=text.strip()),
+                )
+            )
+
         elif info.widget_class == self.xp.WidgetClass_Caption:
-            self.xp.dpg_set_value(info.dpg_id, text)
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.SET_VALUE,
+                    args=(info.dpg_id,),
+                    kwargs=dict(value=text),
+                )
+            )
+
         elif info.widget_class == self.xp.WidgetClass_Button:
-            self.xp.dpg_configure_item(info.dpg_id, label=text)
+            self.xp.execute_dpg_command(
+                DPGCommand(
+                    op=DPGOp.CONFIGURE_ITEM,
+                    args=(info.dpg_id,),
+                    kwargs=dict(label=text),
+                )
+            )
 
     def getWidgetClass(self, wid: XPWidgetID) -> XPWidgetClass:
         return self._require_widget(wid).widget_class
@@ -333,14 +391,6 @@ class FakeXPWidgetsAPI:
         return info
 
     def _fakexp_scrollbar_set_position(self, wid: XPWidgetID, value: Any) -> None:
-        """
-        Real‑SDK‑accurate scrollbar position setter.
-
-        This method is expected to exist in the original file. This implementation
-        preserves semantics:
-        - Store the position in the widget property.
-        - If a DPG slider exists, update it (write-only).
-        """
         info = self._require_widget(wid)
         info.properties[self.xp.Property_ScrollBarSliderPosition] = int(value)
         self._needs_redraw = True
@@ -348,7 +398,13 @@ class FakeXPWidgetsAPI:
         if info.dpg_id is None:
             return None
 
-        self.xp.dpg_set_value(info.dpg_id, int(value))
+        self.xp.execute_dpg_command(
+            DPGCommand(
+                op=DPGOp.SET_VALUE,
+                args=(info.dpg_id,),
+                kwargs=dict(value=int(value)),
+            )
+        )
         return None
 
     def _is_widget_effectively_visible(self, wid: XPWidgetID) -> bool:

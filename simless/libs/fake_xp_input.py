@@ -61,6 +61,7 @@ class FakeXPInput:
     # ------------------------------------------------------------------
     _keyboard_focus_window: Optional[XPLMWindowID]
     _input_events: List[EventInfo]
+    _mouse_capture_window: Optional[XPLMWindowID]
 
     public_api_names = [
         "queue_input_event",
@@ -76,6 +77,7 @@ class FakeXPInput:
         """Initialize internal input state. Called by FakeXP during construction."""
         self._keyboard_focus_window = None
         self._input_events = []
+        self._mouse_capture_window = None
 
     # ------------------------------------------------------------------
     # INPUT QUEUE (engine-owned)
@@ -114,9 +116,9 @@ class FakeXPInput:
 
     def _pick_window_ex_at(self, x: int, y: int) -> Optional[WindowExInfo]:
         for info in self._iter_window_ex_top_to_bottom():
-            if not info.visible:
-                continue
-            if self._point_in_rect(x, y, info.geometry):
+            l, t, r, b = info.geometry
+            inside = (l <= x < r) and (b <= y < t)
+            if info.visible and inside:
                 return info
         return None
 
@@ -194,51 +196,45 @@ class FakeXPInput:
     # SINGLE RUNNER ENTRY POINT (typed)
     # ------------------------------------------------------------------
     def process_event_info(self, event: EventInfo) -> Any:
-        """Process one normalized EventInfo object."""
         self._require_context()
         if not self._layout_ready:
             raise RuntimeError("Input processing requires layout_ready")
 
-        kind = event.kind
+        if event.kind is EventKind.MOUSE_BUTTON:
+            if event.state is None:
+                raise RuntimeError("MOUSE_BUTTON requires state")
 
-        if kind is EventKind.MOUSE_BUTTON:
-            if event.x is None or event.y is None or event.state is None:
-                raise RuntimeError("MOUSE_BUTTON requires x, y, state")
+            x, y = event.require_xp_pos()
 
             mouse_status = (
                 self.xp.MouseDown if event.state == "down" else self.xp.MouseUp
             )
 
             return self._handle_mouse_button(
-                x=event.x,
-                y=event.y,
+                x=x,
+                y=y,
                 mouseStatus=mouse_status,
                 right=event.right,
             )
 
-        if kind is EventKind.MOUSE_WHEEL:
-            if (
-                event.x is None
-                or event.y is None
-                or event.wheel is None
-                or event.clicks is None
-            ):
-                raise RuntimeError("MOUSE_WHEEL requires x, y, wheel, clicks")
+        if event.kind is EventKind.MOUSE_WHEEL:
+            if event.wheel is None or event.clicks is None:
+                raise RuntimeError("MOUSE_WHEEL requires wheel, clicks")
+
+            x, y = event.require_xp_pos()
 
             return self._handle_mouse_wheel(
-                x=event.x,
-                y=event.y,
+                x=x,
+                y=y,
                 wheel=event.wheel,
                 clicks=event.clicks,
             )
 
-        if kind is EventKind.CURSOR:
-            if event.x is None or event.y is None:
-                raise RuntimeError("CURSOR requires x, y")
+        if event.kind is EventKind.CURSOR:
+            x, y = event.require_xp_pos()
+            return self._handle_cursor_query(x, y)
 
-            return self._handle_cursor_query(event.x, event.y)
-
-        if kind is EventKind.KEY:
+        if event.kind is EventKind.KEY:
             if event.key is None or event.flags is None or event.vKey is None:
                 raise RuntimeError("KEY requires key, flags, vKey")
 
@@ -248,11 +244,22 @@ class FakeXPInput:
                 vKey=event.vKey,
             )
 
-        raise ValueError(f"Unhandled EventKind: {kind}")
+        raise ValueError(f"Unhandled EventKind: {event.kind}")
 
     # ------------------------------------------------------------------
     # ROUTERS
     # ------------------------------------------------------------------
+    def _handle_cursor_query(self, x: int, y: int) -> XPLMCursorStatus:
+        if self._mouse_capture_window is not None:
+            info = self._windows_ex.get(self._mouse_capture_window)
+        else:
+            info = self._pick_window_ex_at(x, y)
+
+        if info is None:
+            return self.xp.CursorDefault
+
+        return self._dispatch_window_cursor(info.wid, x, y)
+
     def _handle_mouse_button(
         self,
         x: int,
@@ -260,7 +267,12 @@ class FakeXPInput:
         mouseStatus: XPLMMouseStatus,
         right: bool,
     ) -> int:
-        info = self._pick_window_ex_at(x, y)
+
+        if self._mouse_capture_window is not None:
+            info = self._windows_ex.get(self._mouse_capture_window)
+        else:
+            info = self._pick_window_ex_at(x, y)
+
         if info is None:
             return 0
 
@@ -272,13 +284,22 @@ class FakeXPInput:
             right=right,
         )
 
-        # XP-like: focus follows mouse-down when the window consumes the click
         if consumed and mouseStatus == self.xp.MouseDown:
+            self._mouse_capture_window = info.wid
             self._keyboard_focus_window = info.wid
+
+        if mouseStatus == self.xp.MouseUp:
+            self._mouse_capture_window = None
 
         return consumed
 
-    def _handle_mouse_wheel(self, x: int, y: int, wheel: int, clicks: int) -> int:
+    def _handle_mouse_wheel(
+        self,
+        x: int,
+        y: int,
+        wheel: int,
+        clicks: int,
+    ) -> int:
         info = self._pick_window_ex_at(x, y)
         if info is None:
             return 0
@@ -290,13 +311,6 @@ class FakeXPInput:
             wheel=wheel,
             clicks=clicks,
         )
-
-    def _handle_cursor_query(self, x: int, y: int) -> XPLMCursorStatus:
-        info = self._pick_window_ex_at(x, y)
-        if info is None:
-            return self.xp.CursorDefault
-
-        return self._dispatch_window_cursor(info.wid, x, y)
 
     def _handle_key(self, key: int, flags: int, vKey: int) -> int:
         if self._keyboard_focus_window is None:

@@ -842,6 +842,8 @@ class SimlessXPInterface(Protocol):
 
     def deleteTexture(self, textureID: XPLMTextureID) -> None: ...
 
+    def drawTranslucentDarkBox(self, left: int, top: int, right: int, bottom: int) -> None: ...
+
     # ------------------------------------------------------------------
     # Screen / mouse
     # ------------------------------------------------------------------

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import auto, StrEnum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sshd_extensions.dataref_manager import DRefType
@@ -116,8 +116,8 @@ class WidgetInfo:
     # ------------------------------------------------------------------
     # DearPyGui backend handles (opaque to XP layer)
     # ------------------------------------------------------------------
-    dpg_id: Optional[int] = None
-    container_id: Optional[int] = None
+    dpg_id: Optional[int | str] = None
+    container_id: Optional[int | str] = None
 
     # ------------------------------------------------------------------
     # Geometry lifecycle tracking (backend-facing only)
@@ -200,8 +200,51 @@ class WindowExInfo:
     # ------------------------------------------------------------------
     # Graphics backend ownership (DearPyGui)
     # ------------------------------------------------------------------
-    dpg_window_id: int  # DPG window acting as a canvas
-    drawlist_id: int  # Window-local drawlist
+    dpg_window_id: int | str  # DPG window acting as a canvas
+    drawlist_id: int | str  # Window-local drawlist
+    geom_applied: bool = False
+
+    # ------------------------------------------------------------------
+    # Geometry helpers (XP semantics)
+    # ------------------------------------------------------------------
+    @property
+    def left(self) -> int:
+        return self.geometry[0]
+
+    @property
+    def top(self) -> int:
+        return self.geometry[1]
+
+    @property
+    def right(self) -> int:
+        return self.geometry[2]
+
+    @property
+    def bottom(self) -> int:
+        return self.geometry[3]
+
+    @property
+    def width(self) -> int:
+        return self.right - self.left
+
+    @property
+    def height(self) -> int:
+        return self.top - self.bottom
+
+    def hit_test(self, xp_x: int, xp_y: int) -> bool:
+        return (
+            self.left <= xp_x < self.right
+            and self.bottom <= xp_y < self.top
+        )
+
+    # ------------------------------------------------------------------
+    # XP → DPG transforms (window‑local)
+    # ------------------------------------------------------------------
+    def xp_to_window_dpg(self, xp_x: int, xp_y: int) -> tuple[int, int]:
+        """Convert XP screen coords to DPG coords local to this window."""
+        dpg_x = xp_x - self.left
+        dpg_y = self.top - xp_y
+        return dpg_x, dpg_y
 
 
 class EventKind(StrEnum):
@@ -213,10 +256,10 @@ class EventKind(StrEnum):
 
 @dataclass(slots=True)
 class EventInfo:
-    """Normalized backend input event.
+    """Normalized input event with explicit XP coordinates.
 
-    Represents *what happened* in backend space.
-    XP semantics are applied later by FakeXPInput.
+    XP semantics are authoritative.
+    Backend coordinates may be provided only for normalization.
     """
 
     # ------------------------------------------------------------------
@@ -225,15 +268,18 @@ class EventInfo:
     kind: EventKind
 
     # ------------------------------------------------------------------
-    # Pointer location (screen space)
+    # XP screen-space coordinates (authoritative)
+    #
+    # Origin: bottom-left
+    # Y increases upward
     # ------------------------------------------------------------------
-    x: Optional[int] = None
-    y: Optional[int] = None
+    xp_x: Optional[int] = None
+    xp_y: Optional[int] = None
 
     # ------------------------------------------------------------------
     # Mouse button
     # ------------------------------------------------------------------
-    state: Optional[str] = None  # "down" | "up"
+    state: Optional[str] = None   # "down" | "up"
     button: Optional[int] = None
     right: bool = False
 
@@ -254,3 +300,95 @@ class EventInfo:
     # Backend passthrough (unused by XP semantics)
     # ------------------------------------------------------------------
     user_data: Any = None
+
+    # ------------------------------------------------------------------
+    # Constructors
+    # ------------------------------------------------------------------
+    @classmethod
+    def from_xp(
+        cls,
+        *,
+        kind: EventKind,
+        xp_x: Optional[int] = None,
+        xp_y: Optional[int] = None,
+        **kwargs,
+    ) -> "EventInfo":
+        """Create an EventInfo with explicit XP coordinates."""
+        return cls(kind=kind, xp_x=xp_x, xp_y=xp_y, **kwargs)
+
+    @classmethod
+    def from_dpg(
+        cls,
+        *,
+        kind: EventKind,
+        dpg_x: int,
+        dpg_y: int,
+        dpg_vp_height: int,
+        **kwargs,
+    ) -> "EventInfo":
+        """Create an EventInfo from DearPyGui coordinates.
+
+        Converts DPG (top-left origin) to XP (bottom-left origin).
+        """
+        return cls(
+            kind=kind,
+            xp_x=int(dpg_x),
+            xp_y=int(dpg_vp_height - dpg_y),
+            **kwargs,
+        )
+
+    # ------------------------------------------------------------------
+    # XP-facing helpers
+    # ------------------------------------------------------------------
+    def require_xp_pos(self) -> tuple[int, int]:
+        if self.xp_x is None or self.xp_y is None:
+            raise RuntimeError(f"{self.kind} requires XP coordinates")
+        return self.xp_x, self.xp_y
+
+
+class DPGOp(StrEnum):
+    """Deferred DearPyGui mutation operations."""
+
+    # --------------------------------------------------
+    # Drawing
+    # --------------------------------------------------
+    DRAW_TEXT = auto()
+    DRAW_RECTANGLE = auto()
+
+    # --------------------------------------------------
+    # Containers / widgets
+    # --------------------------------------------------
+    ADD_DRAWLIST = auto()
+    ADD_WINDOW = auto()
+    ADD_CHILD_WINDOW = auto()
+    ADD_TEXT = auto()
+    ADD_INPUT_TEXT = auto()
+    ADD_SLIDER_INT = auto()
+    ADD_BUTTON = auto()
+
+    # --------------------------------------------------
+    # Item mutation
+    # --------------------------------------------------
+    CONFIGURE_ITEM = auto()
+    SET_VALUE = auto()
+    SHOW_ITEM = auto()
+    HIDE_ITEM = auto()
+    DELETE_ITEM = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class DPGCommand:
+    """Deferred DearPyGui operation.
+
+    Recorded during XP callbacks.
+    Executed during frame replay only.
+    """
+
+    op: DPGOp
+
+    # Routing
+    target_drawlist: Optional[int] = None  # None for non-draw ops
+
+    # Positional + keyword arguments for the DPG call
+    args: Tuple[Any, ...] = field(default_factory=tuple)
+    kwargs: Dict[str, Any] = field(default_factory=dict)

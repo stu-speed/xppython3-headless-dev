@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from simless.libs.fake_xp_interface import FakeXPInterface
-from simless.libs.fake_xp_types import WindowExInfo
+from simless.libs.fake_xp_types import DPGOp, WindowExInfo
 from XPPython3.xp_typing import XPLMCursorStatus, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer
 
 DPGCallback = Callable[[int | str, Any, Any], Any]
@@ -44,18 +44,20 @@ class FakeXPGraphicsAPI:
       - No silent failure paths.
     """
 
-    xp: FakeXPInterface  # established in FakeXP
-
     # ------------------------------------------------------------------
     # XPLMGraphics draw callbacks
     #
-    # Stored as (callback, phase, wants_before)
-    # callback signature: cb(phase: int, wants_before: int) -> Any
+    # Registered via registerDrawCallback().
+    # Stored as (callback, phase, wants_before).
+    # Executed during draw_frame() to enqueue draw commands.
     # ------------------------------------------------------------------
     _draw_callbacks: List[tuple[Callable[[int, int], Any], int, int]]
 
     # ------------------------------------------------------------------
     # Texture bookkeeping (simless stub)
+    #
+    # Texture IDs are allocated deterministically but not backed
+    # by real GPU resources.
     # ------------------------------------------------------------------
     _next_tex_id: int
     _textures: Dict[int, Any]
@@ -64,10 +66,10 @@ class FakeXPGraphicsAPI:
     # DearPyGui lifecycle state
     #
     # _context_ready:
-    #   DPG context + viewport exist
+    #   DPG context + viewport have been created.
     #
     # _layout_ready:
-    #   First frame rendered; viewport geometry stable
+    #   At least one frame rendered; viewport geometry is stable.
     # ------------------------------------------------------------------
     _context_ready: bool
     _layout_ready: bool
@@ -75,21 +77,30 @@ class FakeXPGraphicsAPI:
     # ------------------------------------------------------------------
     # Global screen draw surfaces
     #
-    # These are viewport-attached drawlists representing the X-Plane
-    # screen, not any specific window.
+    # Viewport-attached drawlists representing the X-Plane screen.
+    # These are not WindowEx windows.
     #
-    # drawString(), drawLine(), drawBox(), etc. target _active_drawlist.
+    # Screen-level XPLMGraphics calls enqueue commands targeting
+    # _active_drawlist.
     # ------------------------------------------------------------------
     _screen_drawlist_back: Optional[int]  # Behind all windows
     _screen_drawlist_front: Optional[int]  # Above all windows (optional)
 
-    # Currently active draw target for XPLMGraphics calls.
-    # Temporarily switched when drawing WindowEx windows.
+    # Currently selected draw target for XPLMGraphics enqueue.
+    # Switched temporarily while processing WindowEx draw callbacks.
     _active_drawlist: Optional[int]
 
+    # ------------------------------------------------------------------
+    # WindowEx bookkeeping
+    #
+    # Graphics-owned windows with independent drawlists and callbacks.
+    # ------------------------------------------------------------------
     _windows_ex: Dict[XPLMWindowID, WindowExInfo]
+    _current_window_ex: Optional[WindowExInfo]
     _next_window_id: int
     _keyboard_focus_window: Optional[XPLMWindowID]
+
+    xp: FakeXPInterface  # established in FakeXP
 
     # ----------------------------------------------------------------------
     # INTERNAL GUARDS
@@ -141,44 +152,62 @@ class FakeXPGraphicsAPI:
             Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
         ] = None,
     ) -> XPLMWindowID:
-        """Create a modern XPLM window (graphics-owned, not a widget)."""
+        """Create a graphics-owned XPLM WindowEx window."""
 
         if decoration is None:
             decoration = self.xp.WindowDecorationRoundRectangle
         if layer is None:
             layer = self.xp.WindowLayerFloatingWindows
 
-        self._require_context()
-
         wid = XPLMWindowID(self._next_window_id)
         self._next_window_id += 1
+
+        # XP-authoritative geometry
+        geometry = (left, top, right, bottom)
+        is_visible = bool(visible)
 
         width = max(1, right - left)
         height = max(1, top - bottom)
 
-        dpg_window_id = self.xp.dpg_add_window(
-            label=f"XPLMWindowEx {wid}",
-            pos=[left, bottom],
-            width=width,
-            height=height,
-            no_title_bar=True,
-            no_resize=True,
-            no_move=True,
-            no_scrollbar=True,
-            no_collapse=True,
-            show=bool(visible),
+        # Allocate backend IDs deterministically
+        dpg_window_id = f"xplm_window_{wid}"
+        drawlist_id = f"xplm_window_drawlist_{wid}"
+
+        # Enqueue backend window creation (canvas-style window)
+        self.xp.enqueue_dpg(
+            DPGOp.ADD_WINDOW,
+            args=(),
+            kwargs=dict(
+                tag=dpg_window_id,
+                label=f"XPLMWindowEx {wid}",
+                pos=(0, 0),  # no applied geometry
+                width=width,
+                height=height,
+                no_title_bar=False,
+                no_resize=False,
+                no_move=False,
+                no_scrollbar=True,
+                no_collapse=True,
+                show=is_visible,
+            ),
         )
 
-        drawlist_id = self.xp.dpg_add_drawlist(
-            width=width,
-            height=height,
-            parent=dpg_window_id,
+        # Enqueue window-local drawlist
+        self.xp.enqueue_dpg(
+            DPGOp.ADD_DRAWLIST,
+            args=(),
+            kwargs=dict(
+                tag=drawlist_id,
+                width=width,
+                height=height,
+                parent=dpg_window_id,
+            ),
         )
 
         info = WindowExInfo(
             wid=wid,
-            geometry=(left, top, right, bottom),  # XP screen-space geometry
-            visible=bool(visible),
+            geometry=geometry,
+            visible=is_visible,
             decoration=decoration,
             layer=layer,
             draw_cb=draw,
@@ -190,48 +219,33 @@ class FakeXPGraphicsAPI:
             refcon=refCon,
             dpg_window_id=dpg_window_id,
             drawlist_id=drawlist_id,
+            geom_applied=False,
         )
 
         self._windows_ex[wid] = info
         return wid
 
     def destroyWindow(self, wid: XPLMWindowID) -> None:
-        """
-        Destroy a graphics-owned XPLM WindowEx window.
-
-        This removes the window from the graphics registry and deletes
-        all associated DearPyGui objects. Safe to call multiple times.
-        """
-        self._require_context()
+        """Destroy a graphics-owned WindowEx window."""
 
         info = self._windows_ex.pop(wid, None)
         if info is None:
-            # XP tolerates destroying an already-destroyed window
             return
 
-        # If this window is currently the active draw target, clear it
         if self._active_drawlist == info.drawlist_id:
             self._active_drawlist = None
 
-        # Destroy DPG objects (drawlist first, then window)
-        try:
-            if self.xp.dpg_does_item_exist(info.drawlist_id):
-                self.xp.dpg_delete_item(info.drawlist_id)
-        except Exception:
-            pass
+        self.xp.enqueue_dpg(
+            DPGOp.DELETE_ITEM,
+            args=(info.drawlist_id,),
+        )
 
-        try:
-            if self.xp.dpg_does_item_exist(info.dpg_window_id):
-                self.xp.dpg_delete_item(info.dpg_window_id)
-        except Exception:
-            pass
+        self.xp.enqueue_dpg(
+            DPGOp.DELETE_ITEM,
+            args=(info.dpg_window_id,),
+        )
 
     def getWindowGeometry(self, wid: XPLMWindowID) -> tuple[int, int, int, int]:
-        """
-        Return the geometry of a WindowEx window in XP screen coordinates.
-
-        The returned tuple is (left, top, right, bottom), matching XPLM semantics.
-        """
         self._require_context()
 
         info = self._windows_ex.get(wid)
@@ -248,9 +262,6 @@ class FakeXPGraphicsAPI:
         right: int,
         bottom: int,
     ) -> None:
-        """Set WindowEx geometry in XP screen coordinates (left, top, right, bottom)."""
-        self._require_context()
-
         info = self._windows_ex.get(windowID)
         if info is None:
             raise RuntimeError(f"Invalid window ID: {windowID}")
@@ -260,24 +271,26 @@ class FakeXPGraphicsAPI:
         width = max(1, right - left)
         height = max(1, top - bottom)
 
-        # Keep backend in sync (DPG uses (x, y) with y as bottom)
-        if self.xp.dpg_does_item_exist(info.dpg_window_id):
-            self.xp.dpg_configure_item(
-                info.dpg_window_id,
+        self.xp.enqueue_dpg(
+            DPGOp.CONFIGURE_ITEM,
+            args=(info.dpg_window_id,),
+            kwargs=dict(
                 pos=(left, bottom),
                 width=width,
                 height=height,
-            )
+            ),
+        )
 
-        if self.xp.dpg_does_item_exist(info.drawlist_id):
-            self.xp.dpg_configure_item(
-                info.drawlist_id,
+        self.xp.enqueue_dpg(
+            DPGOp.CONFIGURE_ITEM,
+            args=(info.drawlist_id,),
+            kwargs=dict(
                 width=width,
                 height=height,
-            )
+            ),
+        )
 
     def getWindowRefCon(self, windowID: XPLMWindowID):
-        """Return the refCon associated with a WindowEx window."""
         self._require_context()
 
         info = self._windows_ex.get(windowID)
@@ -287,7 +300,6 @@ class FakeXPGraphicsAPI:
         return info.refcon
 
     def setWindowRefCon(self, windowID: XPLMWindowID, refCon) -> None:
-        """Set the refCon associated with a WindowEx window."""
         self._require_context()
 
         info = self._windows_ex.get(windowID)
@@ -297,17 +309,11 @@ class FakeXPGraphicsAPI:
         info.refcon = refCon
 
     def takeKeyboardFocus(self, windowID: XPLMWindowID) -> None:
-        """
-        Take keyboard focus for a WindowEx window.
-
-        Simless: validate and record focus if you track it; otherwise accept silently.
-        """
         self._require_context()
 
         if windowID not in self._windows_ex:
             raise RuntimeError(f"Invalid window ID: {windowID}")
 
-        # Optional: track focus for your input router
         self._keyboard_focus_window = windowID
 
     def setWindowIsVisible(self, windowID: XPLMWindowID, visible: int) -> None:
@@ -319,8 +325,11 @@ class FakeXPGraphicsAPI:
 
         info.visible = bool(visible)
 
-        if self.xp.dpg_does_item_exist(info.dpg_window_id):
-            self.xp.dpg_configure_item(info.dpg_window_id, show=info.visible)
+        self.xp.enqueue_dpg(
+            DPGOp.CONFIGURE_ITEM,
+            args=(info.dpg_window_id,),
+            kwargs=dict(show=info.visible),
+        )
 
     def getWindowIsVisible(self, windowID: XPLMWindowID) -> int:
         self._require_context()
@@ -355,43 +364,30 @@ class FakeXPGraphicsAPI:
         ]
 
     # ----------------------------------------------------------------------
-    # TEXT DRAWING (DPG DRAWLIST)
+    # TEXT DRAWING (DEFERRED DPG COMMAND)
     # ----------------------------------------------------------------------
-    def drawString(
-        self,
-        color: Sequence[float],
-        x: int,
-        y: int,
-        text: str,
-        wordWrap: int,
-        fontID: int,
-    ) -> None:
-        """
-        Draw text to the active XPLMGraphics surface.
-
-        This draws to the *current* draw target:
-          - Global screen drawlist during normal draw callbacks
-          - Window-local drawlist during createWindowEx draw callbacks
-
-        This method is window-agnostic by design, matching XPLM semantics.
-        """
-        self._require_context()
-
+    def drawString(self, color, x, y, text, wordWrap, fontID):
         if self._active_drawlist is None:
-            raise RuntimeError(
-                "No active graphics drawlist (graphics root not initialized or draw phase not active)."
-            )
+            raise RuntimeError("drawString outside draw phase")
 
-        # Convert XP float color (0.0–1.0) to DPG RGBA (0–255)
+        win = self._current_window_ex
+        left, top, right, bottom = win.geometry
+
+        local_x = x - left
+        local_y = (top - y) - 12  # baseline correction
+
         r = int(color[0] * 255)
         g = int(color[1] * 255)
         b = int(color[2] * 255)
 
-        self.xp.dpg_draw_text(
-            pos=(x, y),
-            text=text,
-            color=(r, g, b, 255),
-            parent=self._active_drawlist,
+        self.xp.enqueue_dpg(
+            DPGOp.DRAW_TEXT,
+            target_drawlist=self._active_drawlist,
+            args=((local_x, local_y), text),
+            kwargs=dict(
+                color=(r, g, b, 255),
+                size=14,
+            ),
         )
 
     def drawNumber(
@@ -440,12 +436,41 @@ class FakeXPGraphicsAPI:
         self._textures.pop(textureID, None)
 
     # ----------------------------------------------------------------------
-    # SCREEN + MOUSE (XP API) — DPG AS SOURCE OF TRUTH
+    # XP-STYLE PRIMITIVES (DEFERRED)
+    # ----------------------------------------------------------------------
+    def drawTranslucentDarkBox(self, left, top, right, bottom):
+        if self._active_drawlist is None:
+            raise RuntimeError("drawTranslucentDarkBox outside draw phase")
+
+        win = self._current_window_ex
+        w_left, w_top, w_right, w_bottom = win.geometry
+
+        local_left = left - w_left
+        local_top = w_top - top
+        local_right = right - w_left
+        local_bottom = w_top - bottom
+
+        self.xp.enqueue_dpg(
+            DPGOp.DRAW_RECTANGLE,
+            target_drawlist=self._active_drawlist,
+            args=((local_left, local_top), (local_right, local_bottom)),
+            kwargs=dict(
+                fill=(0, 0, 0, 150),
+                color=(0, 0, 0, 200),
+                thickness=1,
+            ),
+        )
+
+    # ----------------------------------------------------------------------
+    # SCREEN + MOUSE (XP API) — IMMEDIATE QUERIES
     # ----------------------------------------------------------------------
     def getScreenSize(self) -> Tuple[int, int]:
         self._require_context()
         self._require_layout()
-        return self.xp.dpg_get_viewport_width(), self.xp.dpg_get_viewport_height()
+        return (
+            self.xp.dpg_get_viewport_client_height(),
+            self.xp.dpg_get_viewport_client_height(),
+        )
 
     def getMouseLocation(self) -> Tuple[int, int]:
         self._require_context()
