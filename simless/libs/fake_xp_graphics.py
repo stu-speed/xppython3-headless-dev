@@ -1,29 +1,44 @@
-# simless/libs/fake_xp_graphics.py
 # ===========================================================================
 # FakeXPGraphics — DearPyGui-backed graphics subsystem mixin for FakeXP
 #
 # ROLE
-#   Provide a minimal, deterministic, XPLMGraphics-like façade for simless
-#   execution. This subsystem mirrors the public xp.* graphics API surface
-#   without inference, layout logic, or hidden state.
+#   Provide a minimal, deterministic façade that mirrors the public
+#   XPLMGraphics API surface for simless execution. This subsystem
+#   implements only the observable behavior required by plugins and
+#   never infers semantics or performs layout.
 #
-# CORE INVARIANTS
-#   - Must match the production xp.* graphics API contract (xp.pyi).
-#   - Must not infer semantics or perform validation.
-#   - Must not mutate SDK-shaped objects.
-#   - Must return deterministic values based solely on internal storage.
-#
-# LIFECYCLE INVARIANTS
-#   - context_ready gates legality: any dpg.* call requires context_ready.
-#   - layout_ready gates correctness: any geometry/layout-dependent operation
-#     requires layout_ready (first DPG frame rendered).
-#   - Violations raise immediately; nothing fails silently.
+# DESIGN PRINCIPLES
+#   - Match the xp.* graphics API contract exactly (xp.pyi).
+#   - Never mutate SDK-shaped objects or reinterpret plugin intent.
+#   - All returned values come from explicit internal state; no hidden
+#     transforms, no heuristics, no auto-layout.
+#   - Geometry sync is explicit and deterministic:
+#         XP → DPG before render
+#         DPG → XP after render
 #
 # SIMLESS RULES
-#   - DearPyGui is used only for visualization; never exposed to plugins.
-#   - DPG context + viewport + graphics surface are created BEFORE plugin enable.
-#   - No automatic layout, no coordinate transforms.
-#   - XP draw callbacks are driven by FakeXP, not DPG.
+#   - DearPyGui is used strictly as a visualization backend and is
+#     never exposed to plugins.
+#   - The DPG context, viewport, and root graphics surface are created
+#     before plugin enable and remain stable for the lifetime of FakeXP.
+#   - XP draw callbacks are driven by FakeXP’s frame loop, not DPG.
+#   - DPG is mutated only at two safe points:
+#         (1) before render (XP→DPG apply)
+#         (2) after window draw callbacks (window-level commands)
+#
+# WINDOWEX GEOMETRY MODEL
+#   - Each WindowEx has authoritative XP geometry:
+#         frame  = desired XP frame rect
+#         client = desired XP client rect (defaults to frame)
+#   - XP sets geometry via API calls → marks dirty_xp_to_dpg.
+#   - DPG user actions (drag/resize) update geometry after render →
+#     marks dirty_dpg_to_xp.
+#   - No lifecycle flags, no pending states, no multi-frame hazards.
+#
+# GOAL
+#   Provide a contributor-proof, reload-safe, deterministic graphics
+#   subsystem that behaves like X-Plane’s XPLMGraphics layer while
+#   remaining simple enough for simless GUI testing.
 # ===========================================================================
 
 from __future__ import annotations
@@ -44,11 +59,6 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
     This class owns the DearPyGui lifecycle and exposes:
       - An XPLMGraphics-like API surface (xp.* semantics)
       - A small, explicit set of graphics-owned DearPyGui helpers (dpg_*)
-
-    The design is intentionally strict:
-      - Any DPG call before context_ready raises.
-      - Any geometry/layout-dependent operation before layout_ready raises.
-      - No silent failure paths.
     """
 
     # ------------------------------------------------------------------
@@ -58,49 +68,6 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
     # executed during draw_frame() replay only.
     # ------------------------------------------------------------------
     _dpg_commands: list[DPGCommand]
-
-    public_api_names = [
-        # ------------------------------------------------------------------
-        # XP Graphics API (XPLM-style semantics)
-        # ------------------------------------------------------------------
-        "registerDrawCallback",
-        "unregisterDrawCallback",
-        "getScreenSize",
-        "getMouseLocation",
-        "drawString",
-        "drawNumber",
-        "setGraphicsState",
-        "bindTexture2d",
-        "generateTextureNumbers",
-        "deleteTexture",
-        # ------------------------------------------------------------------
-        # WindowEx API (graphics-owned windows)
-        # ------------------------------------------------------------------
-        "createWindowEx",
-        "destroyWindow",
-        "getWindowGeometry",
-        "setWindowGeometry",
-        "getWindowRefCon",
-        "setWindowRefCon",
-        "getWindowIsVisible",
-        "setWindowIsVisible",
-        "takeKeyboardFocus",
-        "getScreenSize",
-        "getMouseLocation",
-        # ------------------------------------------------------------------
-        # Raw DearPyGui helpers (graphics-owned, explicit)
-        # ------------------------------------------------------------------
-        "dpg_is_item_shown",
-        "dpg_is_dearpygui_running",
-        "dpg_does_item_exist",
-        "dpg_get_viewport_client_width",
-        "dpg_get_viewport_client_height",
-        "dpg_get_mouse_pos",
-        # ------------------------------------------------------------------
-        # Simless driver entry point (engine-owned)
-        # ------------------------------------------------------------------
-        "draw_frame",
-    ]
 
     # ----------------------------------------------------------------------
     # INITIALIZATION
@@ -117,8 +84,6 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self._draw_callbacks = []
         self._next_tex_id = 1
         self._textures = {}
-        self._context_ready = False
-        self._layout_ready = False
         self._screen_drawlist_back = None  # Behind all windows
         self._screen_drawlist_front = None  # Above all windows (optional)
         self._active_drawlist = None
@@ -128,19 +93,6 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self._keyboard_focus_window = None
 
         self._dpg_commands = []
-
-    # ----------------------------------------------------------------------
-    # LIFECYCLE FLAGS
-    # ----------------------------------------------------------------------
-    @property
-    def context_ready(self) -> bool:
-        """Whether the DearPyGui context + viewport are initialized."""
-        return self._context_ready
-
-    @property
-    def layout_ready(self) -> bool:
-        """Whether at least one DPG frame has rendered (layout is valid)."""
-        return self._layout_ready
 
     # ----------------------------------------------------------------------
     # DPG INITIALIZATION
@@ -159,9 +111,6 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
           - This surface is the target for drawString, drawLine, drawBox, etc.
           - WindowEx windows and widgets draw on top of this surface.
         """
-        if self._context_ready:
-            return
-
         dpg.create_context()
         dpg.create_viewport(
             title="Fake X-Plane",
@@ -170,6 +119,8 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         )
         dpg.setup_dearpygui()
         dpg.show_viewport()
+
+        self._install_dpg_input_callbacks()
 
         # ------------------------------------------------------------------
         # Global screen draw surfaces (XP graphics layer)
@@ -184,56 +135,39 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         # Default target for XPLMGraphics calls
         self._active_drawlist = self._screen_drawlist_back
 
-        self._install_dpg_input_callbacks()
-
-        self._context_ready = True
-        self._layout_ready = False
-
     # ----------------------------------------------------------------------
     # FRAME RENDERING
     # ----------------------------------------------------------------------
     def draw_frame(self) -> None:
         """Render one simless frame.
 
-        Ordering:
-          1) If viewport closed, end run loop.
-          2) Execute XP draw callbacks (screen-level) to enqueue commands.
-          3) Execute deferred DearPyGui commands (screen + windows).
-          4) Render one DearPyGui frame (flush drawlists).
-          5) Execute WindowEx draw callbacks (enqueue window-local commands).
-          6) Execute deferred DearPyGui commands (window-local).
-          7) On first rendered frame, set layout_ready and return.
-          8) After layout_ready, render widget frame.
-        """
-        self._require_context()
+        Deterministic ordering:
 
-        # --------------------------------------------------------------
-        # 1) If viewport closed, end run loop
-        # --------------------------------------------------------------
+          1) If viewport closed, end run loop.
+          2) Clear screen drawlists.
+          3) Run XP screen-level draw callbacks (enqueue DPG commands).
+          4) Execute deferred DPG commands (screen-level).
+          5) Apply XP→DPG geometry.
+          6) Render one DearPyGui frame.
+          7) Read DPG→XP geometry.
+          8) Consume DPG→XP geometry changes.
+          9) Process input events.
+         10) Run WindowEx draw callbacks (enqueue window-local commands).
+         11) Execute deferred DPG commands (window-level).
+         12) Render widget frame.
+        """
+
+        # 1) End run loop if viewport closed
         if not dpg.is_dearpygui_running():
             self.xp.simless_runner.end_run_loop()
             return
 
-        # --------------------------------------------------------------
-        # 2) Clear global screen draw surfaces
-        #
-        # Drawlists are persistent; children must be cleared each frame
-        # to avoid accumulation.
-        # --------------------------------------------------------------
+        # 2) Clear global screen drawlists
         self._clear_drawlist_children(self._screen_drawlist_back)
         self._clear_drawlist_children(self._screen_drawlist_front)
 
-        # --------------------------------------------------------------
-        # 3) Global screen drawing (XPLMGraphics)
-        #
-        # XP semantics:
-        #   - Deterministic phase ordering
-        #   - wantsBefore=1 callbacks before wantsBefore=0
-        #
-        # Callbacks enqueue DPGCommand objects only.
-        # --------------------------------------------------------------
+        # 3) XP screen-level drawing (enqueue only)
         self._active_drawlist = self._screen_drawlist_back
-
         phases = sorted({phase for _, phase, _ in self._draw_callbacks})
         for phase in phases:
             for wants_before in (1, 0):
@@ -241,11 +175,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
                     if cb_phase == phase and cb_wants_before == wants_before:
                         cb(phase, wants_before)
 
-        # --------------------------------------------------------------
         # 4) Execute deferred DPG commands (screen-level)
-        #
-        # This is the ONLY place where DearPyGui is mutated.
-        # --------------------------------------------------------------
         for cmd in self._dpg_commands:
             if cmd.target_drawlist is not None:
                 dpg.push_container_stack(cmd.target_drawlist)
@@ -255,37 +185,29 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
                     dpg.pop_container_stack()
             else:
                 self.xp.execute_dpg_command(cmd)
-
         self._dpg_commands.clear()
 
-        # --------------------------------------------------------------
-        # 5) Render one DearPyGui frame
-        #
-        # Flushes all drawlists and establishes valid item state.
-        # --------------------------------------------------------------
+        # 5) Apply XP→DPG geometry
+        self._window_ex_apply_xp_to_dpg()
+
+        # 6) Render one DearPyGui frame
         dpg.render_dearpygui_frame()
 
-        # Layout is ready after first dpg frame
-        if not self._layout_ready:
-            self._layout_ready = True
+        # XP→DPG push is complete after render
+        for info in self._windows_ex.values():
+            info.dirty_xp_to_dpg = False
 
-            for info in self._iter_window_ex_in_layer_order():
-                if info.visible and not info.geom_applied:
-                    self._apply_window_geometry(info.wid, info.geometry)
-                    info.geom_applied = True
+        # 7) Read DPG→XP geometry
+        self._window_ex_read_dpg_to_xp()
 
-        # --------------------------------------------------------------
-        # Input processing (WindowEx + keyboard)
-        # --------------------------------------------------------------
-        events = self.xp.drain_input_events()
-        for event in events:
+        # 8) Consume DPG→XP geometry changes
+        self._consume_dpg_to_xp_changes()
+
+        # 9) Input processing
+        for event in self.xp.drain_input_events():
             self.xp.process_event_info(event)
 
-        # --------------------------------------------------------------
-        # 6) WindowEx drawing (graphics-owned windows)
-        #
-        # Window draw callbacks enqueue window-local commands.
-        # --------------------------------------------------------------
+        # 10) WindowEx drawing (enqueue only)
         for info in self._iter_window_ex_in_layer_order():
             if not info.visible or info.draw_cb is None:
                 continue
@@ -302,9 +224,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
                 self._active_drawlist = prev_drawlist
                 self._current_window_ex = prev_window
 
-        # --------------------------------------------------------------
-        # 7) Execute deferred DPG commands (window-level)
-        # --------------------------------------------------------------
+        # 11) Execute deferred DPG commands (window-level)
         for cmd in self._dpg_commands:
             if cmd.op.name.startswith("DRAW") and cmd.target_drawlist is None:
                 raise RuntimeError(f"DRAW command missing target_drawlist: {cmd}")
@@ -318,16 +238,13 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
                     dpg.pop_container_stack()
             else:
                 self.xp.execute_dpg_command(cmd)
-
         self._dpg_commands.clear()
 
-        # --------------------------------------------------------------
-        # 8) Widget rendering (geometry-safe)
-        # --------------------------------------------------------------
+        # 12) Widget rendering
         self.xp.render_widget_frame()
 
     # ----------------------------------------------------------------------
-    # DPG HELPERS (GRAPHICS-OWNED, FAIL-FAST)
+    # DPG HELPERS (ALL DPG calls handled by this class)
     # ----------------------------------------------------------------------
     def enqueue_dpg(
         self,
@@ -343,8 +260,6 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         No DPG calls are allowed here.
         """
 
-        self._require_context()
-
         if kwargs is None:
             kwargs = {}
 
@@ -358,43 +273,26 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         )
 
     def dpg_is_dearpygui_running(self) -> bool:
-        self._require_context()
         return dpg.is_dearpygui_running()
 
     def dpg_does_item_exist(self, item: int | str) -> bool:
-        self._require_context()
         return dpg.does_item_exist(item)
 
     def dpg_get_viewport_client_width(self) -> int:
-        self._require_context()
-        self._require_layout()
         return dpg.get_viewport_client_width()
 
     def dpg_get_viewport_client_height(self) -> int:
-        self._require_context()
-        self._require_layout()
         return dpg.get_viewport_client_height()
 
     def dpg_is_item_shown(self, item: int | str) -> bool:
-        self._require_context()
         return dpg.is_item_shown(item)
 
     def dpg_get_mouse_pos(self, **kwargs) -> list[int] | tuple[int, ...]:
-        self._require_context()
         return dpg.get_mouse_pos(**kwargs)
 
     # ----------------------------------------------------------------------
     # INTERNAL HELPERS
     # ----------------------------------------------------------------------
-    def _apply_window_geometry(self, wid, geometry):
-        left, top, right, bottom = geometry
-        client_h = dpg.get_viewport_client_height()
-
-        dpg.set_item_pos(
-            f"xplm_window_{wid}",
-            [left, client_h - top],
-        )
-
     def _clear_drawlist_children(self, drawlist_id: Optional[int]) -> None:
         """Clear per-frame draw primitives to avoid unbounded accumulation."""
         if drawlist_id is None:
@@ -415,14 +313,12 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         with dpg.handler_registry():
             dpg.add_mouse_down_handler(
                 callback=lambda sender, app_data: (
-                    None
-                    if not self._layout_ready
-                    else xp.queue_input_event(
+                    xp.queue_input_event(
                         EventInfo.from_dpg(
                             kind=EventKind.MOUSE_BUTTON,
-                            dpg_x=int(dpg.get_mouse_pos()[0]),
-                            dpg_y=int(dpg.get_mouse_pos()[1]),
-                            dpg_vp_height=dpg.get_viewport_height(),
+                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
+                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
+                            dpg_vp_height=dpg.get_viewport_client_height(),
                             state="down",
                             button=int(app_data) if isinstance(app_data, int) else 0,
                         )
@@ -432,9 +328,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
             dpg.add_mouse_release_handler(
                 callback=lambda sender, app_data: (
-                    None
-                    if not self._layout_ready
-                    else xp.queue_input_event(
+                    xp.queue_input_event(
                         EventInfo.from_dpg(
                             kind=EventKind.MOUSE_BUTTON,
                             dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
@@ -449,9 +343,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
             dpg.add_mouse_move_handler(
                 callback=lambda sender, app_data: (
-                    None
-                    if not self._layout_ready
-                    else xp.queue_input_event(
+                    xp.queue_input_event(
                         EventInfo.from_dpg(
                             kind=EventKind.CURSOR,
                             dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
@@ -464,9 +356,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
             dpg.add_mouse_wheel_handler(
                 callback=lambda sender, app_data: (
-                    None
-                    if not self._layout_ready
-                    else xp.queue_input_event(
+                    xp.queue_input_event(
                         EventInfo.from_dpg(
                             kind=EventKind.MOUSE_WHEEL,
                             dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
@@ -481,9 +371,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
             dpg.add_key_press_handler(
                 callback=lambda sender, app_data: (
-                    None
-                    if not self._layout_ready
-                    else xp.queue_input_event(
+                    xp.queue_input_event(
                         EventInfo.from_xp(
                             kind=EventKind.KEY,
                             key=int(app_data),
@@ -493,6 +381,117 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
                     )
                 )
             )
+
+    def _window_ex_apply_xp_to_dpg(self):
+        """Apply XP→DPG geometry before rendering.
+
+        XP is authoritative when XP code changes geometry.
+        Only runs when dirty_xp_to_dpg is True.
+        """
+
+        client_h = dpg.get_viewport_client_height()
+
+        for wid, info in self._windows_ex.items():
+            if not info.dirty_xp_to_dpg:
+                continue
+
+            dpg_id = info.dpg_window_id
+            if not dpg.does_item_exist(dpg_id):
+                continue
+
+            if info.frame is None:
+                continue
+
+            left, top, right, bottom = info.frame
+
+            width = max(1, right - left)
+            height = max(1, top - bottom)
+
+            dpg_x = left
+            dpg_y = client_h - top
+
+            dpg.configure_item(
+                dpg_id,
+                pos=(dpg_x, dpg_y),
+                width=width,
+                height=height,
+            )
+
+    def _window_ex_read_dpg_to_xp(self):
+        """Read DPG geometry after render and update XP geometry.
+
+        Detects DPG-side movement/resizing and sets dirty_dpg_to_xp.
+        Always runs AFTER dpg.render_dearpygui_frame().
+        """
+
+        client_h = dpg.get_viewport_client_height()
+
+        for wid, info in self._windows_ex.items():
+            dpg_id = info.dpg_window_id
+            dl_id = info.drawlist_id
+
+            if not dpg.does_item_exist(dpg_id) or not dpg.does_item_exist(dl_id):
+                continue
+
+            # ----------------------------------------------------------
+            # Read DPG window geometry
+            # ----------------------------------------------------------
+            try:
+                win_x, win_y = dpg.get_item_pos(dpg_id)
+                win_w = dpg.get_item_width(dpg_id)
+                win_h = dpg.get_item_height(dpg_id)
+            except Exception:
+                continue
+
+            # Convert to XP frame rect
+            new_frame = (
+                win_x,
+                client_h - win_y,
+                win_x + win_w,
+                client_h - win_y - win_h,
+            )
+
+            # Detect change BEFORE updating stored geometry
+            if info.frame != new_frame:
+                info.dirty_dpg_to_xp = True
+
+            info.frame = new_frame
+
+            # ----------------------------------------------------------
+            # Read DPG drawlist rect → XP client rect
+            # ----------------------------------------------------------
+            dl_min_x, dl_min_y = dpg.get_item_rect_min(dl_id)
+            dl_max_x, dl_max_y = dpg.get_item_rect_max(dl_id)
+
+            new_client = (
+                dl_min_x,
+                client_h - dl_min_y,
+                dl_max_x,
+                client_h - dl_max_y,
+            )
+
+            if info.client != new_client:
+                info.dirty_dpg_to_xp = True
+
+            info.client = new_client
+
+    def _consume_dpg_to_xp_changes(self) -> None:
+        """React to DPG-side geometry changes.
+
+        _window_ex_geometry_update() has already updated info.frame/client
+        and set dirty_dpg_to_xp = True if geometry changed.
+        XP now acknowledges the change and clears the flag.
+        """
+
+        for info in self._windows_ex.values():
+            if not info.dirty_dpg_to_xp:
+                continue
+
+            # Optional: fire XP callbacks or update window manager state here.
+            # (Currently no extra processing needed.)
+
+            # Acknowledge the change.
+            info.dirty_dpg_to_xp = False
 
     def execute_dpg_command(self, cmd: DPGCommand) -> None:
         """Execute a single DearPyGui command immediately.
@@ -513,21 +512,6 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         # Hard invariants — programmer error if violated
         assert isinstance(cmd, DPGCommand), "Expected DPGCommand"
         assert isinstance(cmd.op, DPGOp), f"Invalid DPGOp: {cmd.op}"
-
-        # Context + runtime guards
-        self._require_context()
-        self._require_running()
-
-        # --------------------------------------------------
-        # Layout-dependent operations
-        #
-        # These require a resolved viewport and stable geometry.
-        # --------------------------------------------------
-        if cmd.op in (
-                DPGOp.DRAW_TEXT,
-                DPGOp.DRAW_RECTANGLE,
-        ):
-            self._require_layout()
 
         match cmd.op:
             # --------------------------------------------------

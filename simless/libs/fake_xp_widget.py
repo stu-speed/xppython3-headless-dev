@@ -60,34 +60,6 @@ from XPPython3.xp_typing import XPWidgetID
 
 
 class FakeXPWidget(FakeXPWidgetsAPI):
-    public_api_names = [
-        "createWidget",
-        "killWidget",
-        "getWidgetProperty",
-        "setWidgetProperty",
-        "getWidgetGeometry",
-        "setWidgetGeometry",
-        "showWidget",
-        "hideWidget",
-        "isWidgetVisible",
-        "sendMessageToWidget",
-        "getWidgetForLocation",
-        "getParentWidget",
-        "addWidgetCallback",
-        "bringWidgetToFront",
-        "pushWidgetBehind",
-        "isWidgetInFront",
-        "setKeyboardFocus",
-        "loseKeyboardFocus",
-        "getWidgetDescriptor",
-        "setWidgetDescriptor",
-        "getWidgetClass",
-        "getWidgetUnderlyingWindow",
-        "getWidgetExposedGeometry",
-        "map_widgets_to_dpg",
-        "render_widget_frame",
-    ]
-
     # ------------------------------------------------------------------
     # INITIALIZATION
     # ------------------------------------------------------------------

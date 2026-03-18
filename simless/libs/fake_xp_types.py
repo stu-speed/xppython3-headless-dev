@@ -24,6 +24,11 @@ Type_Data = 32
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
 
 
+class XPShutdown(Exception):
+    """Raised when DearPyGui is no longer running (viewport closed)."""
+    pass
+
+
 @dataclass(slots=True)
 class FakeDataRef:
     """
@@ -171,7 +176,22 @@ class WindowExInfo:
     # XP-visible identity and geometry
     # ------------------------------------------------------------------
     wid: XPLMWindowID
-    geometry: Tuple[int, int, int, int]  # (left, top, right, bottom)
+
+    # Desired XP-style frame rectangle (left, top, right, bottom).
+    # Always authoritative:
+    #   - XP sets it when XP wants to move/resize the window.
+    #   - DPG updates it when the user drags/resizes the window.
+    #   - XP→DPG apply uses it before render.
+    #   - DPG→XP read overwrites it after render.
+    #
+    # Initialized at window creation to the XP constructor geometry.
+    frame: Tuple[int, int, int, int]
+
+    # Desired XP-style client rectangle (left, top, right, bottom).
+    # Defaults to the frame rect until the first DPG render produces
+    # a real drawlist rect. After that, updated every frame from DPG.
+    client: Tuple[int, int, int, int]
+
     visible: bool
     decoration: XPLMWindowDecoration
     layer: XPLMWindowLayer
@@ -200,41 +220,67 @@ class WindowExInfo:
     # ------------------------------------------------------------------
     # Graphics backend ownership (DearPyGui)
     # ------------------------------------------------------------------
-    dpg_window_id: int | str  # DPG window acting as a canvas
-    drawlist_id: int | str  # Window-local drawlist
-    geom_applied: bool = False
+    dpg_window_id: int | str
+    drawlist_id: int | str
 
     # ------------------------------------------------------------------
-    # Geometry helpers (XP semantics)
+    # XP ↔ DPG geometry state
+    # ------------------------------------------------------------------
+
+    # XP→DPG: set True when XP changes geometry and wants DPG to apply it.
+    # Cleared AFTER DPG renders the frame.
+    dirty_xp_to_dpg: bool = True
+
+    # DPG→XP: set True when DPG geometry differs from stored XP geometry.
+    # Cleared AFTER XP consumes the change.
+    dirty_dpg_to_xp: bool = False
+
+    # ------------------------------------------------------------------
+    # Frame geometry helpers
     # ------------------------------------------------------------------
     @property
-    def left(self) -> int:
-        return self.geometry[0]
+    def left(self) -> int: return self.frame[0]
 
     @property
-    def top(self) -> int:
-        return self.geometry[1]
+    def top(self) -> int: return self.frame[1]
 
     @property
-    def right(self) -> int:
-        return self.geometry[2]
+    def right(self) -> int: return self.frame[2]
 
     @property
-    def bottom(self) -> int:
-        return self.geometry[3]
+    def bottom(self) -> int: return self.frame[3]
 
     @property
-    def width(self) -> int:
-        return self.right - self.left
+    def width(self) -> int: return self.right - self.left
 
     @property
-    def height(self) -> int:
-        return self.top - self.bottom
+    def height(self) -> int: return self.top - self.bottom
 
-    def hit_test(self, xp_x: int, xp_y: int) -> bool:
+    def hit_test_frame(self, xp_x: int, xp_y: int) -> bool:
         return (
-            self.left <= xp_x < self.right
-            and self.bottom <= xp_y < self.top
+            self.left <= xp_x <= self.right
+            and self.bottom <= xp_y <= self.top
+        )
+
+    # ------------------------------------------------------------------
+    # Client geometry helpers
+    # ------------------------------------------------------------------
+    @property
+    def client_left(self) -> int: return self.client[0]
+
+    @property
+    def client_top(self) -> int: return self.client[1]
+
+    @property
+    def client_right(self) -> int: return self.client[2]
+
+    @property
+    def client_bottom(self) -> int: return self.client[3]
+
+    def hit_test_client(self, xp_x: int, xp_y: int) -> bool:
+        return (
+            self.client_left <= xp_x <= self.client_right
+            and self.client_bottom <= xp_y <= self.client_top
         )
 
     # ------------------------------------------------------------------
@@ -279,7 +325,7 @@ class EventInfo:
     # ------------------------------------------------------------------
     # Mouse button
     # ------------------------------------------------------------------
-    state: Optional[str] = None   # "down" | "up"
+    state: Optional[str] = None  # "down" | "up"
     button: Optional[int] = None
     right: bool = False
 
@@ -336,14 +382,6 @@ class EventInfo:
             xp_y=int(dpg_vp_height - dpg_y),
             **kwargs,
         )
-
-    # ------------------------------------------------------------------
-    # XP-facing helpers
-    # ------------------------------------------------------------------
-    def require_xp_pos(self) -> tuple[int, int]:
-        if self.xp_x is None or self.xp_y is None:
-            raise RuntimeError(f"{self.kind} requires XP coordinates")
-        return self.xp_x, self.xp_y
 
 
 class DPGOp(StrEnum):

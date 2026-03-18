@@ -46,6 +46,7 @@ from typing import Any, Dict, List
 
 from simless.libs.fake_xp_dataref_viewer import FakeXPDataRefViewerClient
 from simless.libs.fake_xp_interface import FakeXPInterface
+from simless.libs.fake_xp_types import XPShutdown
 from simless.libs.loader import LoadedPlugin, SimlessPluginLoader
 from sshd_extensions.bridge_protocol import (BRIDGE_HOST, BRIDGE_PORT, BridgeData, BridgeDataType, XPBridgeClient)
 
@@ -263,7 +264,7 @@ class SimlessRunner:
     # ----------------------------------------------------------------------
     # One frame
     # ----------------------------------------------------------------------
-    def run_one_frame(self) -> bool:
+    def run_one_frame(self) -> None:
         xp = self.xp
 
         # 1. Advance sim time
@@ -307,14 +308,8 @@ class SimlessRunner:
             self._dataref_viewer.update()
 
         # 5. Graphics frame
-        try:
-            if xp.enable_gui:
-                xp.draw_frame()
-        except Exception as exc:
-            xp.log(f"[Runner] graphics/frame error: {exc!r}")
-            return False
-
-        return True
+        if xp.enable_gui:
+            xp.draw_frame()
 
     # ----------------------------------------------------------------------
     # Full lifecycle (plugins = list of plugin names)
@@ -385,8 +380,13 @@ class SimlessRunner:
         while self._running:
             frame_start = time.monotonic()
 
-            if not self.run_one_frame():
-                xp.log("[Runner] Main loop exit: GUI closed or fatal error")
+            try:
+                self.run_one_frame()
+            except XPShutdown:
+                xp.log("[Runner] Main loop exit: shutdown")
+                break
+            except Exception as exc:
+                xp.log(f"[Runner] graphics/frame error: {exc!r}")
                 break
 
             if 0 <= run_time <= (time.time() - start):
@@ -436,4 +436,3 @@ class SimlessRunner:
 
         if xp.enable_gui:
             xp.log("[Runner] === GUI Teardown ===")
-

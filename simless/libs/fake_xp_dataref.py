@@ -44,37 +44,6 @@ class FakeXPDataRef(FakeXPDataRefAPI):
     """
 
     # ------------------------------------------------------------------
-    # Public FakeXP API surface
-    # ------------------------------------------------------------------
-    public_api_names = [
-        # Lookup + metadata
-        "findDataRef",
-        "getDataRefInfo",
-        "getDataRefTypes",
-        "canWriteDataRef",
-        "isDataRefGood",
-
-        # Scalar accessors
-        "getDatai", "setDatai",
-        "getDataf", "setDataf",
-        "getDatad", "setDatad",
-
-        # Array accessors
-        "getDatavf", "setDatavf",
-        "getDatavi", "setDatavi",
-        "getDatab", "setDatab",
-
-        # String helpers
-        "getDatas", "setDatas",
-
-        # simless
-        "all_handle_paths", "all_handles", "get_handle",
-        "promote_type", "promote_shape_from_value",
-        "conform_dummy_to_value",
-        "attach_handle_callback", "detach_handle_callback",
-    ]
-
-    # ------------------------------------------------------------------
     # Initialization
     # ------------------------------------------------------------------
     def _init_dataref(self) -> None:

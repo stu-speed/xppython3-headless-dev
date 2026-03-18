@@ -1,23 +1,35 @@
-# simless/libs/fake_xp_graphics_api.py
 # ===========================================================================
-# FakeXPGraphics — DearPyGui-backed graphics subsystem mixin for FakeXP
+# FakeXPGraphicsAPI — XPLMGraphics-compatible API façade for FakeXP
 #
 # ROLE
-#   Provide a minimal, deterministic, XPLMGraphics-like façade for simless
-#   execution. This subsystem mirrors the public xp graphics API surface
-#   without inference, layout logic, or hidden state.
+#   Provide a minimal, deterministic implementation of the public
+#   xp.graphics API surface for simless execution. This layer exposes
+#   only the SDK-shaped functions and returns values derived strictly
+#   from FakeXP’s internal state. It performs no layout, inference, or
+#   interpretation of plugin intent.
 #
-# CORE INVARIANTS
+# API INVARIANTS
 #   - Must match the production xp.* graphics API contract (xp.pyi).
-#   - Must not infer semantics or perform validation.
-#   - Must not mutate SDK-shaped objects.
-#   - Must return deterministic values based solely on internal storage.
+#   - Must not infer semantics, reinterpret arguments, or validate
+#     plugin behavior beyond what the real SDK enforces.
+#   - Must not mutate SDK-shaped objects or introduce hidden state.
+#   - All return values must be deterministic and derived solely from
+#     FakeXP’s authoritative geometry and storage.
 #
-# LIFECYCLE INVARIANTS
-#   - context_ready gates legality: any self.xp.dpg_* call requires context_ready.
-#   - layout_ready gates correctness: any geometry/layout-dependent operation
-#     requires layout_ready (first DPG frame rendered).
-#   - Violations raise immediately; nothing fails silently.
+# LIFETIME INVARIANTS
+#   - The DearPyGui context, viewport, and root graphics surface are
+#     created before plugin enable and remain valid for the entire
+#     lifetime of FakeXP.
+#   - Therefore, all xp.graphics API calls are always legal; no
+#     context-ready gating or deferred initialization is required.
+#   - This module never touches DearPyGui directly. All DPG interaction
+#     is routed through FakeXPGraphics, which owns the visualization
+#     backend and the XP↔DPG geometry sync.
+#
+# PURPOSE
+#   Provide a contributor-proof, reload-safe, SDK-faithful graphics API
+#   façade that plugins can rely on during simless execution, without
+#   exposing or depending on DearPyGui internals.
 # ===========================================================================
 
 from __future__ import annotations
@@ -37,11 +49,6 @@ class FakeXPGraphicsAPI:
     This class owns the DearPyGui lifecycle and exposes:
       - An XPLMGraphics-like API surface (xp.* semantics)
       - A small, explicit set of graphics-owned DearPyGui helpers (dpg_*)
-
-    The design is intentionally strict:
-      - Any DPG call before context_ready raises.
-      - Any geometry/layout-dependent operation before layout_ready raises.
-      - No silent failure paths.
     """
 
     # ------------------------------------------------------------------
@@ -61,18 +68,6 @@ class FakeXPGraphicsAPI:
     # ------------------------------------------------------------------
     _next_tex_id: int
     _textures: Dict[int, Any]
-
-    # ------------------------------------------------------------------
-    # DearPyGui lifecycle state
-    #
-    # _context_ready:
-    #   DPG context + viewport have been created.
-    #
-    # _layout_ready:
-    #   At least one frame rendered; viewport geometry is stable.
-    # ------------------------------------------------------------------
-    _context_ready: bool
-    _layout_ready: bool
 
     # ------------------------------------------------------------------
     # Global screen draw surfaces
@@ -102,29 +97,6 @@ class FakeXPGraphicsAPI:
 
     xp: FakeXPInterface  # established in FakeXP
 
-    # ----------------------------------------------------------------------
-    # INTERNAL GUARDS
-    # ----------------------------------------------------------------------
-    def _require_context(self) -> None:
-        """Raise if any DPG call is attempted before context initialization."""
-        if not self._context_ready:
-            raise RuntimeError(
-                "DearPyGui context not ready. Call init_graphics_root() before any dpg_* helper or DPG-backed XP API."
-            )
-
-    def _require_layout(self) -> None:
-        """Raise if geometry/layout-dependent work is attempted too early."""
-        if not self._layout_ready:
-            raise RuntimeError(
-                "DearPyGui layout not ready. Wait until after the first render_dearpygui_frame() before geometry/layout-dependent operations."
-            )
-
-    def _require_running(self) -> None:
-        """Raise if DPG is no longer running (viewport closed / shutdown)."""
-        self._require_context()
-        if not self.xp.dpg_is_dearpygui_running():
-            raise RuntimeError("DearPyGui is not running (viewport closed or shutdown).")
-
     def createWindowEx(
         self,
         left: int = 100,
@@ -152,7 +124,6 @@ class FakeXPGraphicsAPI:
             Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
         ] = None,
     ) -> XPLMWindowID:
-        """Create a graphics-owned XPLM WindowEx window."""
 
         if decoration is None:
             decoration = self.xp.WindowDecorationRoundRectangle
@@ -162,25 +133,31 @@ class FakeXPGraphicsAPI:
         wid = XPLMWindowID(self._next_window_id)
         self._next_window_id += 1
 
-        # XP-authoritative geometry
-        geometry = (left, top, right, bottom)
+        # --------------------------------------------------------------
+        # 1) XP authoritative frame rect
+        # --------------------------------------------------------------
+        frame = (left, top, right, bottom)
         is_visible = bool(visible)
 
         width = max(1, right - left)
         height = max(1, top - bottom)
 
-        # Allocate backend IDs deterministically
+        # --------------------------------------------------------------
+        # 3) Allocate backend IDs
+        # --------------------------------------------------------------
         dpg_window_id = f"xplm_window_{wid}"
         drawlist_id = f"xplm_window_drawlist_{wid}"
 
-        # Enqueue backend window creation (canvas-style window)
+        # --------------------------------------------------------------
+        # 4) Enqueue backend window creation
+        # --------------------------------------------------------------
         self.xp.enqueue_dpg(
             DPGOp.ADD_WINDOW,
             args=(),
             kwargs=dict(
                 tag=dpg_window_id,
                 label=f"XPLMWindowEx {wid}",
-                pos=(0, 0),  # no applied geometry
+                pos=(0, 0),  # geometry applied later
                 width=width,
                 height=height,
                 no_title_bar=False,
@@ -192,7 +169,6 @@ class FakeXPGraphicsAPI:
             ),
         )
 
-        # Enqueue window-local drawlist
         self.xp.enqueue_dpg(
             DPGOp.ADD_DRAWLIST,
             args=(),
@@ -204,9 +180,13 @@ class FakeXPGraphicsAPI:
             ),
         )
 
+        # --------------------------------------------------------------
+        # 5) Construct WindowExInfo with BOTH rects
+        # --------------------------------------------------------------
         info = WindowExInfo(
             wid=wid,
-            geometry=geometry,
+            frame=frame,
+            client=frame,
             visible=is_visible,
             decoration=decoration,
             layer=layer,
@@ -219,7 +199,6 @@ class FakeXPGraphicsAPI:
             refcon=refCon,
             dpg_window_id=dpg_window_id,
             drawlist_id=drawlist_id,
-            geom_applied=False,
         )
 
         self._windows_ex[wid] = info
@@ -246,13 +225,12 @@ class FakeXPGraphicsAPI:
         )
 
     def getWindowGeometry(self, wid: XPLMWindowID) -> tuple[int, int, int, int]:
-        self._require_context()
-
         info = self._windows_ex.get(wid)
         if info is None:
             raise RuntimeError(f"Invalid window ID: {wid}")
 
-        return info.geometry
+        # XP authoritative frame rect
+        return info.frame
 
     def setWindowGeometry(
         self,
@@ -262,37 +240,16 @@ class FakeXPGraphicsAPI:
         right: int,
         bottom: int,
     ) -> None:
+
         info = self._windows_ex.get(windowID)
         if info is None:
             raise RuntimeError(f"Invalid window ID: {windowID}")
 
-        info.geometry = (left, top, right, bottom)
-
-        width = max(1, right - left)
-        height = max(1, top - bottom)
-
-        self.xp.enqueue_dpg(
-            DPGOp.CONFIGURE_ITEM,
-            args=(info.dpg_window_id,),
-            kwargs=dict(
-                pos=(left, bottom),
-                width=width,
-                height=height,
-            ),
-        )
-
-        self.xp.enqueue_dpg(
-            DPGOp.CONFIGURE_ITEM,
-            args=(info.drawlist_id,),
-            kwargs=dict(
-                width=width,
-                height=height,
-            ),
-        )
+        # Update XP authoritative frame rect
+        info.frame = (left, top, right, bottom)
+        info.dirty_xp_to_dpg = True
 
     def getWindowRefCon(self, windowID: XPLMWindowID):
-        self._require_context()
-
         info = self._windows_ex.get(windowID)
         if info is None:
             raise RuntimeError(f"Invalid window ID: {windowID}")
@@ -300,8 +257,6 @@ class FakeXPGraphicsAPI:
         return info.refcon
 
     def setWindowRefCon(self, windowID: XPLMWindowID, refCon) -> None:
-        self._require_context()
-
         info = self._windows_ex.get(windowID)
         if info is None:
             raise RuntimeError(f"Invalid window ID: {windowID}")
@@ -309,16 +264,12 @@ class FakeXPGraphicsAPI:
         info.refcon = refCon
 
     def takeKeyboardFocus(self, windowID: XPLMWindowID) -> None:
-        self._require_context()
-
         if windowID not in self._windows_ex:
             raise RuntimeError(f"Invalid window ID: {windowID}")
 
         self._keyboard_focus_window = windowID
 
     def setWindowIsVisible(self, windowID: XPLMWindowID, visible: int) -> None:
-        self._require_context()
-
         info = self._windows_ex.get(windowID)
         if info is None:
             raise RuntimeError(f"Invalid window ID: {windowID}")
@@ -332,8 +283,6 @@ class FakeXPGraphicsAPI:
         )
 
     def getWindowIsVisible(self, windowID: XPLMWindowID) -> int:
-        self._require_context()
-
         info = self._windows_ex.get(windowID)
         if info is None:
             raise RuntimeError(f"Invalid window ID: {windowID}")
@@ -371,10 +320,14 @@ class FakeXPGraphicsAPI:
             raise RuntimeError("drawString outside draw phase")
 
         win = self._current_window_ex
-        left, top, right, bottom = win.geometry
+        left, top, right, bottom = win.frame  # authoritative XP frame rect
 
+        # XP → window-local DPG coords
         local_x = x - left
-        local_y = (top - y) - 12  # baseline correction
+        local_y = top - y  # XP origin at top-left, DPG at top-left
+
+        # Optional baseline correction (DPG draws from top-left of glyph box)
+        local_y -= 12
 
         r = int(color[0] * 255)
         g = int(color[1] * 255)
@@ -443,8 +396,9 @@ class FakeXPGraphicsAPI:
             raise RuntimeError("drawTranslucentDarkBox outside draw phase")
 
         win = self._current_window_ex
-        w_left, w_top, w_right, w_bottom = win.geometry
+        w_left, w_top, w_right, w_bottom = win.frame  # authoritative XP frame rect
 
+        # XP → window-local DPG coordinates
         local_left = left - w_left
         local_top = w_top - top
         local_right = right - w_left
@@ -465,15 +419,11 @@ class FakeXPGraphicsAPI:
     # SCREEN + MOUSE (XP API) — IMMEDIATE QUERIES
     # ----------------------------------------------------------------------
     def getScreenSize(self) -> Tuple[int, int]:
-        self._require_context()
-        self._require_layout()
         return (
             self.xp.dpg_get_viewport_client_height(),
             self.xp.dpg_get_viewport_client_height(),
         )
 
     def getMouseLocation(self) -> Tuple[int, int]:
-        self._require_context()
-        self._require_layout()
         x, y = self.xp.dpg_get_mouse_pos()
         return int(x), int(y)

@@ -152,19 +152,6 @@ class FakeXP(
 
         bind_xp_constants(self.xp)
 
-        # Bind subsystem public APIs into xp.*
-        for subsystem in (
-                FakeXPDataRef,
-                FakeXPWidget,
-                FakeXPGraphics,
-                FakeXPFlightLoop,
-                FakeXPUtilities,
-        ):
-            for name in getattr(subsystem, "public_api_names", []):
-                assert hasattr(self, name), f"Missing {subsystem} xp API method: {name}"
-                fn = getattr(self, name)
-                setattr(self.xp, name, fn)
-
         # ------------------------------------------------------------------
         # Create the SimlessRunner
         # ------------------------------------------------------------------
