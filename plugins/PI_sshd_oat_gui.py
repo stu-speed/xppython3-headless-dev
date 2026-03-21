@@ -60,12 +60,12 @@ class PythonInterface:
             self._create_quit_button()
 
     def _create_window(self):
-        left = 100
-        label_right = 480
-        window_right = label_right + 10  # 10 px wider than temp display
+        left = 40
+        label_right = 400
+        window_right = label_right + 20  # 10 px wider than temp display
 
         top = 700
-        bottom = 500
+        bottom = 460
 
         self.win = xp.createWidget(
             left, top,
@@ -90,8 +90,8 @@ class PythonInterface:
     def _create_oat_controls(self):
         # Caption above OAT slider
         xp.createWidget(
-            110, 670,   # left, top
-            490, 650,   # right, bottom (20px tall caption)
+            60, 670,   # left, top
+            340, 650,   # right, bottom (20px tall caption)
             1,
             "Adjust Outside Air Temperature (°C)",
             0,
@@ -104,8 +104,8 @@ class PythonInterface:
 
         # OAT slider
         self.slider = xp.createWidget(
-            110, 640,   # left, top
-            390, 610,   # right, bottom (30px tall slider)
+            60, 640,   # left, top
+            360, 610,   # right, bottom (30px tall slider)
             1,
             "",
             0,
@@ -120,8 +120,8 @@ class PythonInterface:
 
         # OAT label to the right of slider
         self.slider_label = xp.createWidget(
-            400, 640,   # left, top
-            480, 610,   # right, bottom
+            370, 640,   # left, top
+            400, 610,   # right, bottom
             1,
             f"{oat_value}°C",
             0,
@@ -146,8 +146,8 @@ class PythonInterface:
     def _create_bus_controls(self):
         # Caption above bus slider
         xp.createWidget(
-            110, 580,
-            490, 560,
+            60, 580,
+            360, 560,
             1,
             "Adjust Avionics Bus Voltage (Volts)",
             0,
@@ -157,8 +157,8 @@ class PythonInterface:
 
         # Bus slider
         self.bus_slider = xp.createWidget(
-            110, 550,
-            390, 520,
+            60, 550,
+            360, 520,
             1,
             "",
             0,
@@ -173,8 +173,8 @@ class PythonInterface:
 
         # Bus label to the right of slider
         self.bus_label = xp.createWidget(
-            400, 550,
-            480, 520,
+            370, 550,
+            400, 520,
             1,
             "0 V",
             0,
@@ -198,8 +198,8 @@ class PythonInterface:
 
     def _create_quit_button(self):
         self.quit_btn = xp.createWidget(
-            110, 500,
-            260, 570,
+            60, 500,
+            100, 470,
             1,
             "Quit",
             0,
