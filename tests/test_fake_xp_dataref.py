@@ -1,17 +1,12 @@
 # tests/test_fake_xp_dataref.py
 
-import pytest
 from typing import List
+
+import pytest
 
 import XPPython3
 from simless.libs.fake_xp import FakeXP
-from simless.libs.fake_xp_types import (
-    Type_Unknown,
-    Type_Float,
-    Type_Int,
-    Type_Data,
-)
-from simless.libs.fake_xp_types import FakeDataRef
+from simless.libs.fake_xp_types import FakeDataRef, Type_Data, Type_Int, Type_Unknown
 from sshd_extensions.dataref_manager import DRefType
 
 
@@ -29,6 +24,7 @@ def update_dataref():
     Test-only helper that coerces dummy FakeDataRef fields without promoting.
     Mirrors the semantics expected by test_update_dummy_ref_validation.
     """
+
     def _update(ref, *, dtype=None, size=None, value=None):
         if not ref.is_dummy:
             raise RuntimeError("update_dataref only valid for dummy refs")

@@ -1,10 +1,16 @@
+# simless/libs/fake_xp_types.py
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import auto, StrEnum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sshd_extensions.dataref_manager import DRefType
-from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetPropertyID
+from XPPython3.xp_typing import (
+    XPLMCursorStatus, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer,
+    XPWidgetClass, XPWidgetID, XPWidgetPropertyID
+)
 
 # XPLM data type bitmask constants
 Type_Unknown = 0
@@ -16,6 +22,11 @@ Type_IntArray = 16
 Type_Data = 32
 
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
+
+
+class XPShutdown(Exception):
+    """Raised when DearPyGui is no longer running (viewport closed)."""
+    pass
 
 
 @dataclass(slots=True)
@@ -76,58 +87,335 @@ class FakeDataRef:
         return not self.type_known or not self.shape_known
 
 
-@dataclass
+@dataclass(slots=True)
 class WidgetInfo:
-    """Authoritative record for a single XPWidget.
+    """
+    Authoritative record for a single XPWidget.
 
-    This dataclass represents the complete, XP‑semantic and XP-geometry state of a widget.
-    It is the single source of truth for widget identity, hierarchy, geometry,
-    visibility, properties, and callbacks.
+    GEOMETRY DOMAINS
+    ----------------
 
-    DearPyGui‑specific fields are included only as opaque handles for a
-    rendering backend. They are never interpreted or mutated by the XP
-    widget API layer.
+    1. XP GEOMETRY (authoritative)
+       geometry = (left, top, right, bottom)
+       • XP‑semantic rectangle.
+       • Local to the WindowEx client area.
+       • Origin at top-left, Y increases downward.
+       • This is what plugins read/write.
 
-    Attributes:
-        wid: Unique XPWidget identifier.
-        widget_class: XPWidgetClass enum value describing the widget type.
-        parent: Parent widget ID, or XPWidgetID(0) if this widget is a root.
-        descriptor: Human‑readable descriptor string (label, caption, etc.).
-        geometry: Global XP screen‑space geometry as (x, top, width, height).
-        visible: Whether the widget is currently visible.
-        properties: Mapping of XPWidgetPropertyID to property values.
-        callbacks: List of registered XPWidget callbacks.
+    2. DPG CONTAINER GEOMETRY (derived)
+       container_geom_applied = (lx, ly, width, height)
+       • Geometry last applied to the DPG child_window.
+       • Derived from XP geometry + parent XP geometry.
+       • Used to enforce “apply exactly once”.
 
-        dpg_id: Internal DearPyGui item ID for this widget, if any.
-        container_id: DearPyGui child_window container ID for controls;
-            for XP windows, this is equal to dpg_id.
+    3. DPG WINDOW GEOMETRY (derived)
+       geom_applied = bool
+       • Whether the DPG window/control geometry has been applied.
 
-        geom_applied: Whether the current geometry has been applied by the
-            rendering backend.
-        container_geom_applied: Last applied container geometry as
-            (local_x, local_y, width, height), or None if not applied.
+    BACKEND OBJECTS
+    ---------------
+    dpg_id:
+        The DPG item representing the actual control (text, button, slider, etc.)
 
-        edit_buffer: Temporary text buffer for editable widgets such as
-            text fields.
+    container_id:
+        The DPG child_window used for absolute positioning.
+        All controls live inside this container.
+
+    These backend handles are created by _ensure_dpg_item_for_widget()
+    and destroyed by killWidget() or destroyWindow().
     """
 
-    # XP authoritative state
+    # XP identity and hierarchy
     wid: XPWidgetID
     widget_class: XPWidgetClass
-    parent: XPWidgetID
-    descriptor: str
-    geometry: Tuple[int, int, int, int]
+    geometry: Tuple[int, int, int, int]  # XP geometry
+
+    parent: Optional[XPWidgetID] = None
+    children: list[XPWidgetID] = field(default_factory=list)
+    descriptor: str = ""
     visible: bool = True
-    properties: Dict[XPWidgetPropertyID, Any] = field(default_factory=dict)
-    callbacks: List[XPWidgetCallback] = field(default_factory=list)
 
-    # DearPyGui representation (internal only)
-    dpg_id: Optional[int] = None
-    container_id: Optional[int] = None
+    # Backend handles (DPG)
+    dpg_id: Optional[str] = None
+    container_id: Optional[str] = None
 
-    # Geometry lifecycle
+    # DPG geometry state
     geom_applied: bool = False
     container_geom_applied: Optional[Tuple[int, int, int, int]] = None
 
+    # XPWidget properties and callbacks
+    properties: Dict[XPWidgetPropertyID, Any] = field(default_factory=dict)
+    callbacks: List[XPWidgetCallback] = field(default_factory=list)
+
     # Interaction state
     edit_buffer: Optional[str] = None
+
+    # XP geometry helpers
+    @property
+    def left(self) -> int: return self.geometry[0]
+    @property
+    def top(self) -> int: return self.geometry[1]
+    @property
+    def right(self) -> int: return self.geometry[2]
+    @property
+    def bottom(self) -> int: return self.geometry[3]
+    @property
+    def width(self) -> int: return max(0, self.right - self.left)
+    @property
+    def height(self) -> int: return max(0, self.bottom - self.top)
+
+
+@dataclass(slots=True)
+class WindowExInfo:
+    """
+    Graphics-owned representation of an XPLM WindowEx window.
+
+    This is NOT a widget and does not participate in XPWidgets directly.
+    It owns a retained-mode widget tree that is rendered inside this window.
+    """
+
+    # ------------------------------------------------------------------
+    # XP-visible identity and geometry
+    # ------------------------------------------------------------------
+    wid: XPLMWindowID
+    frame: Tuple[int, int, int, int]
+    client: Tuple[int, int, int, int]
+
+    visible: bool
+    decoration: XPLMWindowDecoration
+    layer: XPLMWindowLayer
+
+    # ------------------------------------------------------------------
+    # XP callback hooks (verbatim, no wrapping)
+    # ------------------------------------------------------------------
+    draw_cb: Optional[Callable[[XPLMWindowID, Any], None]]
+    click_cb: Optional[
+        Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+    ]
+    right_click_cb: Optional[
+        Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+    ]
+    key_cb: Optional[
+        Callable[[XPLMWindowID, int, int, int, Any, int], int]
+    ]
+    cursor_cb: Optional[
+        Callable[[XPLMWindowID, int, int, Any], XPLMCursorStatus]
+    ]
+    wheel_cb: Optional[
+        Callable[[XPLMWindowID, int, int, int, int, Any], int]
+    ]
+    refcon: Any
+
+    # ------------------------------------------------------------------
+    # Graphics backend ownership (DearPyGui)
+    # ------------------------------------------------------------------
+    dpg_window_id: int | str
+    drawlist_id: int | str
+
+    # ------------------------------------------------------------------
+    # XP ↔ DPG geometry state
+    # ------------------------------------------------------------------
+    dirty_xp_to_dpg: bool = True
+    dirty_dpg_to_xp: bool = False
+
+    # ------------------------------------------------------------------
+    # Widget tree (retained-mode UI inside this WindowEx)
+    # ------------------------------------------------------------------
+    widget_root: Optional[XPWidgetID] = None
+    widgets: Dict[XPWidgetID, WidgetInfo] = field(default_factory=dict)
+
+    # ------------------------------------------------------------------
+    # Frame geometry helpers
+    # ------------------------------------------------------------------
+    @property
+    def left(self) -> int: return self.frame[0]
+
+    @property
+    def top(self) -> int: return self.frame[1]
+
+    @property
+    def right(self) -> int: return self.frame[2]
+
+    @property
+    def bottom(self) -> int: return self.frame[3]
+
+    @property
+    def width(self) -> int: return self.right - self.left
+
+    @property
+    def height(self) -> int: return self.top - self.bottom
+
+    def hit_test_frame(self, xp_x: int, xp_y: int) -> bool:
+        return (
+            self.left <= xp_x <= self.right
+            and self.bottom <= xp_y <= self.top
+        )
+
+    # ------------------------------------------------------------------
+    # Client geometry helpers
+    # ------------------------------------------------------------------
+    @property
+    def client_left(self) -> int: return self.client[0]
+
+    @property
+    def client_top(self) -> int: return self.client[1]
+
+    @property
+    def client_right(self) -> int: return self.client[2]
+
+    @property
+    def client_bottom(self) -> int: return self.client[3]
+
+    def hit_test_client(self, xp_x: int, xp_y: int) -> bool:
+        return (
+            self.client_left <= xp_x <= self.client_right
+            and self.client_bottom <= xp_y <= self.client_top
+        )
+
+    # ------------------------------------------------------------------
+    # XP → DPG transforms (window‑local)
+    # ------------------------------------------------------------------
+    def xp_to_window_dpg(self, xp_x: int, xp_y: int) -> tuple[int, int]:
+        """Convert XP screen coords to DPG coords local to this window."""
+        dpg_x = xp_x - self.left
+        dpg_y = self.top - xp_y
+        return dpg_x, dpg_y
+
+
+class EventKind(StrEnum):
+    MOUSE_BUTTON = "mouse_button"
+    MOUSE_WHEEL = "mouse_wheel"
+    CURSOR = "cursor"
+    KEY = "key"
+
+
+@dataclass(slots=True)
+class EventInfo:
+    """Normalized input event with explicit XP coordinates.
+
+    XP semantics are authoritative.
+    Backend coordinates may be provided only for normalization.
+    """
+
+    # ------------------------------------------------------------------
+    # Event identity
+    # ------------------------------------------------------------------
+    kind: EventKind
+
+    # ------------------------------------------------------------------
+    # XP screen-space coordinates (authoritative)
+    #
+    # Origin: bottom-left
+    # Y increases upward
+    # ------------------------------------------------------------------
+    xp_x: Optional[int] = None
+    xp_y: Optional[int] = None
+
+    # ------------------------------------------------------------------
+    # Mouse button
+    # ------------------------------------------------------------------
+    state: Optional[str] = None  # "down" | "up"
+    button: Optional[int] = None
+    right: bool = False
+
+    # ------------------------------------------------------------------
+    # Mouse wheel
+    # ------------------------------------------------------------------
+    wheel: Optional[int] = None
+    clicks: Optional[int] = None
+
+    # ------------------------------------------------------------------
+    # Keyboard
+    # ------------------------------------------------------------------
+    key: Optional[int] = None
+    flags: Optional[int] = None
+    vKey: Optional[int] = None
+
+    # ------------------------------------------------------------------
+    # Backend passthrough (unused by XP semantics)
+    # ------------------------------------------------------------------
+    user_data: Any = None
+
+    # ------------------------------------------------------------------
+    # Constructors
+    # ------------------------------------------------------------------
+    @classmethod
+    def from_xp(
+        cls,
+        *,
+        kind: EventKind,
+        xp_x: Optional[int] = None,
+        xp_y: Optional[int] = None,
+        **kwargs,
+    ) -> "EventInfo":
+        """Create an EventInfo with explicit XP coordinates."""
+        return cls(kind=kind, xp_x=xp_x, xp_y=xp_y, **kwargs)
+
+    @classmethod
+    def from_dpg(
+        cls,
+        *,
+        kind: EventKind,
+        dpg_x: int,
+        dpg_y: int,
+        dpg_vp_height: int,
+        **kwargs,
+    ) -> "EventInfo":
+        """Create an EventInfo from DearPyGui coordinates.
+
+        Converts DPG (top-left origin) to XP (bottom-left origin).
+        """
+        return cls(
+            kind=kind,
+            xp_x=int(dpg_x),
+            xp_y=int(dpg_vp_height - dpg_y),
+            **kwargs,
+        )
+
+
+class DPGOp(StrEnum):
+    """Deferred DearPyGui mutation operations."""
+
+    # --------------------------------------------------
+    # Drawing
+    # --------------------------------------------------
+    DRAW_TEXT = auto()
+    DRAW_RECTANGLE = auto()
+
+    # --------------------------------------------------
+    # Containers / widgets
+    # --------------------------------------------------
+    ADD_DRAWLIST = auto()
+    ADD_WINDOW = auto()
+    ADD_CHILD_WINDOW = auto()
+    ADD_TEXT = auto()
+    ADD_INPUT_TEXT = auto()
+    ADD_SLIDER_INT = auto()
+    ADD_BUTTON = auto()
+
+    # --------------------------------------------------
+    # Item mutation
+    # --------------------------------------------------
+    CONFIGURE_ITEM = auto()
+    SET_VALUE = auto()
+    SHOW_ITEM = auto()
+    HIDE_ITEM = auto()
+    DELETE_ITEM = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class DPGCommand:
+    """Deferred DearPyGui operation.
+
+    Recorded during XP callbacks.
+    Executed during frame replay only.
+    """
+
+    op: DPGOp
+
+    # Routing
+    target_drawlist: Optional[int] = None  # None for non-draw ops
+
+    # Positional + keyword arguments for the DPG call
+    args: Tuple[Any, ...] = field(default_factory=tuple)
+    kwargs: Dict[str, Any] = field(default_factory=dict)

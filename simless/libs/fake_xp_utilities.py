@@ -14,14 +14,6 @@ class FakeXPUtilities:
     Provides XPUtilities-like helper functions.
     """
 
-    # Only include methods actually defined in this file
-    public_api_names = [
-        "speakString",
-        "getSystemPath",
-        "getPrefsPath",
-        "getDirectorySeparator",
-    ]
-
     def _init_utilities(self) -> None:
         # Stateless subsystem
         pass

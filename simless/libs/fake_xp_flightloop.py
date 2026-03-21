@@ -55,14 +55,6 @@ class FakeXPFlightLoop:
     """
     xp: FakeXPInterface  # established in FakeXP
 
-    public_api_names = [
-        "createFlightLoop",
-        "destroyFlightLoop",
-        "scheduleFlightLoop",
-        "unscheduleFlightLoop",
-        "getNextFlightLoopCallbackTime",
-    ]
-
     # ------------------------------------------------------------------
     # Initialization
     # ------------------------------------------------------------------

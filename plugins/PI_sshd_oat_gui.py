@@ -60,17 +60,25 @@ class PythonInterface:
             self._create_quit_button()
 
     def _create_window(self):
+        left = 40
+        label_right = 400
+        window_right = label_right + 20  # 10 px wider than temp display
+
+        top = 700
+        bottom = 460
+
         self.win = xp.createWidget(
-            100, 500, 650, 240,
+            left, top,
+            window_right, bottom,
             1,
             "Simless OAT Control",
             1,
             0,
             xp.WidgetClass_MainWindow,
         )
+
         xp.setWidgetProperty(self.win, xp.Property_MainWindowHasCloseBoxes, 1)
 
-        # Window handler only handles close box
         def window_handler(msg, widget, p1, p2):
             if msg == xp.Message_CloseButtonPushed:
                 xp.hideWidget(self.win)
@@ -80,8 +88,10 @@ class PythonInterface:
         xp.addWidgetCallback(self.win, window_handler)
 
     def _create_oat_controls(self):
+        # Caption above OAT slider
         xp.createWidget(
-            120, 460, 480, 430,
+            60, 670,   # left, top
+            340, 650,   # right, bottom (20px tall caption)
             1,
             "Adjust Outside Air Temperature (°C)",
             0,
@@ -92,8 +102,10 @@ class PythonInterface:
         oat_value = 10
         xp.setDataf(self.oat_handle, oat_value)
 
+        # OAT slider
         self.slider = xp.createWidget(
-            120, 420, 480, 380,
+            60, 640,   # left, top
+            360, 610,   # right, bottom (30px tall slider)
             1,
             "",
             0,
@@ -106,8 +118,10 @@ class PythonInterface:
         xp.setWidgetProperty(self.slider, xp.Property_ScrollBarPageAmount, 1)
         xp.setWidgetProperty(self.slider, xp.Property_ScrollBarSliderPosition, oat_value)
 
+        # OAT label to the right of slider
         self.slider_label = xp.createWidget(
-            500, 420, 620, 380,
+            370, 640,   # left, top
+            400, 610,   # right, bottom
             1,
             f"{oat_value}°C",
             0,
@@ -130,8 +144,10 @@ class PythonInterface:
         xp.addWidgetCallback(self.slider, oat_slider_handler)
 
     def _create_bus_controls(self):
+        # Caption above bus slider
         xp.createWidget(
-            120, 360, 480, 330,
+            60, 580,
+            360, 560,
             1,
             "Adjust Avionics Bus Voltage (Volts)",
             0,
@@ -139,8 +155,10 @@ class PythonInterface:
             xp.WidgetClass_Caption,
         )
 
+        # Bus slider
         self.bus_slider = xp.createWidget(
-            120, 320, 480, 280,
+            60, 550,
+            360, 520,
             1,
             "",
             0,
@@ -153,8 +171,10 @@ class PythonInterface:
         xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollBarPageAmount, 1)
         xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollBarSliderPosition, 0)
 
+        # Bus label to the right of slider
         self.bus_label = xp.createWidget(
-            500, 320, 620, 280,
+            370, 550,
+            400, 520,
             1,
             "0 V",
             0,
@@ -168,7 +188,7 @@ class PythonInterface:
                 pos = xp.getWidgetProperty(self.bus_slider, xp.Property_ScrollBarSliderPosition)
                 volts = int(pos)
                 xp.setWidgetDescriptor(self.bus_label, f"{volts} V")
-                xp.showWidget(self.slider_label)
+                xp.showWidget(self.bus_label)
 
                 xp.setDatavf(self.bus_array_handle, [float(volts)], 1, 1)
                 return 1
@@ -178,7 +198,8 @@ class PythonInterface:
 
     def _create_quit_button(self):
         self.quit_btn = xp.createWidget(
-            120, 280, 260, 240,
+            60, 500,
+            100, 470,
             1,
             "Quit",
             0,

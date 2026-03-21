@@ -15,6 +15,7 @@
 import pytest
 import types
 import XPPython3
+import dearpygui.dearpygui as dpg
 
 from sshd_extensions.dataref_manager import DRefType
 
@@ -29,6 +30,17 @@ def reset_xp():
         XPPython3.xp = FakeXP(...)
     """
     XPPython3.xp = None
+
+
+@pytest.fixture(autouse=True)
+def teardown_dpg():
+    yield
+    # Ensure DPG is fully torn down between tests
+    try:
+        dpg.destroy_context()
+    except Exception:
+        pass
+
 
 
 @pytest.fixture

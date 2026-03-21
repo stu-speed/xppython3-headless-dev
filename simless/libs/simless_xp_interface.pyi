@@ -17,11 +17,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, Protocol, runtime_checkable, Sequence
+from typing import Any, Callable, Protocol, runtime_checkable, Sequence, Tuple, Optional
 
 from simless.libs.fake_xp_types import FakeDataRef
 from simless.libs.runner import SimlessRunner
-from sshd_extensions.dataref_manager import DRefType
 from XPPython3.xp_typing import (
     XPDispatchMode,
     XPElementStyle,
@@ -76,6 +75,7 @@ DataRefInfo = XPLMDataRefInfo_t | FakeDataRef
 # Flight loop callback type (XP11 legacy signature)
 # ===========================================================================
 FlightLoopCallback = Callable[[float, float, int, Any], float]
+
 
 # ===========================================================================
 # SimlessXPInterface Protocol
@@ -712,8 +712,6 @@ class SimlessXPInterface(Protocol):
         widget_class: XPWidgetClass,
     ) -> XPWidgetID: ...
 
-    def killWidget(self, wid: XPWidgetID) -> None: ...
-
     def destroyWidget(self, wid: XPWidgetID, destroy_children: int = 1) -> None: ...
 
     def setWidgetGeometry(
@@ -792,6 +790,57 @@ class SimlessXPInterface(Protocol):
     # ------------------------------------------------------------------
     # Graphics
     # ------------------------------------------------------------------
+    def createWindowEx(
+        self,
+        left: int = 100,
+        top: int = 200,
+        right: int = 200,
+        bottom: int = 100,
+        visible: int = 0,
+        draw: Optional[Callable[[XPLMWindowID, Any], None]] = None,
+        click: Optional[
+            Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+        ] = None,
+        key: Optional[
+            Callable[[XPLMWindowID, int, int, int, Any, int], int]
+        ] = None,
+        cursor: Optional[
+            Callable[[XPLMWindowID, int, int, Any], XPLMCursorStatus]
+        ] = None,
+        wheel: Optional[
+            Callable[[XPLMWindowID, int, int, int, int, Any], int]
+        ] = None,
+        refCon: Any = None,
+        decoration: XPLMWindowDecoration = None,
+        layer: XPLMWindowLayer = None,
+        rightClick: Optional[
+            Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+        ] = None,
+    ) -> XPLMWindowID: ...
+
+    def destroyWindow(self, wid: XPLMWindowID) -> None: ...
+
+    def getWindowGeometry(self, wid: XPLMWindowID) -> Tuple[int, int, int, int]: ...
+
+    def setWindowGeometry(
+        self,
+        windowID: XPLMWindowID,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+    ) -> None: ...
+
+    def getWindowRefCon(self, windowID: XPLMWindowID): ...
+
+    def setWindowRefCon(self, windowID: XPLMWindowID, refCon) -> None: ...
+
+    def takeKeyboardFocus(self, windowID: XPLMWindowID) -> None: ...
+
+    def setWindowIsVisible(self, windowID: XPLMWindowID, visible: int) -> None: ...
+
+    def getWindowIsVisible(self, windowID: XPLMWindowID) -> int: ...
+
     def registerDrawCallback(
         self,
         callback: Callable[[XPLMDrawingPhase, int, Any], int],
@@ -842,6 +891,8 @@ class SimlessXPInterface(Protocol):
 
     def deleteTexture(self, textureID: XPLMTextureID) -> None: ...
 
+    def drawTranslucentDarkBox(self, left: int, top: int, right: int, bottom: int) -> None: ...
+
     # ------------------------------------------------------------------
     # Screen / mouse
     # ------------------------------------------------------------------
@@ -857,56 +908,3 @@ class SimlessXPInterface(Protocol):
     def getPrefsPath(self) -> str: ...
 
     def getDirectorySeparator(self) -> str: ...
-
-    # ------------------------------------------------------------------
-    # Simless-only helpers (FakeXP test/runner utilities)
-    # ------------------------------------------------------------------
-    def bind_dataref_manager(self, mgr: Any) -> None: ...
-
-    def update_dataref(
-        self,
-        ref: FakeDataRef,
-        dtype: Optional[DRefType] = None,
-        size: Optional[int] = None,
-        writable: Optional[bool] = None,
-        value: Optional[Any] = None,
-    ) -> FakeDataRef: ...
-
-    def add_handle(self, name: str, ref: FakeDataRef) -> None: ...
-
-    def get_handle(self, name: str) -> Optional[FakeDataRef]: ...
-
-    def del_handle(self, name) -> None: ...
-
-    def all_handle_paths(self) -> list[str]: ...
-
-    def all_handles(self) -> list[FakeDataRef]: ...
-
-    def conform_dummy_to_value(
-        self,
-        ref: FakeDataRef,
-        value,
-        offset: int = 0,
-        count: int | None = None,
-    ) -> None: ...
-
-    def promote_shape_from_value(
-        self,
-        ref: FakeDataRef,
-        value: Any,
-    ) -> None: ...
-
-    def promote_type(
-        self,
-        ref: FakeDataRef,
-        dtype: DRefType,
-        writable: bool,
-    ) -> None: ...
-
-    def attach_handle_callback(self, cb: Optional[Callable[[FakeDataRef], None]]) -> None: ...
-
-    def detach_handle_callback(self) -> None: ...
-
-    def draw_frame(self) -> None: ...
-
-    def quit_runner(self) -> None: ...

@@ -1,7 +1,29 @@
-# simless/libs/fake_xp_constants.py
 # ===========================================================================
-# X‑Plane / XPPython3 constant names for simless execution.
-# Values are PLAUSIBLE PLACEHOLDERS, grouped by category.
+# FakeXP Constants — X‑Plane / XPPython3 constant names for simless execution
+#
+# ROLE
+#   Provide a flat namespace of SDK-shaped constant names expected by plugins.
+#   These constants mirror the identifiers defined by X‑Plane and
+#   XPPython3, but the numeric values here are PLAUSIBLE PLACEHOLDERS
+#   suitable only for simless execution.
+#
+# DESIGN PRINCIPLES
+#   - Names must match the real SDK exactly (xp.pyi).
+#   - Values are not authoritative; they exist only to satisfy plugin
+#     imports, comparisons, and switch logic during simless runs.
+#   - No classes, enums, or grouping structures — a flat module keeps
+#     imports simple and mirrors the real xp.* surface.
+#
+# USAGE
+#   - FakeXP bulk‑binds these names into the xp.* namespace at startup.
+#   - Plugins see xp.CONSTANT_NAME exactly as they would in X‑Plane.
+#   - Contributors may add new constants by defining additional module‑
+#     level names; no registration or binding code is required.
+#
+# NOTE
+#   This file is generated/maintained for compatibility only. The values
+#   do not correspond to real X‑Plane SDK numeric assignments and must
+#   never be used for real‑sim behavior or validation.
 # ===========================================================================
 
 from __future__ import annotations
