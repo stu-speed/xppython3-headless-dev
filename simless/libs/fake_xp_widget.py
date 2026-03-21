@@ -305,10 +305,6 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         for win in self.xp.all_windowex():
             for wid in win.widgets:
                 self._ensure_dpg_item_for_widget(wid)
-                g = self.xp.getWidgetGeometry(wid)
-                self.xp.log(f"[DBG] wid={wid} geom={g}")
-                info = self._require_widget(wid)
-                self.xp.log(f"[DBG] wid={wid} class={info.widget_class} parent={info.parent}")
 
         # 2. Normalize XP window geometry
         self._normalize_window_geometry_descendants()
@@ -374,10 +370,6 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         # Iterate per WindowEx (correct architecture)
         for win in self.xp.all_windowex():
             for wid, info in win.widgets.items():
-                self.xp.log(
-                    f"[NORMALIZE] wid={wid} new geometry={info.geometry}"
-                )
-
                 # Only normalize XP windows
                 if info.widget_class not in (
                         self.xp.WidgetClass_MainWindow,
@@ -535,9 +527,6 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     no_resize=False,
                     no_move=False,
                 ),
-            )
-            self.xp.log(
-                f"[REALIZE] window wid={wid} created with dummy pos=(0,0) size=200x100"
             )
 
             info.dpg_id = dpg_id
@@ -719,13 +708,6 @@ class FakeXPWidget(FakeXPWidgetsAPI):
 
         info = self._require_widget(wid)
 
-        self.xp.log(
-            f"[APPLY] wid={wid} class={info.widget_class} "
-            f"geom={info.geometry} "
-            f"container_id={info.container_id} dpg_id={info.dpg_id} "
-            f"geom_applied={info.geom_applied}"
-        )
-
         # Nothing to apply until DPG objects exist
         if info.container_id is None:
             return
@@ -745,11 +727,6 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                 raise RuntimeError(
                     f"_apply_geometry_if_needed: window wid={wid} has no dpg_id"
                 )
-
-            self.xp.log(
-                f"[APPLY-WINDOW] wid={wid} "
-                f"DPG pos=({left}, {top - height}) size=({width}x{height})"
-            )
 
             if not info.geom_applied:
                 # Queue, do not execute
