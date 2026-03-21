@@ -92,75 +92,77 @@ class WidgetInfo:
     """
     Authoritative record for a single XPWidget.
 
-    Geometry is stored in global XP screen coordinates as:
-        (left, top, right, bottom)
+    GEOMETRY DOMAINS
+    ----------------
 
-    Width and height are always derived; they are never stored.
+    1. XP GEOMETRY (authoritative)
+       geometry = (left, top, right, bottom)
+       • XP‑semantic rectangle.
+       • Local to the WindowEx client area.
+       • Origin at top-left, Y increases downward.
+       • This is what plugins read/write.
+
+    2. DPG CONTAINER GEOMETRY (derived)
+       container_geom_applied = (lx, ly, width, height)
+       • Geometry last applied to the DPG child_window.
+       • Derived from XP geometry + parent XP geometry.
+       • Used to enforce “apply exactly once”.
+
+    3. DPG WINDOW GEOMETRY (derived)
+       geom_applied = bool
+       • Whether the DPG window/control geometry has been applied.
+
+    BACKEND OBJECTS
+    ---------------
+    dpg_id:
+        The DPG item representing the actual control (text, button, slider, etc.)
+
+    container_id:
+        The DPG child_window used for absolute positioning.
+        All controls live inside this container.
+
+    These backend handles are created by _ensure_dpg_item_for_widget()
+    and destroyed by killWidget() or destroyWindow().
     """
 
-    # ------------------------------------------------------------------
-    # XP authoritative identity and hierarchy
-    # ------------------------------------------------------------------
+    # XP identity and hierarchy
     wid: XPWidgetID
     widget_class: XPWidgetClass
-    parent: XPWidgetID  # XPWidgetID(0) for root widgets
-    descriptor: str
+    geometry: Tuple[int, int, int, int]  # XP geometry
 
-    # ------------------------------------------------------------------
-    # XP authoritative geometry and visibility
-    # ------------------------------------------------------------------
-    geometry: Tuple[int, int, int, int]  # (left, top, right, bottom)
+    parent: Optional[XPWidgetID] = None
+    children: list[XPWidgetID] = field(default_factory=list)
+    descriptor: str = ""
     visible: bool = True
 
-    # ------------------------------------------------------------------
-    # XP widget properties and callbacks
-    # ------------------------------------------------------------------
-    properties: Dict[XPWidgetPropertyID, Any] = field(default_factory=dict)
-    callbacks: List[XPWidgetCallback] = field(default_factory=list)
+    # Backend handles (DPG)
+    dpg_id: Optional[str] = None
+    container_id: Optional[str] = None
 
-    # ------------------------------------------------------------------
-    # DearPyGui backend handles (opaque to XP layer)
-    # ------------------------------------------------------------------
-    dpg_id: Optional[int | str] = None
-    container_id: Optional[int | str] = None
-
-    # ------------------------------------------------------------------
-    # Geometry lifecycle tracking (backend-facing only)
-    # ------------------------------------------------------------------
+    # DPG geometry state
     geom_applied: bool = False
     container_geom_applied: Optional[Tuple[int, int, int, int]] = None
 
-    # ------------------------------------------------------------------
+    # XPWidget properties and callbacks
+    properties: Dict[XPWidgetPropertyID, Any] = field(default_factory=dict)
+    callbacks: List[XPWidgetCallback] = field(default_factory=list)
+
     # Interaction state
-    # ------------------------------------------------------------------
     edit_buffer: Optional[str] = None
 
-    # ------------------------------------------------------------------
-    # Derived geometry helpers (XP semantics)
-    # ------------------------------------------------------------------
+    # XP geometry helpers
     @property
-    def left(self) -> int:
-        return self.geometry[0]
-
+    def left(self) -> int: return self.geometry[0]
     @property
-    def top(self) -> int:
-        return self.geometry[1]
-
+    def top(self) -> int: return self.geometry[1]
     @property
-    def right(self) -> int:
-        return self.geometry[2]
-
+    def right(self) -> int: return self.geometry[2]
     @property
-    def bottom(self) -> int:
-        return self.geometry[3]
-
+    def bottom(self) -> int: return self.geometry[3]
     @property
-    def width(self) -> int:
-        return max(0, self.right - self.left)
-
+    def width(self) -> int: return max(0, self.right - self.left)
     @property
-    def height(self) -> int:
-        return max(0, self.top - self.bottom)
+    def height(self) -> int: return max(0, self.bottom - self.top)
 
 
 @dataclass(slots=True)
@@ -168,28 +170,15 @@ class WindowExInfo:
     """
     Graphics-owned representation of an XPLM WindowEx window.
 
-    This is NOT a widget and does not participate in XPWidgets.
-    It exists solely to define a drawable region and route callbacks.
+    This is NOT a widget and does not participate in XPWidgets directly.
+    It owns a retained-mode widget tree that is rendered inside this window.
     """
 
     # ------------------------------------------------------------------
     # XP-visible identity and geometry
     # ------------------------------------------------------------------
     wid: XPLMWindowID
-
-    # Desired XP-style frame rectangle (left, top, right, bottom).
-    # Always authoritative:
-    #   - XP sets it when XP wants to move/resize the window.
-    #   - DPG updates it when the user drags/resizes the window.
-    #   - XP→DPG apply uses it before render.
-    #   - DPG→XP read overwrites it after render.
-    #
-    # Initialized at window creation to the XP constructor geometry.
     frame: Tuple[int, int, int, int]
-
-    # Desired XP-style client rectangle (left, top, right, bottom).
-    # Defaults to the frame rect until the first DPG render produces
-    # a real drawlist rect. After that, updated every frame from DPG.
     client: Tuple[int, int, int, int]
 
     visible: bool
@@ -226,14 +215,14 @@ class WindowExInfo:
     # ------------------------------------------------------------------
     # XP ↔ DPG geometry state
     # ------------------------------------------------------------------
-
-    # XP→DPG: set True when XP changes geometry and wants DPG to apply it.
-    # Cleared AFTER DPG renders the frame.
     dirty_xp_to_dpg: bool = True
-
-    # DPG→XP: set True when DPG geometry differs from stored XP geometry.
-    # Cleared AFTER XP consumes the change.
     dirty_dpg_to_xp: bool = False
+
+    # ------------------------------------------------------------------
+    # Widget tree (retained-mode UI inside this WindowEx)
+    # ------------------------------------------------------------------
+    widget_root: Optional[XPWidgetID] = None
+    widgets: Dict[XPWidgetID, WidgetInfo] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Frame geometry helpers

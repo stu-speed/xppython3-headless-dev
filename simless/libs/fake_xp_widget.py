@@ -52,11 +52,11 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
-from simless.libs.fake_xp_types import DPGCommand, DPGOp, WidgetInfo
+from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo
 from simless.libs.fake_xp_widget_api import FakeXPWidgetsAPI
-from XPPython3.xp_typing import XPWidgetID
+from XPPython3.xp_typing import XPWidgetID, XPWidgetPropertyID
 
 
 class FakeXPWidget(FakeXPWidgetsAPI):
@@ -66,12 +66,10 @@ class FakeXPWidget(FakeXPWidgetsAPI):
 
     def _init_widgets(self) -> None:
         """Initialize all internal XPWidget bookkeeping structures."""
-        self._widgets: Dict[XPWidgetID, WidgetInfo] = {}
-
         self._z_order: List[XPWidgetID] = []
         self._focused_widget: Optional[XPWidgetID] = None
 
-        self._needs_redraw = True
+        self._widgets_dirty = True
         self._widgets_initialized = False
 
         self._next_id = 1
@@ -79,103 +77,359 @@ class FakeXPWidget(FakeXPWidgetsAPI):
     # -------------------------
     # helpers
     # -------------------------
+    def _get_widget(self, wid: XPWidgetID) -> WidgetInfo:
+        """
+        Fail-fast lookup for a widget.
+
+        - Ensures the widget belongs to a WindowEx
+        - Ensures the widget exists in that WindowEx
+        - Returns the WidgetInfo
+        - Never returns None
+        """
+        win = self._get_widget_windowex(wid)  # fail fast if not found
+
+        try:
+            info = win.widgets[wid]
+        except KeyError:
+            raise KeyError(f"Widget {wid} does not exist") from None
+
+        if info is None:
+            raise RuntimeError(f"Internal error: Widget {wid} mapped to None")
+
+        return info
+
+    def _get_widget_windowex(self, wid: XPWidgetID) -> WindowExInfo:
+        """
+        Return the WindowExInfo that owns the given widget.
+
+        Fail fast:
+        - If no WindowEx contains this widget, raise a clear exception.
+        """
+        for win in self.xp.all_windowex():
+            if wid in win.widgets:
+                return win
+
+        raise KeyError(f"Widget {wid} does not belong to any WindowEx")
+
+    def _update_widget(
+        self,
+        info: WidgetInfo,
+        *,
+        visible: bool | None = None,
+        descriptor: str | None = None,
+        prop: tuple[XPWidgetPropertyID, Any] | None = None,
+    ) -> None:
+        """
+        Centralized backend update helper.
+        - Updates the WidgetInfo object
+        - Enqueues only the backend commands needed for the specific change
+        - Marks widget layer dirty
+        """
+
+        xp = self.xp
+
+        # ------------------------------------------------------------
+        # Visibility
+        # ------------------------------------------------------------
+        if visible is not None:
+            info.visible = bool(visible)
+            if info.container_id is not None:
+                if info.visible:
+                    xp.enqueue_dpg(DPGOp.SHOW_ITEM, args=(info.container_id,))
+                else:
+                    xp.enqueue_dpg(DPGOp.HIDE_ITEM, args=(info.container_id,))
+
+        # ------------------------------------------------------------
+        # Descriptor
+        # ------------------------------------------------------------
+        if descriptor is not None:
+            info.descriptor = descriptor
+            if info.dpg_id is not None:
+                desc = descriptor or ""
+                if info.widget_class == xp.WidgetClass_TextField:
+                    xp.enqueue_dpg(
+                        DPGOp.SET_VALUE,
+                        args=(info.dpg_id,),
+                        kwargs=dict(value=desc.strip()),
+                    )
+                elif info.widget_class == xp.WidgetClass_Caption:
+                    xp.enqueue_dpg(
+                        DPGOp.SET_VALUE,
+                        args=(info.dpg_id,),
+                        kwargs=dict(value=desc),
+                    )
+                elif info.widget_class == xp.WidgetClass_Button:
+                    xp.enqueue_dpg(
+                        DPGOp.CONFIGURE_ITEM,
+                        args=(info.dpg_id,),
+                        kwargs=dict(label=desc),
+                    )
+
+        # ------------------------------------------------------------
+        # Scrollbar properties
+        # ------------------------------------------------------------
+        if prop is not None:
+            prop_id, new_val = prop
+            info.properties[prop_id] = new_val
+
+            if info.widget_class == xp.WidgetClass_ScrollBar and info.dpg_id is not None:
+                if prop_id == xp.Property_ScrollBarMin:
+                    xp.enqueue_dpg(
+                        DPGOp.CONFIGURE_ITEM,
+                        args=(info.dpg_id,),
+                        kwargs=dict(min_value=int(new_val)),
+                    )
+                elif prop_id == xp.Property_ScrollBarMax:
+                    xp.enqueue_dpg(
+                        DPGOp.CONFIGURE_ITEM,
+                        args=(info.dpg_id,),
+                        kwargs=dict(max_value=int(new_val)),
+                    )
+                elif prop_id == xp.Property_ScrollBarSliderPosition:
+                    xp.enqueue_dpg(
+                        DPGOp.SET_VALUE,
+                        args=(info.dpg_id,),
+                        kwargs=dict(value=int(new_val)),
+                    )
+
+        # ------------------------------------------------------------
+        # Mark widget layer dirty
+        # ------------------------------------------------------------
+        self._widgets_dirty = True
+
+    def _kill_widget(self, wid: XPWidgetID) -> None:
+        """
+        Destroy a widget and its entire subtree.
+
+        If this widget is the root of a WindowEx, destroy the entire WindowEx.
+        Structural only: backend deletions are queued, never executed directly.
+        """
+
+        # --------------------------------------------------------------
+        # 0. Detect if this widget is the WindowEx root
+        # --------------------------------------------------------------
+        win = self._get_widget_windowex(wid)
+        if win.widget_root == wid:
+            # Destroy ALL widgets in this WindowEx (including root)
+            for child_wid in list(win.widgets.keys()):
+                if child_wid != wid:
+                    self._kill_widget(child_wid)
+
+            # Remove root widget from registry
+            win.widgets.pop(wid, None)
+
+            # Now that the WindowEx has NO widgets, destroy the WindowEx
+            self.xp.destroyWindow(win.wid)
+            return
+
+        # --------------------------------------------------------------
+        # 1. Fail-fast: ensure widget exists
+        # --------------------------------------------------------------
+        info = self._get_widget(wid)
+
+        # --------------------------------------------------------------
+        # 2. Recursively destroy children
+        # --------------------------------------------------------------
+        for child_wid in list(info.children):
+            self._kill_widget(child_wid)
+
+        # --------------------------------------------------------------
+        # 3. Queue DPG deletions (never execute directly)
+        # --------------------------------------------------------------
+        if info.dpg_id is not None:
+            self.xp.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.dpg_id,))
+
+        if info.container_id is not None and info.container_id != info.dpg_id:
+            self.xp.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.container_id,))
+
+        # --------------------------------------------------------------
+        # 4. Remove from parent's children list
+        # --------------------------------------------------------------
+        if info.parent is not None:
+            parent_info = self._get_widget(info.parent)
+            try:
+                parent_info.children.remove(wid)
+            except ValueError:
+                raise RuntimeError(
+                    f"Internal error: parent {info.parent} does not list child {wid}"
+                )
+
+        # --------------------------------------------------------------
+        # 5. Remove from WindowEx registry
+        # --------------------------------------------------------------
+        win.widgets.pop(wid, None)
+
+        # --------------------------------------------------------------
+        # 6. Remove from z-order
+        # --------------------------------------------------------------
+        if wid in self._z_order:
+            self._z_order.remove(wid)
+
+        # --------------------------------------------------------------
+        # 7. Clear focus if needed
+        # --------------------------------------------------------------
+        if self._focused_widget == wid:
+            self._focused_widget = None
+
+        # --------------------------------------------------------------
+        # 8. Mark redraw
+        # --------------------------------------------------------------
+        self._widgets_dirty = True
 
     def map_widgets_to_dpg(self) -> None:
+        """
+        Structural realization + normalization pass.
+
+        Runs whenever `_widgets_initialized` is False. This occurs once before the
+        first frame and again whenever widgets are created dynamically.
+
+        Responsibilities:
+          - Realize all widgets by ensuring each has a DPG representation
+            (`_ensure_dpg_item_for_widget`), without applying geometry or backend
+            updates.
+          - Normalize XP window geometry so each window encloses all visible
+            descendants.
+          - Mark initialization complete.
+
+        Notes:
+          - This pass is structural only. Geometry and backend updates are applied
+            later during `_render_widgets()` when `_widgets_dirty` is True.
+          - Dynamic creation sets `_widgets_initialized = False`, causing this pass
+            to run again on the next frame.
+        """
+
         if self._widgets_initialized:
             return
 
-        for wid in self._widgets:
-            self._ensure_dpg_item_for_widget(wid)
+        # 1. Realize all widgets (per WindowEx)
+        for win in self.xp.all_windowex():
+            for wid in win.widgets:
+                self._ensure_dpg_item_for_widget(wid)
+                g = self.xp.getWidgetGeometry(wid)
+                self.xp.log(f"[DBG] wid={wid} geom={g}")
+                info = self._require_widget(wid)
+                self.xp.log(f"[DBG] wid={wid} class={info.widget_class} parent={info.parent}")
 
+        # 2. Normalize XP window geometry
         self._normalize_window_geometry_descendants()
 
+        # 3. Initialization complete
         self._widgets_initialized = True
+
+    def render_widget_frame(self) -> None:
+        """
+        Per-frame XPWidgets rendering pass.
+
+        Responsibilities:
+          - If `_widgets_dirty` is True, apply geometry, visibility, and any queued
+            backend updates via `_render_widgets()`.
+          - Always dispatch draw callbacks for each WindowEx root widget.
+            Draw callbacks may mutate widget state and set `_widgets_dirty` for the
+            *next* frame.
+          - Clear `_widgets_dirty` only after geometry/visibility updates have been
+            applied this frame.
+
+        Notes:
+          - This method never performs structural realization. That occurs in
+            `map_widgets_to_dpg()` when `_widgets_initialized` is False.
+          - Draw callbacks always run, even when no geometry changed, matching
+            X‑Plane’s rendering semantics.
+        """
+
+        # Apply geometry + visibility + backend updates (queued → flushed)
+        if self._widgets_dirty:
+            self._render_widgets()
+            self._widgets_dirty = False
+
+        # Dispatch draw callbacks for each WindowEx root
+        for win in self.xp.all_windowex():
+            root = win.widget_root
+            info = win.widgets.get(root)
+            if info and info.dpg_id is not None:
+                self._dispatch_draw(root)
+
+    # ------------------------------------------------------------------
+    # RENDERING
+    # ------------------------------------------------------------------
 
     def _normalize_window_geometry_descendants(self) -> None:
         """
         One-time XP compatibility pass.
 
-        After all widgets are created, expand each XP window (MainWindow or SubWindow)
-        to fully contain the bounding box of all *visible descendant widgets*.
+        Expand each XP window (MainWindow or SubWindow) to fully contain the
+        bounding box of all *visible descendant widgets*, using XP geometry:
 
-        This mimics real X-Plane behavior:
-        - Expansion happens once, post-creation
-        - Geometry is never auto-adjusted again
-        - User resizing and plugin-driven geometry changes are preserved
+            geometry = (left, top, right, bottom)
+            width  = right - left
+            height = top - bottom
         """
 
-        def iter_descendants(root: XPWidgetID):
-            for child_id, child in self._widgets.items():
+        def iter_descendants(win, root):
+            """Yield all descendant widget IDs inside this WindowEx."""
+            for child_id, child in win.widgets.items():
                 if child.parent == root:
                     yield child_id
-                    yield from iter_descendants(child_id)
+                    yield from iter_descendants(win, child_id)
 
-        for wid, info in self._widgets.items():
-            if info.widget_class not in (
-                    self.xp.WidgetClass_MainWindow,
-                    self.xp.WidgetClass_SubWindow,
-            ):
-                continue
-
-            left, top, right, bottom = info.geometry
-
-            max_right = right
-            min_bottom = bottom
-
-            for child_id in iter_descendants(wid):
-                if not self.isWidgetVisible(child_id):
-                    continue
-
-                child = self._widgets.get(child_id)
-                if child is None:
-                    continue
-
-                cleft, ctop, cright, cbottom = child.geometry
-                max_right = max(max_right, cright)
-                min_bottom = min(min_bottom, cbottom)
-
-            new_right = max_right
-            new_bottom = min_bottom
-
-            if new_right > right or new_bottom < bottom:
+        # Iterate per WindowEx (correct architecture)
+        for win in self.xp.all_windowex():
+            for wid, info in win.widgets.items():
                 self.xp.log(
-                    f"[Normalize] window wid={wid} "
-                    f"expanded from "
-                    f"{right - left}x{top - bottom} to "
-                    f"{new_right - left}x{top - new_bottom}"
+                    f"[NORMALIZE] wid={wid} new geometry={info.geometry}"
                 )
 
-                info.geometry = (left, top, new_right, new_bottom)
-                info.geom_applied = False
-                self._needs_redraw = True
+                # Only normalize XP windows
+                if info.widget_class not in (
+                        self.xp.WidgetClass_MainWindow,
+                        self.xp.WidgetClass_SubWindow,
+                ):
+                    continue
 
-    def render_widget_frame(self) -> None:
-        """
-        Apply XP geometry and dispatch draw callbacks.
+                # XP geometry: (left, top, right, bottom)
+                left, top, right, bottom = info.geometry
 
-        Clean A1 rules:
-        - Only run after widgets are created and DPG has rendered one frame.
-        - Apply geometry only when XP changes it.
-        - Never create windows here; only geometry updates.
-        """
+                # Initial extents are the window's own extents
+                max_right = right
+                min_bottom = bottom
 
-        if not self._needs_redraw:
-            return
+                # Walk all descendants inside this WindowEx
+                for child_id in iter_descendants(win, wid):
+                    if not self.isWidgetVisible(child_id):
+                        continue
 
-        self._render_widgets()
+                    child = win.widgets.get(child_id)
+                    if child is None:
+                        continue
 
-        # Dispatch draw callbacks for top-level XP windows
-        for wid, info in self._widgets.items():
-            if info.dpg_id is None:
-                continue
-            if info.parent == XPWidgetID(0):
-                self._dispatch_draw(wid)
+                    cleft, ctop, cright, cbottom = child.geometry
 
-        self._needs_redraw = False
+                    max_right = max(max_right, cright)
+                    min_bottom = min(min_bottom, cbottom)
 
-    # ------------------------------------------------------------------
-    # RENDERING
-    # ------------------------------------------------------------------
+                # Compute new window size (XP semantics)
+                old_w = right - left
+                old_h = top - bottom
+
+                new_w = max_right - left
+                new_h = top - min_bottom
+
+                if new_w > old_w or new_h > old_h:
+                    self.xp.log(
+                        f"[Normalize] window wid={wid} "
+                        f"expanded from {old_w}x{old_h} to {new_w}x{new_h}"
+                    )
+
+                    # Update XP geometry (structural only)
+                    info.geometry = (
+                        left,
+                        top,
+                        left + new_w,
+                        top - new_h,
+                    )
+
+                    # Force geometry to be re-applied next render pass
+                    info.geom_applied = False
+                    self._widgets_dirty = True
 
     def _compute_local_pos(self, wid: XPWidgetID) -> Tuple[int, int]:
         """
@@ -237,12 +491,16 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         """
         Ensure that a DearPyGui representation exists for the given XPWidget.
 
-        This performs immediate structural realization using the
-        xp.execute_dpg_command() helper. No commands are enqueued.
+        This performs *structural realization only* and queues all backend
+        operations via xp.enqueue_dpg(). No backend commands are executed
+        immediately.
+
+        Preconditions:
+          - XPWidget exists in its owning WindowEx
+          - Parent widgets must be realized before children
         """
-        info = self._widgets.get(wid)
-        if not info:
-            raise RuntimeError(f"_ensure_dpg_item_for_widget: unknown wid={wid}")
+
+        info = self._require_widget(wid)
 
         # Already realized?
         if info.dpg_id is not None:
@@ -265,20 +523,21 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         # XP WINDOWS → top-level DPG windows
         # ------------------------------------------------------------
         if is_window:
-            self.xp.execute_dpg_command(
-                DPGCommand(
-                    op=DPGOp.ADD_WINDOW,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        label=desc or "Window",
-                        width=200,
-                        height=100,
-                        no_scrollbar=True,
-                        no_collapse=True,
-                        no_resize=False,
-                        no_move=False,
-                    ),
-                )
+            xp.enqueue_dpg(
+                op=DPGOp.ADD_WINDOW,
+                kwargs=dict(
+                    tag=dpg_id,
+                    label=desc or "Window",
+                    width=200,
+                    height=100,
+                    no_scrollbar=True,
+                    no_collapse=True,
+                    no_resize=False,
+                    no_move=False,
+                ),
+            )
+            self.xp.log(
+                f"[REALIZE] window wid={wid} created with dummy pos=(0,0) size=200x100"
             )
 
             info.dpg_id = dpg_id
@@ -291,33 +550,31 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         # XP CONTROLS → child_window inside parent window
         # ------------------------------------------------------------
         parent_wid = info.parent
-        if parent_wid == XPWidgetID(0):
+        if parent_wid is None:
             raise RuntimeError(f"[Create] wid={wid} ERROR: control has no parent")
 
-        # Ensure parent exists first
+        # Ensure parent is realized first
         self._ensure_dpg_item_for_widget(parent_wid)
 
-        parent_info = self._widgets.get(parent_wid)
-        parent_container = parent_info.container_id if parent_info else None
+        parent_info = self._require_widget(parent_wid)
+        parent_container = parent_info.container_id
         if parent_container is None:
             raise RuntimeError(f"[Create] wid={wid} ERROR: parent container invalid")
 
         # Create container if needed
         if info.container_id is None:
-            self.xp.execute_dpg_command(
-                DPGCommand(
-                    op=DPGOp.ADD_CHILD_WINDOW,
-                    kwargs=dict(
-                        tag=container_id,
-                        parent=parent_container,
-                        width=200,
-                        height=100,
-                        no_scrollbar=True,
-                        border=False,
-                        autosize_x=False,
-                        autosize_y=False,
-                    ),
-                )
+            xp.enqueue_dpg(
+                op=DPGOp.ADD_CHILD_WINDOW,
+                kwargs=dict(
+                    tag=container_id,
+                    parent=parent_container,
+                    width=20,
+                    height=10,
+                    no_scrollbar=True,
+                    border=False,
+                    autosize_x=False,
+                    autosize_y=False,
+                ),
             )
             info.container_id = container_id
             info.container_geom_applied = None
@@ -326,23 +583,20 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         # Create actual control
         # ------------------------------------------------------------
         if wclass == xp.WidgetClass_Caption:
-            self.xp.execute_dpg_command(
-                DPGCommand(
-                    op=DPGOp.ADD_TEXT,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        default_value=desc.strip(),
-                        parent=info.container_id,
-                    ),
-                )
+            xp.enqueue_dpg(
+                op=DPGOp.ADD_TEXT,
+                kwargs=dict(
+                    tag=dpg_id,
+                    default_value=desc.strip(),
+                    parent=info.container_id,
+                ),
             )
 
         elif wclass == xp.WidgetClass_TextField:
             def _on_text(sender, app_data, user_data):
                 widget_id = XPWidgetID(user_data)
-                w = self._widgets.get(widget_id)
-                if w:
-                    w.edit_buffer = app_data
+                w = self._require_widget(widget_id)
+                w.edit_buffer = app_data
                 self.sendMessageToWidget(
                     widget_id,
                     xp.Msg_TextFieldChanged,
@@ -350,18 +604,16 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     app_data,
                 )
 
-            self.xp.execute_dpg_command(
-                DPGCommand(
-                    op=DPGOp.ADD_INPUT_TEXT,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        default_value=desc.strip(),
-                        parent=info.container_id,
-                        callback=_on_text,
-                        user_data=wid,
-                        no_spaces=True,
-                    ),
-                )
+            xp.enqueue_dpg(
+                op=DPGOp.ADD_INPUT_TEXT,
+                kwargs=dict(
+                    tag=dpg_id,
+                    default_value=desc.strip(),
+                    parent=info.container_id,
+                    callback=_on_text,
+                    user_data=wid,
+                    no_spaces=True,
+                ),
             )
 
         elif wclass == xp.WidgetClass_ScrollBar:
@@ -387,20 +639,18 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     new_pos,
                 )
 
-            self.xp.execute_dpg_command(
-                DPGCommand(
-                    op=DPGOp.ADD_SLIDER_INT,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        label=desc or "Slider",
-                        parent=info.container_id,
-                        min_value=min_v,
-                        max_value=max_v,
-                        default_value=cur_v,
-                        callback=_on_scroll,
-                        user_data=wid,
-                    ),
-                )
+            xp.enqueue_dpg(
+                op=DPGOp.ADD_SLIDER_INT,
+                kwargs=dict(
+                    tag=dpg_id,
+                    label=desc or "Slider",
+                    parent=info.container_id,
+                    min_value=min_v,
+                    max_value=max_v,
+                    default_value=cur_v,
+                    callback=_on_scroll,
+                    user_data=wid,
+                ),
             )
 
         elif wclass == xp.WidgetClass_Button:
@@ -413,64 +663,68 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     None,
                 )
 
-            self.xp.execute_dpg_command(
-                DPGCommand(
-                    op=DPGOp.ADD_BUTTON,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        label=desc,
-                        parent=info.container_id,
-                        callback=_on_button,
-                        user_data=wid,
-                    ),
-                )
+            xp.enqueue_dpg(
+                op=DPGOp.ADD_BUTTON,
+                kwargs=dict(
+                    tag=dpg_id,
+                    label=desc,
+                    parent=info.container_id,
+                    callback=_on_button,
+                    user_data=wid,
+                ),
             )
 
         else:
-            self.xp.execute_dpg_command(
-                DPGCommand(
-                    op=DPGOp.ADD_TEXT,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        default_value=desc or f"Widget {wid}",
-                        parent=info.container_id,
-                    ),
-                )
+            xp.enqueue_dpg(
+                op=DPGOp.ADD_TEXT,
+                kwargs=dict(
+                    tag=dpg_id,
+                    default_value=desc or f"Widget {wid}",
+                    parent=info.container_id,
+                ),
             )
 
         info.dpg_id = dpg_id
 
     def _render_widgets(self) -> None:
-        for wid in list(self._widgets.keys()):
-            info = self._widgets.get(wid)
-            if not info:
-                continue
+        """
+        Apply geometry and backend updates for all widgets in all WindowEx instances.
+        """
+        # Iterate per-window, because widgets now live inside WindowExInfo
+        for win in self.xp.all_windowex():
+            for wid, info in list(win.widgets.items()):
+                # Geometry is applied exactly once per change
+                self._apply_geometry_if_needed(wid)
 
-            # Ensure DPG items exist (creation is allowed here per existing design)
-            self._ensure_dpg_item_for_widget(wid)
-
-            # Apply geometry (implementation below preserves "apply exactly once" semantics)
-            self._apply_geometry_if_needed(wid)
-
-            # Apply visibility
-            self._apply_visibility(wid)
+                # Visibility is applied if changed
+                self._apply_visibility(wid)
 
     # ------------------------------------------------------------------
     # GEOMETRY APPLICATION (DPG WRITE‑ONLY)
     # ------------------------------------------------------------------
 
     def _apply_geometry_if_needed(self, wid: XPWidgetID) -> None:
-        """Apply XP widget geometry to the DearPyGui backend if it has changed.
+        """
+        Queue geometry updates for this widget if its XP geometry changed.
 
-        This method performs *immediate* geometry mutation using the
-        _execute_dpg_command() helper. Geometry application is write-only
-        and idempotent: repeated calls with unchanged geometry are no-ops.
+        This method computes the correct DPG geometry for the widget and enqueues
+        the appropriate backend command, but does *not* execute it. Geometry
+        application is write-only and idempotent: repeated calls with unchanged
+        geometry are no-ops.
 
         Preconditions:
           - Widget must already be structurally realized (container_id exists)
           - Layout must be ready (geometry is meaningful)
         """
+
         info = self._require_widget(wid)
+
+        self.xp.log(
+            f"[APPLY] wid={wid} class={info.widget_class} "
+            f"geom={info.geometry} "
+            f"container_id={info.container_id} dpg_id={info.dpg_id} "
+            f"geom_applied={info.geom_applied}"
+        )
 
         # Nothing to apply until DPG objects exist
         if info.container_id is None:
@@ -492,19 +746,24 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     f"_apply_geometry_if_needed: window wid={wid} has no dpg_id"
                 )
 
+            self.xp.log(
+                f"[APPLY-WINDOW] wid={wid} "
+                f"DPG pos=({left}, {top - height}) size=({width}x{height})"
+            )
+
             if not info.geom_applied:
-                self.xp.execute_dpg_command(
-                    DPGCommand(
-                        op=DPGOp.CONFIGURE_ITEM,
-                        args=(info.dpg_id,),
-                        kwargs=dict(
-                            pos=(left, top - height),
-                            width=width,
-                            height=height,
-                        ),
-                    )
+                # Queue, do not execute
+                self.xp.enqueue_dpg(
+                    op=DPGOp.CONFIGURE_ITEM,
+                    args=(info.dpg_id,),
+                    kwargs=dict(
+                        pos=(left, top - height),
+                        width=width,
+                        height=height,
+                    ),
                 )
                 info.geom_applied = True
+
             return
 
         # --------------------------------------------------
@@ -526,25 +785,30 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         last = info.container_geom_applied
 
         if last != desired:
-            self.xp.execute_dpg_command(
-                DPGCommand(
-                    op=DPGOp.CONFIGURE_ITEM,
-                    args=(info.container_id,),
-                    kwargs=dict(
-                        pos=(lx, ly),
-                        width=width,
-                        height=height,
-                    ),
-                )
+            # Queue, do not execute
+            self.xp.enqueue_dpg(
+                op=DPGOp.CONFIGURE_ITEM,
+                args=(info.container_id,),
+                kwargs=dict(
+                    pos=(lx, ly),
+                    width=width,
+                    height=height,
+                ),
             )
             info.container_geom_applied = desired
 
     def _apply_visibility(self, wid: XPWidgetID) -> None:
-        """Apply XP visibility state to the DearPyGui backend.
+        """
+        Queue visibility updates for this widget.
 
         Visibility is write-only and does not require layout readiness.
-        If the widget has not yet been realized, this is a no-op.
+        If the widget has not yet been structurally realized (container_id is None),
+        this is a no-op.
+
+        All backend operations are queued via xp.enqueue_dpg() and executed later
+        during the render pass. No backend commands are executed immediately.
         """
+
         info = self._require_widget(wid)
 
         # If not created yet, nothing to show/hide
@@ -552,18 +816,14 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             return
 
         if info.visible:
-            self.xp.execute_dpg_command(
-                DPGCommand(
-                    op=DPGOp.SHOW_ITEM,
-                    args=(info.container_id,),
-                )
+            self.xp.enqueue_dpg(
+                op=DPGOp.SHOW_ITEM,
+                args=(info.container_id,),
             )
         else:
-            self.xp.execute_dpg_command(
-                DPGCommand(
-                    op=DPGOp.HIDE_ITEM,
-                    args=(info.container_id,),
-                )
+            self.xp.enqueue_dpg(
+                op=DPGOp.HIDE_ITEM,
+                args=(info.container_id,),
             )
 
     # ------------------------------------------------------------------

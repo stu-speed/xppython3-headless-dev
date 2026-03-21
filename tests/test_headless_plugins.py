@@ -207,7 +207,7 @@ def test_example_gui(inline_plugin):
         def XPluginDisable(self):
             self.calls.append("disable")
             if self.win is not None:
-                xp.killWidget(self.win)
+                xp.destroyWidget(self.win)
                 self.win = None
 
         def XPluginStop(self):

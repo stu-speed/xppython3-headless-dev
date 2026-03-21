@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol, runtime_checkable, Sequence, Tuple
+from typing import Any, Callable, Protocol, runtime_checkable, Sequence, Tuple, Optional
 
 from simless.libs.fake_xp_types import FakeDataRef
 from simless.libs.runner import SimlessRunner
@@ -712,8 +712,6 @@ class SimlessXPInterface(Protocol):
         widget_class: XPWidgetClass,
     ) -> XPWidgetID: ...
 
-    def killWidget(self, wid: XPWidgetID) -> None: ...
-
     def destroyWidget(self, wid: XPWidgetID, destroy_children: int = 1) -> None: ...
 
     def setWidgetGeometry(
@@ -792,6 +790,57 @@ class SimlessXPInterface(Protocol):
     # ------------------------------------------------------------------
     # Graphics
     # ------------------------------------------------------------------
+    def createWindowEx(
+        self,
+        left: int = 100,
+        top: int = 200,
+        right: int = 200,
+        bottom: int = 100,
+        visible: int = 0,
+        draw: Optional[Callable[[XPLMWindowID, Any], None]] = None,
+        click: Optional[
+            Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+        ] = None,
+        key: Optional[
+            Callable[[XPLMWindowID, int, int, int, Any, int], int]
+        ] = None,
+        cursor: Optional[
+            Callable[[XPLMWindowID, int, int, Any], XPLMCursorStatus]
+        ] = None,
+        wheel: Optional[
+            Callable[[XPLMWindowID, int, int, int, int, Any], int]
+        ] = None,
+        refCon: Any = None,
+        decoration: XPLMWindowDecoration = None,
+        layer: XPLMWindowLayer = None,
+        rightClick: Optional[
+            Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+        ] = None,
+    ) -> XPLMWindowID: ...
+
+    def destroyWindow(self, wid: XPLMWindowID) -> None: ...
+
+    def getWindowGeometry(self, wid: XPLMWindowID) -> Tuple[int, int, int, int]: ...
+
+    def setWindowGeometry(
+        self,
+        windowID: XPLMWindowID,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+    ) -> None: ...
+
+    def getWindowRefCon(self, windowID: XPLMWindowID): ...
+
+    def setWindowRefCon(self, windowID: XPLMWindowID, refCon) -> None: ...
+
+    def takeKeyboardFocus(self, windowID: XPLMWindowID) -> None: ...
+
+    def setWindowIsVisible(self, windowID: XPLMWindowID, visible: int) -> None: ...
+
+    def getWindowIsVisible(self, windowID: XPLMWindowID) -> int: ...
+
     def registerDrawCallback(
         self,
         callback: Callable[[XPLMDrawingPhase, int, Any], int],

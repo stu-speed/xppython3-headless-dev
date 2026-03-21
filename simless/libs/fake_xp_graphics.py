@@ -48,7 +48,8 @@ from typing import Any, Callable, Optional
 import dearpygui.dearpygui as dpg
 
 from simless.libs.fake_xp_graphics_api import FakeXPGraphicsAPI
-from simless.libs.fake_xp_types import DPGCommand, DPGOp, EventInfo, EventKind
+from simless.libs.fake_xp_types import DPGCommand, DPGOp, EventInfo, EventKind, WindowExInfo
+from XPPython3.xp_typing import XPLMWindowID
 
 DPGCallback = Callable[[int | str, Any, Any], Any]
 
@@ -93,6 +94,25 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self._keyboard_focus_window = None
 
         self._dpg_commands = []
+
+    # ----------------------------------------------------------------------
+    # DPG INITIALIZATION
+    # ----------------------------------------------------------------------
+    def get_windowex(self, win_id: XPLMWindowID) -> WindowExInfo:
+        """
+        Return the WindowExInfo for the given XPLMWindowID.
+
+        Fail fast:
+        - If the window does not exist, raise a clear exception.
+        - This prevents silent corruption and makes plugin errors obvious.
+        """
+        try:
+            return self._windows_ex[win_id]
+        except KeyError:
+            raise KeyError(f"WindowEx {win_id} does not exist") from None
+
+    def all_windowex(self) -> list[WindowExInfo]:
+        return list(self._windows_ex.values())
 
     # ----------------------------------------------------------------------
     # DPG INITIALIZATION
@@ -180,11 +200,11 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             if cmd.target_drawlist is not None:
                 dpg.push_container_stack(cmd.target_drawlist)
                 try:
-                    self.xp.execute_dpg_command(cmd)
+                    self._execute_dpg_command(cmd)
                 finally:
                     dpg.pop_container_stack()
             else:
-                self.xp.execute_dpg_command(cmd)
+                self._execute_dpg_command(cmd)
         self._dpg_commands.clear()
 
         # 5) Apply XP→DPG geometry
@@ -233,11 +253,11 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             if cmd.target_drawlist is not None:
                 dpg.push_container_stack(cmd.target_drawlist)
                 try:
-                    self.xp.execute_dpg_command(cmd)
+                    self._execute_dpg_command(cmd)
                 finally:
                     dpg.pop_container_stack()
             else:
-                self.xp.execute_dpg_command(cmd)
+                self._execute_dpg_command(cmd)
         self._dpg_commands.clear()
 
         # 12) Widget rendering
@@ -246,6 +266,24 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
     # ----------------------------------------------------------------------
     # DPG HELPERS (ALL DPG calls handled by this class)
     # ----------------------------------------------------------------------
+    def dpg_is_dearpygui_running(self) -> bool:
+        return dpg.is_dearpygui_running()
+
+    def dpg_does_item_exist(self, item: int | str) -> bool:
+        return dpg.does_item_exist(item)
+
+    def dpg_get_viewport_client_width(self) -> int:
+        return dpg.get_viewport_client_width()
+
+    def dpg_get_viewport_client_height(self) -> int:
+        return dpg.get_viewport_client_height()
+
+    def dpg_is_item_shown(self, item: int | str) -> bool:
+        return dpg.is_item_shown(item)
+
+    def dpg_get_mouse_pos(self, **kwargs) -> list[int] | tuple[int, ...]:
+        return dpg.get_mouse_pos(**kwargs)
+
     def enqueue_dpg(
         self,
         op: DPGOp,
@@ -272,27 +310,88 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             )
         )
 
-    def dpg_is_dearpygui_running(self) -> bool:
-        return dpg.is_dearpygui_running()
-
-    def dpg_does_item_exist(self, item: int | str) -> bool:
-        return dpg.does_item_exist(item)
-
-    def dpg_get_viewport_client_width(self) -> int:
-        return dpg.get_viewport_client_width()
-
-    def dpg_get_viewport_client_height(self) -> int:
-        return dpg.get_viewport_client_height()
-
-    def dpg_is_item_shown(self, item: int | str) -> bool:
-        return dpg.is_item_shown(item)
-
-    def dpg_get_mouse_pos(self, **kwargs) -> list[int] | tuple[int, ...]:
-        return dpg.get_mouse_pos(**kwargs)
-
     # ----------------------------------------------------------------------
     # INTERNAL HELPERS
     # ----------------------------------------------------------------------
+
+    def _execute_dpg_command(self, cmd: DPGCommand) -> None:
+        """Execute a single DearPyGui command immediately.
+
+        This is the sole execution choke-point for all DearPyGui mutations.
+
+        Lifecycle enforcement:
+          - A DearPyGui context must exist
+          - DearPyGui must still be running
+          - Layout readiness is required ONLY for geometry-dependent commands
+
+        Caller responsibilities:
+          - Ensure this is not invoked from plugin callbacks
+          - Ensure the correct container stack has already been pushed
+            if cmd.target_drawlist is set
+        """
+
+        # Hard invariants — programmer error if violated
+        assert isinstance(cmd, DPGCommand), "Expected DPGCommand"
+        assert isinstance(cmd.op, DPGOp), f"Invalid DPGOp: {cmd.op}"
+
+        match cmd.op:
+            # --------------------------------------------------
+            # Drawing primitives (layout-dependent)
+            # --------------------------------------------------
+            case DPGOp.DRAW_TEXT:
+                dpg.draw_text(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.DRAW_RECTANGLE:
+                dpg.draw_rectangle(*cmd.args, **cmd.kwargs)
+
+            # --------------------------------------------------
+            # Containers / widgets (structural creation)
+            # --------------------------------------------------
+            case DPGOp.ADD_DRAWLIST:
+                dpg.add_drawlist(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.ADD_WINDOW:
+                dpg.add_window(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.ADD_CHILD_WINDOW:
+                dpg.add_child_window(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.ADD_TEXT:
+                dpg.add_text(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.ADD_INPUT_TEXT:
+                dpg.add_input_text(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.ADD_SLIDER_INT:
+                dpg.add_slider_int(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.ADD_BUTTON:
+                dpg.add_button(*cmd.args, **cmd.kwargs)
+
+            # --------------------------------------------------
+            # Item mutation
+            # --------------------------------------------------
+            case DPGOp.CONFIGURE_ITEM:
+                dpg.configure_item(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.SET_VALUE:
+                dpg.set_value(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.SHOW_ITEM:
+                dpg.show_item(*cmd.args)
+
+            case DPGOp.HIDE_ITEM:
+                dpg.hide_item(*cmd.args)
+
+            case DPGOp.DELETE_ITEM:
+                dpg.delete_item(*cmd.args)
+
+            # --------------------------------------------------
+            # Safety net
+            # --------------------------------------------------
+            case _:
+                raise RuntimeError(f"Unhandled DPG operation: {cmd.op}")
+
     def _clear_drawlist_children(self, drawlist_id: Optional[int]) -> None:
         """Clear per-frame draw primitives to avoid unbounded accumulation."""
         if drawlist_id is None:
@@ -492,81 +591,3 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
             # Acknowledge the change.
             info.dirty_dpg_to_xp = False
-
-    def execute_dpg_command(self, cmd: DPGCommand) -> None:
-        """Execute a single DearPyGui command immediately.
-
-        This is the sole execution choke-point for all DearPyGui mutations.
-
-        Lifecycle enforcement:
-          - A DearPyGui context must exist
-          - DearPyGui must still be running
-          - Layout readiness is required ONLY for geometry-dependent commands
-
-        Caller responsibilities:
-          - Ensure this is not invoked from plugin callbacks
-          - Ensure the correct container stack has already been pushed
-            if cmd.target_drawlist is set
-        """
-
-        # Hard invariants — programmer error if violated
-        assert isinstance(cmd, DPGCommand), "Expected DPGCommand"
-        assert isinstance(cmd.op, DPGOp), f"Invalid DPGOp: {cmd.op}"
-
-        match cmd.op:
-            # --------------------------------------------------
-            # Drawing primitives (layout-dependent)
-            # --------------------------------------------------
-            case DPGOp.DRAW_TEXT:
-                dpg.draw_text(*cmd.args, **cmd.kwargs)
-
-            case DPGOp.DRAW_RECTANGLE:
-                dpg.draw_rectangle(*cmd.args, **cmd.kwargs)
-
-            # --------------------------------------------------
-            # Containers / widgets (structural creation)
-            # --------------------------------------------------
-            case DPGOp.ADD_DRAWLIST:
-                dpg.add_drawlist(*cmd.args, **cmd.kwargs)
-
-            case DPGOp.ADD_WINDOW:
-                dpg.add_window(*cmd.args, **cmd.kwargs)
-
-            case DPGOp.ADD_CHILD_WINDOW:
-                dpg.add_child_window(*cmd.args, **cmd.kwargs)
-
-            case DPGOp.ADD_TEXT:
-                dpg.add_text(*cmd.args, **cmd.kwargs)
-
-            case DPGOp.ADD_INPUT_TEXT:
-                dpg.add_input_text(*cmd.args, **cmd.kwargs)
-
-            case DPGOp.ADD_SLIDER_INT:
-                dpg.add_slider_int(*cmd.args, **cmd.kwargs)
-
-            case DPGOp.ADD_BUTTON:
-                dpg.add_button(*cmd.args, **cmd.kwargs)
-
-            # --------------------------------------------------
-            # Item mutation
-            # --------------------------------------------------
-            case DPGOp.CONFIGURE_ITEM:
-                dpg.configure_item(*cmd.args, **cmd.kwargs)
-
-            case DPGOp.SET_VALUE:
-                dpg.set_value(*cmd.args, **cmd.kwargs)
-
-            case DPGOp.SHOW_ITEM:
-                dpg.show_item(*cmd.args)
-
-            case DPGOp.HIDE_ITEM:
-                dpg.hide_item(*cmd.args)
-
-            case DPGOp.DELETE_ITEM:
-                dpg.delete_item(*cmd.args)
-
-            # --------------------------------------------------
-            # Safety net
-            # --------------------------------------------------
-            case _:
-                raise RuntimeError(f"Unhandled DPG operation: {cmd.op}")

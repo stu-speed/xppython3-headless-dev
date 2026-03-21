@@ -97,6 +97,7 @@ class FakeXPGraphicsAPI:
 
     xp: FakeXPInterface  # established in FakeXP
 
+
     def createWindowEx(
         self,
         left: int = 100,
@@ -205,24 +206,54 @@ class FakeXPGraphicsAPI:
         return wid
 
     def destroyWindow(self, wid: XPLMWindowID) -> None:
-        """Destroy a graphics-owned WindowEx window."""
+        """
+        Destroy a graphics-owned WindowEx window.
 
-        info = self._windows_ex.pop(wid, None)
+        XP-authentic behavior:
+        - Destroy the DPG window (auto-deletes all child DPG items)
+        - Destroy all widgets belonging to this WindowEx
+        - Remove the WindowEx from the registry
+        - Clear active drawlist if needed
+        - Mark graphics as needing redraw
+        """
+
+        info = self.xp.get_windowex(wid)
         if info is None:
+            # XP tolerates destroying an already-destroyed window
+            return
+        if info.widgets:
+            self.xp.destroyWidget(info.widget_root)
+            # destroyWidget will call this method again after cleanup
             return
 
+        # --------------------------------------------------------------
+        # 1. Remove the WindowEx record
+        # --------------------------------------------------------------
+        info = self._windows_ex.pop(wid, None)
+
+        # --------------------------------------------------------------
+        # 2. Clear active drawlist if this window was the target
+        # --------------------------------------------------------------
         if self._active_drawlist == info.drawlist_id:
             self._active_drawlist = None
 
-        self.xp.enqueue_dpg(
-            DPGOp.DELETE_ITEM,
-            args=(info.drawlist_id,),
-        )
+        # --------------------------------------------------------------
+        # 4. Delete the DPG drawlist (if it exists)
+        # --------------------------------------------------------------
+        if info.drawlist_id is not None:
+            self.xp.enqueue_dpg(
+                DPGOp.DELETE_ITEM,
+                args=(info.drawlist_id,),
+            )
 
-        self.xp.enqueue_dpg(
-            DPGOp.DELETE_ITEM,
-            args=(info.dpg_window_id,),
-        )
+        # --------------------------------------------------------------
+        # 5. Delete the DPG window (auto-deletes all children)
+        # --------------------------------------------------------------
+        if info.dpg_window_id is not None:
+            self.xp.enqueue_dpg(
+                DPGOp.DELETE_ITEM,
+                args=(info.dpg_window_id,),
+            )
 
     def getWindowGeometry(self, wid: XPLMWindowID) -> tuple[int, int, int, int]:
         info = self._windows_ex.get(wid)

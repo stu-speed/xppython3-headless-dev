@@ -20,9 +20,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, List, Optional, Protocol, runtime_checkable
 
-from simless.libs.fake_xp_types import DPGCommand, DPGOp, EventInfo, FakeDataRef
+from simless.libs.fake_xp_types import DPGCommand, DPGOp, EventInfo, FakeDataRef, WindowExInfo, WidgetInfo
 from simless.libs.simless_xp_interface import SimlessXPInterface
 from sshd_extensions.dataref_manager import DRefType
+from XPPython3.xp_typing import XPLMWindowID, XPWidgetID
 
 
 @runtime_checkable
@@ -37,6 +38,13 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
       • bridge client creation and management
       • GUI + widget + flightloop subsystems
     """
+
+    # ----------------------------------------------------------------------
+    # Helpers
+    # ----------------------------------------------------------------------
+    def get_windowex(self, win_id: XPLMWindowID) -> WindowExInfo: ...
+
+    def all_windowex(self) -> list[WindowExInfo]: ...
 
     # ------------------------------------------------------------------
     # DataRefManager binding (simless only)
@@ -65,8 +73,6 @@ class FakeXPInterface(SimlessXPInterface, Protocol):
     def map_widgets_to_dpg(self) -> None: ...
 
     def render_widget_frame(self) -> None: ...
-
-    def execute_dpg_command(self, cmd: DPGCommand) -> None: ...
 
     def enqueue_dpg(
         self,
