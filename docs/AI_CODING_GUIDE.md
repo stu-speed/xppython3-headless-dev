@@ -121,12 +121,11 @@ It can often identify obvious issues.  However, for deeper bugs:
 
 - AI may confidently suggest incorrect or destructive changes  
 - AI may misinterpret the root cause  
-- AI may propose architectural rewrites you should not accept
 
 Do these things to make AI debugging much more effective:
 - ask AI to add debug logging to relevant methods
 - Ask AI to identify all possible causes for the error instead of letting it confidently
-stating it knows the exact reason and suggesting major changes as the proper course of action.
+state it knows the exact reason and suggesting major changes as the proper course of action.
 - Use the debugger to isolate suspicious values or states.  Once you have a concrete observation, give that specific detail to the AI for analysis.
 
 ---
