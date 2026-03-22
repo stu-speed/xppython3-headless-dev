@@ -14,7 +14,7 @@ This project provides a solid framework for creating fun X-plane AI generated co
 
 ## 1. Establish design context before generating code
 
-See all the AI generated guides in this project as an example.
+See all the AI generated notes in this project as an example.
 
 Talk through the design with the AI before asking for implementation.  
 This includes:
@@ -23,7 +23,8 @@ This includes:
 - defining subsystem boundaries  
 - explaining invariants and constraints  
 - clarifying naming conventions  
-- identifying what must *not* change  
+- identifying what must *not* change
+- identifying deprecated design to ignore  
 
 Once the design is stable, have the AI generate a **README** with directory and file structure.  
 This anchors the model’s context and prevents drift.
