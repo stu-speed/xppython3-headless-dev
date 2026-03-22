@@ -19,6 +19,7 @@ See all the AI generated notes in this project as an example.
 Talk through the design with the AI before asking for implementation.  
 This includes:
 
+- giving examples working plugins as a staring point
 - describing the architecture  
 - defining subsystem boundaries  
 - explaining invariants and constraints  
