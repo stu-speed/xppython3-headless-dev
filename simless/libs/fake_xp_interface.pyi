@@ -18,16 +18,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, List, Optional, runtime_checkable
 
-from simless.libs.fake_xp_types import DPGCommand, DPGOp, EventInfo, FakeDataRef, WindowExInfo, WidgetInfo
-from simless.libs.simless_xp_interface import SimlessXPInterface
+from simless.libs.fake_xp_types import DPGOp, EventInfo, FakeDataRef, WindowExInfo, XPProtocol
 from sshd_extensions.dataref_manager import DRefType
-from XPPython3.xp_typing import XPLMWindowID, XPWidgetID
+from XPPython3.xp_typing import XPLMWindowID
 
 
 @runtime_checkable
-class FakeXPInterface(SimlessXPInterface, Protocol):
+class FakeXPInterface(XPProtocol):
     """
     Simless-only API surface implemented by FakeXP.
 

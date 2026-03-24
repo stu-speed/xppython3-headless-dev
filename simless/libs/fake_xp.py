@@ -55,7 +55,7 @@ from simless.libs.fake_xp_input import FakeXPInput
 from simless.libs.fake_xp_interface import FakeXPInterface
 from simless.libs.fake_xp_utilities import FakeXPUtilities
 from simless.libs.fake_xp_widget import FakeXPWidget
-from simless.libs.runner import SimlessRunner
+from simless.libs.plugin_runner import SimlessRunner
 from sshd_extensions.bridge_protocol import BRIDGE_HOST, BRIDGE_PORT
 
 FlightLoopCallback = Callable[[float, float, int, Any], float]

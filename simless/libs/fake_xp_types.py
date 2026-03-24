@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import auto, StrEnum
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Protocol
 
 from sshd_extensions.dataref_manager import DRefType
 from XPPython3.xp_typing import (
@@ -22,6 +23,16 @@ Type_IntArray = 16
 Type_Data = 32
 
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
+
+
+
+class XPProtocol(Protocol):
+    """Full xp API (merged from xp.pyi) + any simless extensions."""
+    pass
+if TYPE_CHECKING:
+    import XPPython3.xp as xp_stub
+    XPProtocol = xp_stub  # type: ignore
+
 
 
 class XPShutdown(Exception):

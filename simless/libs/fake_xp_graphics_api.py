@@ -38,7 +38,9 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from simless.libs.fake_xp_interface import FakeXPInterface
 from simless.libs.fake_xp_types import DPGOp, WindowExInfo
-from XPPython3.xp_typing import XPLMCursorStatus, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer
+from XPPython3.xp_typing import (
+    XPLMCursorStatus, XPLMFontID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer
+)
 
 DPGCallback = Callable[[int | str, Any, Any], Any]
 
@@ -96,7 +98,6 @@ class FakeXPGraphicsAPI:
     _keyboard_focus_window: Optional[XPLMWindowID]
 
     xp: FakeXPInterface  # established in FakeXP
-
 
     def createWindowEx(
         self,
@@ -446,9 +447,6 @@ class FakeXPGraphicsAPI:
             ),
         )
 
-    # ----------------------------------------------------------------------
-    # SCREEN + MOUSE (XP API) — IMMEDIATE QUERIES
-    # ----------------------------------------------------------------------
     def getScreenSize(self) -> Tuple[int, int]:
         return (
             self.xp.dpg_get_viewport_client_height(),
@@ -458,3 +456,15 @@ class FakeXPGraphicsAPI:
     def getMouseLocation(self) -> Tuple[int, int]:
         x, y = self.xp.dpg_get_mouse_pos()
         return int(x), int(y)
+
+    def getFontDimensions(self, font_id: XPLMFontID) -> None | tuple[int, int, int]:
+        # Basic, XP-authentic defaults
+        if font_id == self.xp.Font_Basic:
+            return 8, 14, 3
+        if font_id == self.xp.Font_Proportional:
+            return 7, 11, 2
+        if font_id == self.xp.Font_Large:
+            return 10, 18, 4
+
+        # fallback
+        return 8, 14, 3

@@ -1,1 +1,1 @@
-XPPython3 v4.6.1 for Python 3.12
+XPPython3 v4.7.0 for Python 3.12

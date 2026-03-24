@@ -47,7 +47,7 @@ from typing import Any, Dict, List
 from simless.libs.fake_xp_dataref_viewer import FakeXPDataRefViewerClient
 from simless.libs.fake_xp_interface import FakeXPInterface
 from simless.libs.fake_xp_types import XPShutdown
-from simless.libs.loader import LoadedPlugin, SimlessPluginLoader
+from simless.libs.plugin_loader import LoadedPlugin, SimlessPluginLoader
 from sshd_extensions.bridge_protocol import (BRIDGE_HOST, BRIDGE_PORT, BridgeData, BridgeDataType, XPBridgeClient)
 
 

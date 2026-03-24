@@ -1,98 +1,97 @@
 # 🛠️ Developer Notes
 
-These notes document the architectural rules and expectations for contributors.  
-They ensure deterministic behavior under XPPython3, prevent double‑import issues,  
-and maintain parity between real‑sim and simless environments.
+These notes define the architectural rules for writing XPPython3 plugins that behave
+identically in real‑sim and simless environments.
 
----
+---------------------------------------------------------------------
 
 ## 📦 Directory Structure & Namespacing
 
 This project uses uniquely prefixed directories:
 
-- `sshd_extensions/` — shared plugin architecture (DataRefs, xp interface, helpers)
-- `sshd_extlibs/` — vendor libraries, hardware drivers, FakeXP support code
+- sshd_extensions/ — shared plugin architecture (DataRefs, xp interface, helpers)
+- sshd_extlibs/ — vendor libraries, hardware drivers, FakeXP support code
 
-These names avoid namespace collisions with other XPPython3 plugins and ensure  
-deterministic imports across all deployments.
+These names avoid collisions with other plugins and ensure deterministic imports.
 
----
+---------------------------------------------------------------------
 
-## 🚫 No `__init__.py` Anywhere
+## ⚠️ Import Safety
 
-XPPython3 loads Python plugins **by filename**, not as packages.  
-It does *not* use Python’s package loader and does *not* treat plugin directories  
-as importable packages.
+XPPython3 loads each plugin **once**, by filename, under `PythonPlugins.*`.
 
-Python only activates package semantics when:
+Duplicate plugin instances only occur when Python loads the plugin a *second time*
+under a different name. This happens if your extension modules are imported
+**from outside your plugin**.
 
-- a directory contains `__init__.py`, or  
-- a module uses a relative import (`from .module import X`)
+Example of unsafe usage (from another plugin or external code):
 
-Either of these signals to Python that the directory is a package.  
-Once that happens, Python may import plugin modules **under multiple names**, e.g.:
+    import sshd_extensions.datarefs
+    from sshd_extensions import xp_interface
 
-- `PythonPlugins.PI_ss_ota` (loaded by XPPython3’s filename loader)
-- `PythonPlugins.sshd_extensions.PI_ss_ota` (loaded by Python’s package resolver)
+This triggers Python’s package loader and creates a second copy of your plugin:
 
-This results in:
+    PythonPlugins.PI_yourPlugin
+    sshd_extensions.PI_yourPlugin
+
+Result:
 
 - two plugin instances  
-- two `xp` objects  
+- two xp objects  
 - two DataRefManagers  
-- logs disappearing  
 - callbacks firing on the wrong instance  
 
-To avoid this, **no python code directory in the plugin tree may contain `__init__.py`**, and  
-**no relative imports may be used**. This keeps the plugin tree non‑package and  
-ensures XPPython3’s filename‑based import is the *only* import path.
+### ✔ Safe
 
-This differs from C++ modules, where packages are expected.  
+- `__init__.py` in your plugin directories  
+- Absolute imports *within your own plugin*  
+- Re‑importing XPPython3 (`import XPPython3`)  
+- Using your extensions only from your plugin  
 
----
+### ❌ Unsafe
 
-## 📚 Import Rules
+- Importing your plugin’s extensions from another plugin  
+- Importing your plugin directory as a package  
+- Relative imports (`from .datarefs import X`)  
 
-Because the plugin tree is intentionally *not* a package, all imports must be  
-**absolute**, not relative.
+**Rule:** Your plugin’s extensions must only be imported by your plugin.
 
-Correct:
+---------------------------------------------------------------------
+
+## 📚 Import Rules (Inside Your Plugin)
+
+Use absolute imports:
 
     from sshd_extensions.datarefs import DataRefManager
     from sshd_extlibs.fake_xp import FakeXP
 
-Incorrect:
+Avoid relative imports:
 
     from .datarefs import DataRefManager
-    from .extensions.datarefs import DataRefManager
 
-Relative imports are forbidden because they reintroduce package semantics and  
-can cause duplicate module loads.
+Relative imports reintroduce package semantics and can cause duplicate loads.
 
----
+---------------------------------------------------------------------
 
 ## 🔌 Passing `xp` Explicitly
 
-All subsystems receive the XPPython3 API object explicitly:
+All subsystems receive the xp object explicitly:
 
     registry = DataRefRegistry(xp, DATAREFS)
     manager = DataRefManager(registry, xp)
 
-This avoids:
+This prevents:
 
-- global state  
 - mismatched xp objects  
 - FakeXP/real‑XP divergence  
+- global‑state bugs  
 - double‑import masking  
-- logs disappearing
 
-Every subsystem uses the exact same xp object the plugin instance received.
-
----
+---------------------------------------------------------------------
 
 ## 🧪 Simless / FakeXP Parity
 
-The simless environment (`simless/libs/`) provides:
+The simless environment provides:
 
 - FakeXP API surface  
 - FakeXPRunner lifecycle  
@@ -100,33 +99,31 @@ The simless environment (`simless/libs/`) provides:
 - DataRef registration and timing  
 - Graphics and utility shims  
 
-All plugin code must behave identically in:
+Plugin code must behave identically in:
 
 - real X‑Plane  
 - FakeXP  
 - unit tests  
 - CI  
 
-This is why the DataRef layer, xp interface, and plugin lifecycle are explicit  
-and deterministic.
-
----
+---------------------------------------------------------------------
 
 ## 🧩 Plugin Lifecycle Expectations
 
 Plugins should:
 
 - declare DataRefs up front  
-- use `DataRefManager.ready()` for incremental binding  
+- use DataRefManager.ready() for incremental binding  
 - avoid reading/writing DataRefs before ready  
-- schedule flight loops in `XPluginEnable`  
-- disable themselves on hard failures (timeouts, missing hardware, etc.)
+- schedule flight loops in XPluginEnable  
+- disable themselves on hard failures  
 
-### Important: `ready()` runs inside the flight loop  
-`ready()` **must not** run inside `XPluginEnable`.  
-It is invoked from the plugin’s flight loop callback so that:
+### `ready()` runs inside the flight loop
+
+`ready()` must not run inside XPluginEnable.  
+It is invoked from the flight loop so that:
 
 - DataRefs can appear incrementally  
 - binding can retry safely  
 - timeouts can be enforced  
-- the plugin can disable itself deterministically  
+- the plugin can disable itself deterministically

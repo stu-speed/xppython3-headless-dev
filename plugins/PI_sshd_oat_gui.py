@@ -210,8 +210,6 @@ class PythonInterface:
 
         def quit_handler(msg, widget, p1, p2):
             if msg == xp.Msg_PushButtonPressed:
-                xp.destroyWidget(self.win, 1)
-                self.win = None
                 if hasattr(xp, "simless_runner"):
                     xp.simless_runner.end_run_loop()
                 return 1

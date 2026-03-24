@@ -9,7 +9,7 @@ import XPPython3
 from sshd_extensions.bridge_protocol import BridgeData, BridgeDataType
 from sshd_extensions.dataref_manager import DRefType
 from simless.libs.fake_xp import FakeXP
-from simless.libs.runner import SimlessRunner
+from simless.libs.plugin_runner import SimlessRunner
 
 
 # ===========================================================================
