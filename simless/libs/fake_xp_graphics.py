@@ -49,7 +49,7 @@ import dearpygui.dearpygui as dpg
 
 from simless.libs.fake_xp_graphics_api import FakeXPGraphicsAPI
 from simless.libs.fake_xp_types import DPGCommand, DPGOp, EventInfo, EventKind, WindowExInfo
-from XPPython3.xp_typing import XPLMWindowID
+from XPPython3.xp_typing import XPLMWindowID, XPLMMenuID
 
 DPGCallback = Callable[[int | str, Any, Any], Any]
 
@@ -92,11 +92,15 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self._current_window_ex = None
         self._next_window_id = 1
         self._keyboard_focus_window = None
+        self._menus = {}
+        self._next_menu_id = 1
+        self._menu_callbacks = {}
+        self._root_plugins_menu = None
 
         self._dpg_commands = []
 
     # ----------------------------------------------------------------------
-    # DPG INITIALIZATION
+    # DPG Helpers
     # ----------------------------------------------------------------------
     def get_windowex(self, win_id: XPLMWindowID) -> WindowExInfo:
         """
@@ -118,42 +122,39 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
     # DPG INITIALIZATION
     # ----------------------------------------------------------------------
     def init_graphics_root(self) -> None:
-        """Initialize DearPyGui and create the global screen draw surfaces.
-
-        This creates:
-          - DPG context
-          - DPG viewport
-          - A viewport-attached drawlist representing the X-Plane screen
-          - Input handlers
-
-        Notes:
-          - This must run before plugin enable (simless rule).
-          - This surface is the target for drawString, drawLine, drawBox, etc.
-          - WindowEx windows and widgets draw on top of this surface.
-        """
         dpg.create_context()
         dpg.create_viewport(
             title="Fake X-Plane",
             width=1920,
             height=1080,
         )
+
+        # --------------------------------------------------------------
+        # 1. Finalize DPG internals BEFORE creating menu bar
+        # --------------------------------------------------------------
         dpg.setup_dearpygui()
+
+        # --------------------------------------------------------------
+        # 2. Now it is legal to create the menu bar
+        # --------------------------------------------------------------
+        self._init_menu_bar()
+
+        # --------------------------------------------------------------
+        # 3. Create viewport drawlists (legal after setup)
+        # --------------------------------------------------------------
+        self._screen_drawlist_back = dpg.add_viewport_drawlist(front=False)
+        self._screen_drawlist_front = dpg.add_viewport_drawlist(front=True)
+        self._active_drawlist = self._screen_drawlist_back
+
+        # --------------------------------------------------------------
+        # 4. Show the viewport
+        # --------------------------------------------------------------
         dpg.show_viewport()
 
+        # --------------------------------------------------------------
+        # 5. Install input callbacks AFTER viewport is visible
+        # --------------------------------------------------------------
         self._install_dpg_input_callbacks()
-
-        # ------------------------------------------------------------------
-        # Global screen draw surfaces (XP graphics layer)
-        # ------------------------------------------------------------------
-
-        # Background screen surface (behind all windows)
-        self._screen_drawlist_back = dpg.add_viewport_drawlist(front=False)
-
-        # Foreground screen surface (above all windows, optional)
-        self._screen_drawlist_front = dpg.add_viewport_drawlist(front=True)
-
-        # Default target for XPLMGraphics calls
-        self._active_drawlist = self._screen_drawlist_back
 
     # ----------------------------------------------------------------------
     # FRAME RENDERING
@@ -315,22 +316,8 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
     # ----------------------------------------------------------------------
 
     def _execute_dpg_command(self, cmd: DPGCommand) -> None:
-        """Execute a single DearPyGui command immediately.
+        """Execute a single DearPyGui command immediately."""
 
-        This is the sole execution choke-point for all DearPyGui mutations.
-
-        Lifecycle enforcement:
-          - A DearPyGui context must exist
-          - DearPyGui must still be running
-          - Layout readiness is required ONLY for geometry-dependent commands
-
-        Caller responsibilities:
-          - Ensure this is not invoked from plugin callbacks
-          - Ensure the correct container stack has already been pushed
-            if cmd.target_drawlist is set
-        """
-
-        # Hard invariants — programmer error if violated
         assert isinstance(cmd, DPGCommand), "Expected DPGCommand"
         assert isinstance(cmd.op, DPGOp), f"Invalid DPGOp: {cmd.op}"
 
@@ -367,6 +354,41 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
             case DPGOp.ADD_BUTTON:
                 dpg.add_button(*cmd.args, **cmd.kwargs)
+
+            # --------------------------------------------------
+            # Menus (XPLMMenus → DearPyGui)
+            # --------------------------------------------------
+            case DPGOp.ADD_MENU:
+                dpg.add_menu(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.ADD_MENU_ITEM:
+                label = cmd.kwargs["label"]
+                parent = cmd.kwargs["parent"]
+                tag = cmd.kwargs["tag"]
+
+                # Extract XP menu ID + index from tag
+                _, menu_id_str, index_str = tag.split("_")
+                menu_id = int(menu_id_str)
+                index = int(index_str)
+
+                dpg.add_menu_item(
+                    label=label,
+                    parent=parent,
+                    tag=tag,
+                    callback=self._dispatch_menu_click
+                )
+
+            case DPGOp.ADD_MENU_SEPARATOR:
+                dpg.add_separator(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.SET_MENU_ITEM_CHECKED:
+                # DearPyGui uses configure_item(check=True/False)
+                menu_item_tag, checked = cmd.args
+                dpg.configure_item(menu_item_tag, check=checked)
+
+            case DPGOp.SET_MENU_ITEM_ENABLED:
+                menu_item_tag, enabled = cmd.args
+                dpg.configure_item(menu_item_tag, enabled=enabled)
 
             # --------------------------------------------------
             # Item mutation
@@ -591,3 +613,52 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
             # Acknowledge the change.
             info.dirty_dpg_to_xp = False
+
+    def _init_menu_bar(self) -> None:
+        """Create the top-level X-Plane-style menu bar on the viewport."""
+
+        dpg_tag = "xp_menu_plugins"
+        with dpg.viewport_menu_bar(tag="xp_menu_bar"):
+            with dpg.menu(label="File", tag="xp_menu_file"):
+                dpg.add_menu_item(
+                    label="Quit",
+                    tag="xp_menu_file_quit",
+                    callback=lambda: self.xp.quit_runner()
+                )
+
+            # The actual DPG root for plugin menus
+            dpg.add_menu(
+                label="Plugins",
+                tag=dpg_tag
+            )
+
+        # Allocate a real XP menu ID for the plugin vroot
+        root_id = XPLMMenuID(self._next_menu_id)
+        self._next_menu_id += 1
+
+        self._root_plugins_menu = root_id
+
+        self._menus[root_id] = {
+            "name": "Plugins",
+            "parent": None,
+            "parent_item": None,
+            "handler": None,
+            "refcon": None,
+            "items": [],
+            "dpg_tag": dpg_tag,
+        }
+
+    def _dispatch_menu_click(self, sender, app_data):
+        tag = sender  # DPG gives us the authoritative tag
+
+        # Search all menus for this item tag
+        for menu_id, menu in self._menus.items():
+            for index, item in enumerate(menu["items"]):
+                if item.get("tag") == tag:
+                    handler = menu["handler"]
+                    if handler:
+                        handler(menu["refcon"], item["refcon"])
+                    return
+
+        # If we get here, the tag was not found — this is a real error
+        raise KeyError(f"[FakeXP] Menu item tag not found: {tag}")

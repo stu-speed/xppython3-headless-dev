@@ -39,7 +39,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from simless.libs.fake_xp_interface import FakeXPInterface
 from simless.libs.fake_xp_types import DPGOp, WindowExInfo
 from XPPython3.xp_typing import (
-    XPLMCursorStatus, XPLMFontID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer
+    XPLMCursorStatus, XPLMFontID, XPLMMenuID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID,
+    XPLMWindowLayer
 )
 
 DPGCallback = Callable[[int | str, Any, Any], Any]
@@ -96,6 +97,11 @@ class FakeXPGraphicsAPI:
     _current_window_ex: Optional[WindowExInfo]
     _next_window_id: int
     _keyboard_focus_window: Optional[XPLMWindowID]
+
+    _menus: Dict[XPLMMenuID, Dict[str, Any]]
+    _next_menu_id: int
+    _menu_callbacks: Dict[XPLMMenuID, Callable]
+    _root_plugins_menu: Optional[XPLMMenuID]
 
     xp: FakeXPInterface  # established in FakeXP
 
@@ -468,3 +474,252 @@ class FakeXPGraphicsAPI:
 
         # fallback
         return 8, 14, 3
+
+    # ================================================================
+    # XPLMMenus API — strongly typed, XP-faithful, Plugins-root aware
+    # ================================================================
+
+    def _resolve_parent(self, parentMenuID: Optional[XPLMMenuID]) -> XPLMMenuID:
+        """
+        XP semantics:
+          - None → Plugins menu
+          - 0 → Plugins menu
+          - otherwise → explicit parent
+        """
+        if parentMenuID is None or parentMenuID == XPLMMenuID(0):
+            return self._root_plugins_menu
+        return parentMenuID
+
+    def createMenu(
+        self,
+        name: Optional[str] = None,
+        parentMenuID: Optional[XPLMMenuID] = None,
+        parentItem: Optional[int] = 0,
+        handler: Optional[Callable[[Any, Any], None]] = None,
+        refCon: Optional[Any] = None,
+    ) -> Optional[XPLMMenuID]:
+
+        parent = self._resolve_parent(parentMenuID)
+
+        if parent not in self._menus:
+            return None
+
+        items = self._menus[parent]["items"]
+        if parentItem < 0 or parentItem > len(items):
+            return None
+
+        mid = XPLMMenuID(self._next_menu_id)
+        self._next_menu_id += 1
+
+        # Create DPG tag for this menu
+        dpg_tag = f"menu_{mid}"
+
+        self._menus[mid] = {
+            "name": name or "",
+            "parent": parent,
+            "parent_item": parentItem,
+            "handler": handler,
+            "refcon": refCon,
+            "items": [],
+            "dpg_tag": dpg_tag,  # ⭐ authoritative DPG tag
+        }
+
+        if handler:
+            self._menu_callbacks[mid] = handler
+
+        parent_tag = self._menus[parent]["dpg_tag"]
+
+        self.xp.enqueue_dpg(
+            DPGOp.ADD_MENU,
+            args=(),
+            kwargs={
+                "label": name or "",
+                "parent": parent_tag,
+                "tag": dpg_tag,
+            },
+        )
+
+        return mid
+
+    def appendMenuItem(
+        self,
+        menuID: Optional[XPLMMenuID] = None,
+        name: str = "Item",
+        refCon: Any = None,
+    ) -> int:
+
+        if menuID is None or menuID not in self._menus:
+            return -1
+
+        menu = self._menus[menuID]
+        idx = len(menu["items"])
+        parent_tag = menu["dpg_tag"]
+        item_tag = f"{parent_tag}_{idx}"
+
+        menu["items"].append(
+            {
+                "name": name,
+                "refcon": refCon,
+                "enabled": True,
+                "checked": self.xp.Menu_Unchecked,
+                "separator": False,
+                "command": None,
+                "tag": item_tag
+            }
+        )
+
+        self.xp.enqueue_dpg(
+            DPGOp.ADD_MENU_ITEM,
+            args=(),
+            kwargs={
+                "label": name,
+                "parent": parent_tag,
+                "tag": item_tag,
+            },
+        )
+
+        return idx
+
+    def appendMenuItemWithCommand(
+        self,
+        menuID: Optional[XPLMMenuID] = None,
+        name: str = "Command",
+        commandRef: Any = None,
+    ) -> int:
+
+        if menuID is None or menuID not in self._menus:
+            return -1
+
+        menu = self._menus[menuID]
+        idx = len(menu["items"])
+        parent_tag = menu["dpg_tag"]
+        item_tag = f"{parent_tag}_{idx}"
+
+        menu["items"].append(
+            {
+                "name": name,
+                "refcon": None,
+                "enabled": True,
+                "checked": self.xp.Menu_Unchecked,
+                "separator": False,
+                "command": commandRef,
+                "tag": item_tag
+            }
+        )
+
+        self.xp.enqueue_dpg(
+            DPGOp.ADD_MENU_ITEM,
+            args=(),
+            kwargs={
+                "label": name,
+                "parent": parent_tag,
+                "tag": item_tag,
+            },
+        )
+
+        return idx
+
+    def appendMenuSeparator(self, menuID: XPLMMenuID = None) -> Optional[int]:
+        if menuID is None or menuID not in self._menus:
+            return None
+
+        menu = self._menus[menuID]
+        idx = len(menu["items"])
+
+        menu["items"].append(
+            {
+                "name": "",
+                "refcon": None,
+                "enabled": False,
+                "checked": self.xp.Menu_NoCheck,
+                "separator": True,
+                "command": None,
+            }
+        )
+
+        parent_tag = menu["dpg_tag"]
+
+        self.xp.enqueue_dpg(
+            DPGOp.ADD_MENU_SEPARATOR,
+            args=(),
+            kwargs={
+                "parent": parent_tag,
+            },
+        )
+
+        return idx
+
+    def setMenuItemName(self, menuID, index, name):
+        if menuID is None or menuID not in self._menus:
+            return
+
+        items = self._menus[menuID]["items"]
+        if index < 0 or index >= len(items):
+            return
+
+        items[index]["name"] = name
+
+        tag = f"{self._menus[menuID]['dpg_tag']}_{index}"
+
+        self.xp.enqueue_dpg(
+            DPGOp.CONFIGURE_ITEM,
+            args=(tag,),
+            kwargs={"label": name},
+        )
+
+    def checkMenuItem(self, menuID, index, checked=None):
+        if checked is None:
+            checked = self.xp.Menu_Checked
+
+        if menuID is None or menuID not in self._menus:
+            return
+
+        items = self._menus[menuID]["items"]
+        if index < 0 or index >= len(items):
+            return
+
+        items[index]["checked"] = checked
+
+        tag = f"{self._menus[menuID]['dpg_tag']}_{index}"
+
+        self.xp.enqueue_dpg(
+            DPGOp.SET_MENU_ITEM_CHECKED,
+            args=(tag,),
+            kwargs={"check": (checked == self.xp.Menu_Checked)},
+        )
+
+    def enableMenuItem(self, menuID, index, enabled=1):
+        if menuID is None or menuID not in self._menus:
+            return
+
+        items = self._menus[menuID]["items"]
+        if index < 0 or index >= len(items):
+            return
+
+        items[index]["enabled"] = bool(enabled)
+
+        tag = f"{self._menus[menuID]['dpg_tag']}_{index}"
+
+        self.xp.enqueue_dpg(
+            DPGOp.SET_MENU_ITEM_ENABLED,
+            args=(tag,),
+            kwargs={"enabled": bool(enabled)},
+        )
+
+    def removeMenuItem(self, menuID, index):
+        if menuID is None or menuID not in self._menus:
+            return
+
+        items = self._menus[menuID]["items"]
+        if index < 0 or index >= len(items):
+            return
+
+        del items[index]
+
+        tag = f"{self._menus[menuID]['dpg_tag']}_{index}"
+
+        self.xp.enqueue_dpg(
+            DPGOp.DELETE_ITEM,
+            args=(tag,),
+            kwargs={},
+        )

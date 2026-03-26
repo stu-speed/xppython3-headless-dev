@@ -413,6 +413,16 @@ class DPGOp(StrEnum):
     HIDE_ITEM = auto()
     DELETE_ITEM = auto()
 
+    # --------------------------------------------------
+    # Menus (XPLMMenus → DearPyGui)
+    # --------------------------------------------------
+    ADD_MENU_BAR = auto()          # dpg.add_menu_bar()
+    ADD_MENU = auto()              # dpg.add_menu()
+    ADD_MENU_ITEM = auto()         # dpg.add_menu_item()
+    ADD_MENU_SEPARATOR = auto()    # dpg.add_separator()
+    SET_MENU_ITEM_CHECKED = auto() # dpg.configure_item(check=True/False)
+    SET_MENU_ITEM_ENABLED = auto() # dpg.configure_item(enabled=True/False)
+
 
 @dataclass(frozen=True, slots=True)
 class DPGCommand:

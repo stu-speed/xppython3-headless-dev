@@ -592,3 +592,11 @@ def bind_xp_constants(xp: FakeXPInterface) -> None:
     xp.VERSION = xp.Version = "12.4"
     xp.kVersion = 15100
     xp.kXPLM_Version = 15101
+
+    # ----------------------------------------------------------------------
+    # MENUS (XPLMMenus API)
+    # ----------------------------------------------------------------------
+    xp.Menu_NoCheck   = 16000     # Item cannot be checked
+    xp.Menu_Unchecked = 16001     # Item is checkable and currently unchecked
+    xp.Menu_Checked   = 16002     # Item is checkable and currently checked
+

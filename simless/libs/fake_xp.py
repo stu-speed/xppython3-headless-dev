@@ -236,3 +236,8 @@ class FakeXP(
     # ----------------------------------------------------------------------
     def getElapsedTime(self) -> float:
         return self._sim_time
+
+    def quit_runner(self) -> None:
+        if hasattr(self.xp, "simless_runner"):
+            self.xp.simless_runner.end_run_loop()
+

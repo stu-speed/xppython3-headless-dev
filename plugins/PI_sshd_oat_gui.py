@@ -29,12 +29,18 @@ class PythonInterface:
 
     _fl_id: XPLMFlightLoopID | None
 
+    # Menu fields
+    menu_id: int | None
+    menu_item_index: int | None
+    _window_visible: bool
+
     # ------------------------------------------------------------------
     def XPluginStart(self):
         self.Name = "OAT GUI"
         self.Sig = "sshd.oat.gui"
         self.Desc = "Development GUI for adjusting Outside Air Temperature"
 
+        # UI state
         self.win = None
         self.slider = None
         self.slider_label = None
@@ -47,7 +53,41 @@ class PythonInterface:
         self.bus_array_handle = None
         self._fl_id = None
 
+        # Start visible
+        self._window_visible = True
+
+        # --------------------------------------------------------------
+        # Create plugin menu under Plugins root
+        # --------------------------------------------------------------
+        self.menu_id = xp.createMenu(
+            name="OAT GUI",
+            parentMenuID=None,     # attaches to Plugins menu
+            parentItem=0,
+            handler=self._menu_handler,
+            refCon=None,
+        )
+
+        self.menu_item_index = xp.appendMenuItem(
+            self.menu_id,
+            "Hide Window",
+            refCon=None,
+        )
+
         return self.Name, self.Sig, self.Desc
+
+    # ------------------------------------------------------------------
+    # MENU HANDLER
+    # ------------------------------------------------------------------
+    def _menu_handler(self, menu_refcon: Any, item_refcon: Any) -> None:
+        """Strongly-typed XP menu handler: (refCon, itemRefCon) -> None."""
+        self._window_visible = not self._window_visible
+
+        if self._window_visible:
+            xp.showWidget(self.win)
+            xp.setMenuItemName(self.menu_id, self.menu_item_index, "Hide Window")
+        else:
+            xp.hideWidget(self.win)
+            xp.setMenuItemName(self.menu_id, self.menu_item_index, "Show Window")
 
     # ------------------------------------------------------------------
     # UI BUILD
@@ -56,16 +96,14 @@ class PythonInterface:
         self._create_window()
         self._create_oat_controls()
         self._create_bus_controls()
-        if hasattr(xp, "simless_runner"):
-            self._create_quit_button()
 
     def _create_window(self):
         left = 40
         label_right = 400
-        window_right = label_right + 20  # 10 px wider than temp display
+        window_right = label_right + 20
 
         top = 700
-        bottom = 460
+        bottom = 500
 
         self.win = xp.createWidget(
             left, top,
@@ -79,19 +117,21 @@ class PythonInterface:
 
         xp.setWidgetProperty(self.win, xp.Property_MainWindowHasCloseBoxes, 1)
 
+        # Close box handler
         def window_handler(msg, widget, p1, p2):
             if msg == xp.Message_CloseButtonPushed:
                 xp.hideWidget(self.win)
+                self._window_visible = False
+                xp.setMenuItemName(self.menu_id, self.menu_item_index, "Show Window")
                 return 1
             return 0
 
         xp.addWidgetCallback(self.win, window_handler)
 
     def _create_oat_controls(self):
-        # Caption above OAT slider
         xp.createWidget(
-            60, 670,   # left, top
-            340, 650,   # right, bottom (20px tall caption)
+            60, 670,
+            340, 650,
             1,
             "Adjust Outside Air Temperature (°C)",
             0,
@@ -102,10 +142,9 @@ class PythonInterface:
         oat_value = 10
         xp.setDataf(self.oat_handle, oat_value)
 
-        # OAT slider
         self.slider = xp.createWidget(
-            60, 640,   # left, top
-            360, 610,   # right, bottom (30px tall slider)
+            60, 640,
+            360, 610,
             1,
             "",
             0,
@@ -118,10 +157,9 @@ class PythonInterface:
         xp.setWidgetProperty(self.slider, xp.Property_ScrollBarPageAmount, 1)
         xp.setWidgetProperty(self.slider, xp.Property_ScrollBarSliderPosition, oat_value)
 
-        # OAT label to the right of slider
         self.slider_label = xp.createWidget(
-            370, 640,   # left, top
-            400, 610,   # right, bottom
+            370, 640,
+            400, 610,
             1,
             f"{oat_value}°C",
             0,
@@ -129,14 +167,12 @@ class PythonInterface:
             xp.WidgetClass_Caption,
         )
 
-        # Child callback for OAT slider
         def oat_slider_handler(msg, widget, p1, p2):
             if msg == xp.Msg_ScrollBarSliderPositionChanged:
                 pos = xp.getWidgetProperty(self.slider, xp.Property_ScrollBarSliderPosition)
                 temp = int(pos)
                 xp.setWidgetDescriptor(self.slider_label, f"{temp}°C")
                 xp.showWidget(self.slider_label)
-
                 xp.setDataf(self.oat_handle, float(temp))
                 return 1
             return 0
@@ -144,7 +180,6 @@ class PythonInterface:
         xp.addWidgetCallback(self.slider, oat_slider_handler)
 
     def _create_bus_controls(self):
-        # Caption above bus slider
         xp.createWidget(
             60, 580,
             360, 560,
@@ -155,7 +190,6 @@ class PythonInterface:
             xp.WidgetClass_Caption,
         )
 
-        # Bus slider
         self.bus_slider = xp.createWidget(
             60, 550,
             360, 520,
@@ -171,7 +205,6 @@ class PythonInterface:
         xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollBarPageAmount, 1)
         xp.setWidgetProperty(self.bus_slider, xp.Property_ScrollBarSliderPosition, 0)
 
-        # Bus label to the right of slider
         self.bus_label = xp.createWidget(
             370, 550,
             400, 520,
@@ -182,40 +215,17 @@ class PythonInterface:
             xp.WidgetClass_Caption,
         )
 
-        # Child callback for bus slider
         def bus_slider_handler(msg, widget, p1, p2):
             if msg == xp.Msg_ScrollBarSliderPositionChanged:
                 pos = xp.getWidgetProperty(self.bus_slider, xp.Property_ScrollBarSliderPosition)
                 volts = int(pos)
                 xp.setWidgetDescriptor(self.bus_label, f"{volts} V")
                 xp.showWidget(self.bus_label)
-
                 xp.setDatavf(self.bus_array_handle, [float(volts)], 1, 1)
                 return 1
             return 0
 
         xp.addWidgetCallback(self.bus_slider, bus_slider_handler)
-
-    def _create_quit_button(self):
-        self.quit_btn = xp.createWidget(
-            60, 500,
-            100, 470,
-            1,
-            "Quit",
-            0,
-            self.win,
-            xp.WidgetClass_Button,
-        )
-        xp.setWidgetProperty(self.quit_btn, xp.Property_ButtonType, xp.PushButton)
-
-        def quit_handler(msg, widget, p1, p2):
-            if msg == xp.Msg_PushButtonPressed:
-                if hasattr(xp, "simless_runner"):
-                    xp.simless_runner.end_run_loop()
-                return 1
-            return 0
-
-        xp.addWidgetCallback(self.quit_btn, quit_handler)
 
     # ------------------------------------------------------------------
     # ENABLE
@@ -229,6 +239,11 @@ class PythonInterface:
             return 0
 
         self._build_ui()
+
+        # ⭐ Start visible
+        xp.showWidget(self.win)
+        self._window_visible = True
+        xp.setMenuItemName(self.menu_id, self.menu_item_index, "Hide Window")
 
         return 1
 
