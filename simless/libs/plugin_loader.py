@@ -5,16 +5,22 @@ import inspect
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import List, Protocol
+from typing import List, Protocol, TYPE_CHECKING
 
-from simless.libs.fake_xp_interface import FakeXPInterface
+if TYPE_CHECKING:
+    from simless.libs.fake_xp import FakeXP
 
 
 # ---------------------------------------------------------------------------
-# Plugin interface protocol
+# Plugin interface protocol (X‑Plane authentic)
 # ---------------------------------------------------------------------------
 
 class PythonInterfaceProto(Protocol):
+    """
+    This is the exact interface XPPython3 expects plugin authors to implement.
+    Simless enforces the same contract for authenticity.
+    """
+
     def XPluginStart(self) -> tuple[str, str, str]: ...
 
     def XPluginEnable(self) -> int: ...
@@ -25,10 +31,15 @@ class PythonInterfaceProto(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# LoadedPlugin container
+# LoadedPlugin container (X‑Plane authentic)
 # ---------------------------------------------------------------------------
 
 class LoadedPlugin:
+    """
+    Runtime container for a loaded plugin instance.
+    Mirrors XPPython3's internal representation.
+    """
+
     def __init__(
         self,
         plugin_id: int,
@@ -55,13 +66,20 @@ class LoadedPlugin:
 # ---------------------------------------------------------------------------
 
 class SimlessPluginLoader:
-    def __init__(self, xp: FakeXPInterface) -> None:
+    """
+    Loads Python plugins from plugins/PythonPlugins, wires a synthetic
+    XPPython3 runtime, and exposes X‑Plane‑authentic plugin lifecycle behavior.
+    """
+
+    def __init__(self, xp: FakeXP) -> None:
         project_root = Path(__file__).resolve().parents[2]
 
-        # plugins/ → PI_xxx, noaaweather, etc.
-        self.root: Path = project_root / "plugins"
+        # Real X‑Plane structure:
+        #   plugins/PythonPlugins/PI_SomePlugin.py
+        self.root: Path = project_root / "plugins" / "PythonPlugins"
 
-        # stubs/ → stubs/XPPython3/*
+        # Stubs directory:
+        #   stubs/XPPython3/*
         self.stubs_root: Path = project_root / "stubs"
 
         self.xp = xp
@@ -78,8 +96,8 @@ class SimlessPluginLoader:
     def _ensure_sys_path(self) -> None:
         """
         Ensure:
-          • plugins/ is on sys.path (PI_xxx, noaaweather)
-          • stubs/ is on sys.path (so stubs/XPPython3 is visible)
+          • plugins/PythonPlugins is on sys.path
+          • stubs/ is on sys.path
         """
         for path in (self.root, self.stubs_root):
             s = str(path)
@@ -94,31 +112,34 @@ class SimlessPluginLoader:
     def _wire_xppython3_runtime(self) -> None:
         """
         Provide a synthetic XPPython3 runtime environment:
-          • xp.* is a full façade over FakeXP
-          • XPPython3 is a namespace package pointing at stubs/XPPython3
-          • No modules are pre-imported; plugins import them normally
-          • xp.pyi remains the authoritative static type contract
-        """
-        import sys, types
 
-        # Path to stubs/XPPython3
+          • from XPPython3 import xp        → works
+          • from XPPython3.xp import foo    → works
+          • import xp                       → works
+
+        xp.* is a façade over FakeXP.
+        XPPython3 is a namespace package pointing at stubs/XPPython3.
+        """
+        import types
+
         stubs_pkg_path = self.stubs_root / "XPPython3"
         if not stubs_pkg_path.exists():
             self.xp.log(f"[Loader] No stubs/XPPython3 directory at {stubs_pkg_path}")
             return
 
         # ------------------------------------------------------------
-        # 1. Create synthetic XPPython3 package (no __init__ executed)
+        # 1. Create synthetic XPPython3 namespace package
         # ------------------------------------------------------------
         xpp_pkg = types.ModuleType("XPPython3")
         xpp_pkg.__path__ = [str(stubs_pkg_path)]
+        xpp_pkg.__package__ = "XPPython3"
         sys.modules["XPPython3"] = xpp_pkg
 
         # ------------------------------------------------------------
-        # 2. Create synthetic xp module: full façade over FakeXP
+        # 2. Create xp façade module
         # ------------------------------------------------------------
         xp_mod = types.ModuleType("xp")
-        backend = self.xp  # FakeXP instance
+        backend = self.xp
 
         # Optional: keep reference
         xp_mod.xp = backend
@@ -132,11 +153,16 @@ class SimlessPluginLoader:
                 continue
             setattr(xp_mod, name, getattr(backend, name))
 
-        # Register xp module
+        # ------------------------------------------------------------
+        # 3. Register xp in all expected import locations
+        # ------------------------------------------------------------
         sys.modules["xp"] = xp_mod
         sys.modules["XPPython3.xp"] = xp_mod
 
-        self.xp.log("[Loader] Synthetic XPPython3 runtime wired (xp façade, no pre-imports)")
+        # Allow: from XPPython3 import xp
+        setattr(xpp_pkg, "xp", xp_mod)
+
+        self.xp.log("[Loader] Synthetic XPPython3 runtime wired (supports 'from XPPython3 import xp')")
 
     # ----------------------------------------------------------------------
     # Plugin lookup APIs (X‑Plane authentic)
@@ -166,10 +192,17 @@ class SimlessPluginLoader:
     # ----------------------------------------------------------------------
 
     def _validate(self, name: str) -> None:
-        if not (self.root / f"{name}.py").exists():
-            raise RuntimeError(f"[Loader] Plugin '{name}' not found in plugins/")
+        """
+        Ensure plugin exists in plugins/PythonPlugins.
+        """
+        plugin_path = self.root / f"{name}.py"
+        if not plugin_path.exists():
+            raise RuntimeError(f"[Loader] Plugin '{name}' not found in {self.root}")
 
     def load_plugins(self, modules: List[str | ModuleType]) -> List[LoadedPlugin]:
+        """
+        Load a list of plugin names or inline module objects.
+        """
         plugins: List[LoadedPlugin] = []
 
         for item in modules:
@@ -187,6 +220,9 @@ class SimlessPluginLoader:
         return plugins
 
     def _load_single(self, name: str) -> LoadedPlugin:
+        """
+        Import a plugin module by name.
+        """
         self.xp.log(f"[Loader] Loading module {name}")
         try:
             module: ModuleType = importlib.import_module(name)
@@ -195,6 +231,9 @@ class SimlessPluginLoader:
         return self._load_inline(module)
 
     def _load_inline(self, module: ModuleType) -> LoadedPlugin:
+        """
+        Load a plugin from an already-imported module.
+        """
         self.xp.log(f"[Loader] Loading inline module {module.__name__}")
 
         iface_cls = getattr(module, "PythonInterface", None)
@@ -206,8 +245,10 @@ class SimlessPluginLoader:
         except Exception as exc:
             raise RuntimeError(f"[Loader] Failed to instantiate PythonInterface: {exc!r}")
 
+        # Provide xp.* façade to plugin instance
         instance.xp = self.xp
 
+        # Run XPluginStart
         self.xp.log("[Loader] === XPluginStart BEGIN ===")
         try:
             name, sig, desc = instance.XPluginStart()

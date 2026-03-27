@@ -24,17 +24,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, TYPE_CHECKING
 
-from simless.libs.fake_xp_interface import FakeXPInterface
-from simless.libs.fake_xp_types import WidgetInfo, WindowExInfo
+from simless.libs.fake_xp_types import WidgetInfo, WindowExInfo, XPWidgetCallback
 from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage, XPWidgetPropertyID
 
-XPWidgetCallback = Callable[[int, int, Any, Any], int]
+if TYPE_CHECKING:
+    from simless.libs.fake_xp import FakeXP
 
 
 class FakeXPWidgetsAPI:
-    xp: FakeXPInterface
+    xp: FakeXP
 
     # ID generation
     _next_id: int

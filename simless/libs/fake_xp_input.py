@@ -40,9 +40,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from simless.libs.fake_xp_interface import FakeXPInterface
 from simless.libs.fake_xp_types import EventInfo, EventKind, WindowExInfo
 from XPPython3.xp_typing import (
     XPLMCursorStatus,
@@ -50,11 +49,14 @@ from XPPython3.xp_typing import (
     XPLMWindowID,
 )
 
+if TYPE_CHECKING:
+    from simless.libs.fake_xp import FakeXP
+
 
 class FakeXPInput:
     """Input routing subsystem mixin for FakeXP."""
 
-    xp: FakeXPInterface  # established in FakeXP
+    xp: FakeXP
 
     # ------------------------------------------------------------------
     # WindowEx authoritative storage (owned by graphics subsystem)

@@ -28,10 +28,8 @@
 
 from __future__ import annotations
 
-from simless.libs.fake_xp_interface import FakeXPInterface
 
-
-def bind_xp_constants(xp: FakeXPInterface) -> None:
+def bind_xp_constants(xp) -> None:
     # ----------------------------------------------------------------------
     # AUDIO (1000–1999)
     # ----------------------------------------------------------------------
@@ -596,7 +594,6 @@ def bind_xp_constants(xp: FakeXPInterface) -> None:
     # ----------------------------------------------------------------------
     # MENUS (XPLMMenus API)
     # ----------------------------------------------------------------------
-    xp.Menu_NoCheck   = 16000     # Item cannot be checked
-    xp.Menu_Unchecked = 16001     # Item is checkable and currently unchecked
-    xp.Menu_Checked   = 16002     # Item is checkable and currently checked
-
+    xp.Menu_NoCheck = 16000  # Item cannot be checked
+    xp.Menu_Unchecked = 16001  # Item is checkable and currently unchecked
+    xp.Menu_Checked = 16002  # Item is checkable and currently checked

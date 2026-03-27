@@ -42,13 +42,15 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from simless.libs.fake_xp_dataref_viewer import FakeXPDataRefViewerClient
-from simless.libs.fake_xp_interface import FakeXPInterface
+from simless.libs.dataref_viewer import FakeXPDataRefViewerClient
 from simless.libs.fake_xp_types import XPShutdown
-from simless.libs.plugin_loader import LoadedPlugin, SimlessPluginLoader
-from sshd_extensions.bridge_protocol import (BRIDGE_HOST, BRIDGE_PORT, BridgeData, BridgeDataType, XPBridgeClient)
+from simless.libs.plugin_loader import LoadedPlugin
+
+if TYPE_CHECKING:
+    import PythonPlugins.sshd_extensions.bridge_protocol as bridge_type
+    from simless.libs.fake_xp import FakeXP
 
 
 class SimlessRunner:
@@ -61,41 +63,76 @@ class SimlessRunner:
     DataRefManager.
     """
 
-    _bridge: XPBridgeClient | None
+    _bridge_client: bridge_type.XPBridgeClient | None
     _dataref_viewer: FakeXPDataRefViewerClient | None
 
     def __init__(
         self,
-        xp: FakeXPInterface,
+        xp: FakeXP,
         enable_dataref_bridge: bool = False,
-        bridge_host: str = BRIDGE_HOST,
-        bridge_port: int = BRIDGE_PORT,
+        bridge_host: Optional[str] = None,
+        bridge_port: Optional[int] = None,
     ) -> None:
-        self.xp: FakeXPInterface = xp
+        # ------------------------------------------------------------------
+        # Core state
+        # ------------------------------------------------------------------
+        self.xp = xp
         self._running: bool = False
         self._bridge_connected: bool = False
         self._bridge_last_error: str | None = None
-        self._bridge = None
+        self._bridge_client = None
         self._dataref_viewer = None
 
         # Allow FakeXP to call back into us
         setattr(self.xp, "simless_runner", self)
 
         # ------------------------------------------------------------------
-        # Create the dataref bridge and manager helper
+        # 1. Install synthetic XPPython3 runtime BEFORE importing plugin code
+        # ------------------------------------------------------------------
+        #
+        # This ensures that:
+        #   from XPPython3 import xp
+        #   from XPPython3.xp import drawString
+        #   import xp
+        #
+        # all resolve to the FakeXP façade, not plugins/XPPython3/xp.py.
+        #
+        from simless.libs.xppython3_runtime import wire_xppython3_runtime
+        wire_xppython3_runtime(self.xp)
+
+        # ------------------------------------------------------------------
+        # 2. Now it is safe to import bridge_protocol
+        # ------------------------------------------------------------------
+        #
+        # bridge_protocol imports:
+        #       from XPPython3 import xp
+        #
+        # If we imported it earlier, Python would load the real
+        # plugins/XPPython3/xp.py and crash on:
+        #       import XPLMCamera
+        #
+        import PythonPlugins.sshd_extensions.bridge_protocol as bridge_mod
+        self._bridge_mod = bridge_mod
+
+        # ------------------------------------------------------------------
+        # 3. Create the dataref bridge (optional)
         # ------------------------------------------------------------------
         if enable_dataref_bridge:
-            self._bridge = XPBridgeClient(
-                self.xp,  # type: ignore[arg-type]
-                host=bridge_host,
-                port=bridge_port,
+            self._bridge_client = self._bridge_mod.XPBridgeClient(
+                host=bridge_host or self._bridge_mod.BRIDGE_HOST,
+                port=bridge_port or self._bridge_mod.BRIDGE_PORT,
             )
             self._attach_bridge_handle_callback()
 
-        # Plugin loader
+        # ------------------------------------------------------------------
+        # 4. Plugin loader (safe now that XPPython3 is synthetic)
+        # ------------------------------------------------------------------
+        from simless.libs.plugin_loader import SimlessPluginLoader
         self.loader: SimlessPluginLoader = SimlessPluginLoader(self.xp)
 
-        # Flightloop state
+        # ------------------------------------------------------------------
+        # 5. Flightloop state
+        # ------------------------------------------------------------------
         self._next_flightloop_id: int = 1
         self._flightloops: Dict[int, Dict[str, Any]] = {}
         self._sim_time: float = 0.0
@@ -105,9 +142,9 @@ class SimlessRunner:
         """
         Return bridge status as enabled, connected, last_error.
         """
-        if self._bridge is None:
+        if self._bridge_client is None:
             return False, False, "Bridge not enabled"
-        return True, self._bridge.is_connected, self._bridge.conn_status
+        return True, self._bridge_client.is_connected, self._bridge_client.conn_status
 
     # ----------------------------------------------------------------------
     # Bridge registration callback wiring
@@ -129,7 +166,7 @@ class SimlessRunner:
             return
 
         try:
-            self._bridge.add(path)
+            self._bridge_client.add(path)
         except Exception as exc:
             try:
                 self.xp.log(f"[Runner] Bridge registration failed for {path}: {exc}")
@@ -141,12 +178,12 @@ class SimlessRunner:
 
         Called once on initial bridge connection and again on reconnect.
         """
-        if self._bridge is None:
+        if self._bridge_client is None:
             return
         all_handle_paths = self.xp.all_handle_paths()
 
         try:
-            self._bridge.add(all_handle_paths)
+            self._bridge_client.add(all_handle_paths)
         except Exception:
             try:
                 self.xp.log(f"[Runner] Bridge registration failed for {all_handle_paths}")
@@ -173,7 +210,7 @@ class SimlessRunner:
         xp = self.xp
 
         try:
-            events: List[BridgeData] = self._bridge.poll_data()
+            events: List[bridge_type.BridgeData] = self._bridge_client.poll_data()
         except ConnectionResetError as exc:
             xp.log("[Runner] Bridge disconnected")
             self._bridge_connected = False
@@ -186,7 +223,7 @@ class SimlessRunner:
             self._register_all_datarefs_with_bridge()
 
         for ev in events:
-            if ev.type is BridgeDataType.META:
+            if ev.type is self._bridge_mod.BridgeDataType.META:
                 ref = xp.get_handle(ev.path)
                 assert ref is not None
 
@@ -197,7 +234,7 @@ class SimlessRunner:
                     writable=bool(ev.writable),
                 )
 
-            elif ev.type is BridgeDataType.UPDATE:
+            elif ev.type is self._bridge_mod.BridgeDataType.UPDATE:
                 ref = xp.get_handle(ev.path)
                 assert ref is not None, f"Unknown handle: {ev.path}"
                 value = ev.value
@@ -218,7 +255,7 @@ class SimlessRunner:
                 else:
                     ref.value = value
 
-            elif ev.type is BridgeDataType.ERROR:
+            elif ev.type is self._bridge_mod.BridgeDataType.ERROR:
                 self._bridge_last_error = ev.text
                 xp.log(f"[Bridge] ERROR: {ev.text}")
 
@@ -264,7 +301,7 @@ class SimlessRunner:
     # ----------------------------------------------------------------------
     # One frame
     # ----------------------------------------------------------------------
-    def run_one_frame(self) -> None:
+    def _run_one_frame(self) -> None:
         xp = self.xp
 
         # 1. Advance sim time
@@ -274,7 +311,7 @@ class SimlessRunner:
         sim_time = self._sim_time
 
         # 2. Bridge sync
-        if self._bridge is not None:
+        if self._bridge_client is not None:
             self._manage_bridged_datarefs()
 
         # 3. Flightloops
@@ -381,7 +418,7 @@ class SimlessRunner:
             frame_start = time.monotonic()
 
             try:
-                self.run_one_frame()
+                self._run_one_frame()
             except XPShutdown:
                 xp.log("[Runner] Main loop exit: shutdown")
                 break

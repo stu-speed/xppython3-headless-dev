@@ -36,12 +36,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, TYPE_CHECKING
 
-from simless.libs.fake_xp_interface import FakeXPInterface
+from simless.libs.fake_xp_types import FlightLoopStruct
 
-# XP12-style struct dictionary
-FlightLoopStruct = Dict[str, Any]
+if TYPE_CHECKING:
+    from simless.libs.fake_xp import FakeXP
 
 
 class FakeXPFlightLoop:
@@ -53,7 +53,7 @@ class FakeXPFlightLoop:
       • Does NOT own any timing or scheduling
       • Exposes structs for an external runner (SimlessRunner) to consume
     """
-    xp: FakeXPInterface  # established in FakeXP
+    xp: FakeXP
 
     # ------------------------------------------------------------------
     # Initialization

@@ -44,7 +44,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import XPPython3
 from simless.libs.fake_xp_constants import bind_xp_constants
@@ -52,11 +52,9 @@ from simless.libs.fake_xp_dataref import FakeXPDataRef
 from simless.libs.fake_xp_flightloop import FakeXPFlightLoop
 from simless.libs.fake_xp_graphics import FakeXPGraphics
 from simless.libs.fake_xp_input import FakeXPInput
-from simless.libs.fake_xp_interface import FakeXPInterface
 from simless.libs.fake_xp_utilities import FakeXPUtilities
 from simless.libs.fake_xp_widget import FakeXPWidget
 from simless.libs.plugin_runner import SimlessRunner
-from sshd_extensions.bridge_protocol import BRIDGE_HOST, BRIDGE_PORT
 
 FlightLoopCallback = Callable[[float, float, int, Any], float]
 
@@ -78,25 +76,24 @@ class FakeXP(
     plugin development and testing.
     """
 
-    debug: bool
     enable_gui: bool
 
     enable_dataref_bridge: bool
     bridge_host: str
     bridge_port: int
 
-    _sim_time: float
-
-    xp: FakeXPInterface
     simless_runner: SimlessRunner
+
+    _debug: bool
+    _sim_time: float
 
     def __init__(
         self,
         debug: bool = False,
         enable_gui: bool = True,
         enable_dataref_bridge: bool = False,
-        bridge_host: str = BRIDGE_HOST,
-        bridge_port: int = BRIDGE_PORT,
+        bridge_host: Optional[str] = None,
+        bridge_port: Optional[int] = None,
     ) -> None:
         """Initialize the FakeXP façade.
 
@@ -130,8 +127,8 @@ class FakeXP(
                 xp.end_run_loop(). Defaults to -1.0.
         """
 
-        self.debug = debug
         self.enable_gui = enable_gui
+        self._debug = debug
         self._sim_time = 0.0
 
         # ------------------------------------------------------------------
@@ -158,10 +155,13 @@ class FakeXP(
         self.simless_runner = SimlessRunner(self.xp, enable_dataref_bridge, bridge_host, bridge_port)
 
     # ----------------------------------------------------------------------
-    # Debug helper
+    # Helpers
     # ----------------------------------------------------------------------
-    def _dbg(self, msg: str) -> None:
-        if self.debug:
+    def log(self, msg: str) -> None:
+        print(f"[FakeXP] {msg}")
+
+    def dbg(self, msg: str) -> None:
+        if self._debug:
             print(f"[FakeXP] {msg}")
 
     # ----------------------------------------------------------------------
@@ -228,16 +228,8 @@ class FakeXP(
             module_path,
         )
 
-    def log(self, msg: str) -> None:
-        print(f"[FakeXP] {msg}")
-
     # ----------------------------------------------------------------------
     # Time (SimlessXPInterface)
     # ----------------------------------------------------------------------
     def getElapsedTime(self) -> float:
         return self._sim_time
-
-    def quit_runner(self) -> None:
-        if hasattr(self.xp, "simless_runner"):
-            self.xp.simless_runner.end_run_loop()
-

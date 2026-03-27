@@ -34,14 +34,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
-from simless.libs.fake_xp_interface import FakeXPInterface
 from simless.libs.fake_xp_types import DPGOp, WindowExInfo
 from XPPython3.xp_typing import (
     XPLMCursorStatus, XPLMFontID, XPLMMenuID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID,
     XPLMWindowLayer
 )
+
+if TYPE_CHECKING:
+    from simless.libs.fake_xp import FakeXP
 
 DPGCallback = Callable[[int | str, Any, Any], Any]
 
@@ -103,7 +105,7 @@ class FakeXPGraphicsAPI:
     _menu_callbacks: Dict[XPLMMenuID, Callable]
     _root_plugins_menu: Optional[XPLMMenuID]
 
-    xp: FakeXPInterface  # established in FakeXP
+    xp: FakeXP
 
     def createWindowEx(
         self,
@@ -168,7 +170,7 @@ class FakeXPGraphicsAPI:
                 pos=(0, 0),  # geometry applied later
                 width=width,
                 height=height,
-                no_title_bar=False,
+                no_title_bar=True,
                 no_resize=False,
                 no_move=False,
                 no_scrollbar=True,
@@ -353,7 +355,7 @@ class FakeXPGraphicsAPI:
     # ----------------------------------------------------------------------
     # TEXT DRAWING (DEFERRED DPG COMMAND)
     # ----------------------------------------------------------------------
-    def drawString(self, color, x, y, text, wordWrap, fontID):
+    def drawString(self, color, x, y, text, wordWrap, fontID) -> None:
         if self._active_drawlist is None:
             raise RuntimeError("drawString outside draw phase")
 
@@ -429,7 +431,7 @@ class FakeXPGraphicsAPI:
     # ----------------------------------------------------------------------
     # XP-STYLE PRIMITIVES (DEFERRED)
     # ----------------------------------------------------------------------
-    def drawTranslucentDarkBox(self, left, top, right, bottom):
+    def drawTranslucentDarkBox(self, left, top, right, bottom) -> None:
         if self._active_drawlist is None:
             raise RuntimeError("drawTranslucentDarkBox outside draw phase")
 
@@ -469,8 +471,6 @@ class FakeXPGraphicsAPI:
             return 8, 14, 3
         if font_id == self.xp.Font_Proportional:
             return 7, 11, 2
-        if font_id == self.xp.Font_Large:
-            return 10, 18, 4
 
         # fallback
         return 8, 14, 3

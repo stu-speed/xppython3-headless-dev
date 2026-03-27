@@ -49,7 +49,7 @@ import dearpygui.dearpygui as dpg
 
 from simless.libs.fake_xp_graphics_api import FakeXPGraphicsAPI
 from simless.libs.fake_xp_types import DPGCommand, DPGOp, EventInfo, EventKind, WindowExInfo
-from XPPython3.xp_typing import XPLMWindowID, XPLMMenuID
+from XPPython3.xp_typing import XPLMMenuID, XPLMWindowID
 
 DPGCallback = Callable[[int | str, Any, Any], Any]
 
@@ -314,7 +314,6 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
     # ----------------------------------------------------------------------
     # INTERNAL HELPERS
     # ----------------------------------------------------------------------
-
     def _execute_dpg_command(self, cmd: DPGCommand) -> None:
         """Execute a single DearPyGui command immediately."""
 
@@ -336,6 +335,9 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             # --------------------------------------------------
             case DPGOp.ADD_DRAWLIST:
                 dpg.add_drawlist(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.ADD_WINDOW:
+                dpg.add_window(*cmd.args, **cmd.kwargs)
 
             case DPGOp.ADD_WINDOW:
                 dpg.add_window(*cmd.args, **cmd.kwargs)
@@ -365,11 +367,6 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
                 label = cmd.kwargs["label"]
                 parent = cmd.kwargs["parent"]
                 tag = cmd.kwargs["tag"]
-
-                # Extract XP menu ID + index from tag
-                _, menu_id_str, index_str = tag.split("_")
-                menu_id = int(menu_id_str)
-                index = int(index_str)
 
                 dpg.add_menu_item(
                     label=label,
@@ -623,7 +620,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
                 dpg.add_menu_item(
                     label="Quit",
                     tag="xp_menu_file_quit",
-                    callback=lambda: self.xp.quit_runner()
+                    callback=lambda: self.xp.simless_runner.end_run_loop()
                 )
 
             # The actual DPG root for plugin menus

@@ -22,14 +22,16 @@
 from __future__ import annotations
 
 from threading import RLock
-from typing import Any, Callable, Dict, List, MutableSequence, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, MutableSequence, Optional, Sequence, Tuple, TYPE_CHECKING
 
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 from simless.libs.fake_xp_types import (
     FakeDataRef, Type_Data, Type_Double, Type_Float, Type_FloatArray, Type_Int, Type_IntArray, Type_Unknown
 )
-from simless.libs.fake_xp_interface import FakeXPInterface
-from sshd_extensions.dataref_manager import DRefType
 from XPPython3.xp_typing import XPLMDataRefInfo_t
+
+if TYPE_CHECKING:
+    from simless.libs.fake_xp import FakeXP
 
 
 class FakeXPDataRefAPI:
@@ -40,7 +42,7 @@ class FakeXPDataRefAPI:
     It does not own lifecycle or bridge wiring.
     """
 
-    xp: FakeXPInterface  # established by FakeXP during subsystem composition
+    xp: FakeXP
     _handle_callback: Optional[Callable[[FakeDataRef], None]]
     _handles: Dict[str, FakeDataRef]
     # accessor metadata for registered accessors (name -> metadata)

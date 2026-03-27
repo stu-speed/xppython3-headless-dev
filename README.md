@@ -33,15 +33,15 @@ Follow these steps to set up a fully functional sim‑less XPPython3 development
        xppython3-headless-dev/
        your-other-code/
 
-2. Copy the real XPPython3 package into stubs  
+2. Copy the real XPPython3 package into project
    Download or extract the official XPPython3 distribution and place the entire XPPython3 folder into:
-   xppython3-headless-dev/stubs/XPPython3/
+   xppython3-headless-dev/plugins/PythonPlugins/XPPython3/
 
    This provides xp.pyi, xp_types.pyi, and all official API signatures for IDE autocompletion.
 
 3. Develop plugins inside the headless-dev plugins directory  
    All plugin modules must be placed in:
-   xppython3-headless-dev/plugins/
+   xppython3-headless-dev/plugins/PythonPlugins
 
    The simless runner loads plugins directly from this directory and executes their full lifecycle.
 
@@ -63,47 +63,50 @@ Follow these steps to set up a fully functional sim‑less XPPython3 development
 ```
 xppython3-headless-dev/
 │
-├── plugins/                                # All XPPython3 plugins go here
-│   ├── PI_sshd_ota.py                      # Example plugin with managed DataRefs
-│   ├── PI_sshd_dev_ota_gui                 # Example XPWidget GUI plugin
+├── plugins/                                # Mirrors X‑Plane's Resources/plugins/
+│   │                                        # Production-only; FakeXP NEVER writes here
+│   ├── XPPython3/                           # Real XPPython3 API (importable by plugins)
+│   │   ├── xp.py                            # Real xp API surface (FakeXP monkey‑patches this)
+│   │   ├── xp.pyi                           # Typing surface for IDE/mypy
+│   │   ├── xp_types.pyi                     # XPLM typedefs, enums, structs
+│   │   └── utils/                           # Real XPPython3 helpers (commands, datarefs)
+│   │       ├── commands.py
+│   │       ├── datarefs.py
+│   │       └── ...
 │   │
-│   ├── sshd_extlibs/                       # Shared modules
-│   │   ├── ss_serial_device.py
-│   │   └── ...
-│   │
-│   └── sshd_extensions/                    # Shared plugin architecture
-│       ├── datarefs.py                     # Managed DataRefs
-│       ├── xp_interface.py                 # Runtime placeholder for XPInterface
-│       └── ...
+│   └── PythonPlugins/                       # ALL plugins live here (exactly like X‑Plane)
+│       ├── PI_sshd_ota.py                   # Example plugin with managed DataRefs
+│       ├── PI_sshd_dev_ota_gui.py           # Example XPWidget GUI plugin
+│       │
+│       ├── sshd_extlibs/                    # Shared production modules for plugins
+│       │   ├── ss_serial_device.py
+│       │   └── ...
+│       │
+│       └── sshd_extensions/                 # Shared plugin architecture (production)
+│           ├── datarefs.py                  # Managed DataRefs
+│           ├── bridge_protocol.py           # Bridge datarefs
+│           └── ...
 │
-├── simless/                                # Sim‑less execution harnesses
-│   ├── __init__.pyi                        # Declares xp: FakeXPInterface for IDE/mypy visibility
+├── simless/                                 # Sim‑less execution harness (development‑only)
 │   │
-│   ├── run_standalone_oat.py               # FakeXP only + GUI dataref updates
-│   ├── run_bridged_oat.py                  # FakeXP + live DataRef bridge
+│   ├── run_standalone_oat.py                # FakeXP-only GUI runner
+│   ├── run_bridged_oat.py                   # FakeXP + live DataRef bridge
 │   │
-│   └── libs/                               # Simless-only runtime + typing contracts
-│       ├── fake_xp.py                      # FakeXP: public xp.* API façade
-│       ├── plugin_runner.py                # Lifecycle, plugin loading, timing
-│       ├── plugin_loader.py                # Load plugin compatible environment
-│       ├── fake_xp_widget.py               # XPWidget emulation (DearPyGui-backed)
-│       ├── fake_xp_graphics.py             # XPLMDisplay/XPLMGraphics simulation
-│       ├── fake_xp_dataref.py              # DataRef engine (managed + inferred + bridged)
-│       ├── fake_xp_utilities.py            # Commands, menus, misc XPLM shims
-│       └── fake_xp_interface.pyi           # FakeXPInterface + FakeRefInfo typing
+│   └── libs/                                # FakeXP runtime + XP API monkey‑patch layer
+│       ├── fake_xp.py                       # FakeXP: public xp.* API façade
+│       ├── fake_xp.pyi                      # Generated Protocol: fake xp.* API surface
+│       ├── plugin_runner.py                 # Lifecycle, plugin loading, timing
+│       ├── plugin_loader.py                 # Load plugin compatible environment
+│       ├── fake_xp_widget.py                # XPWidget emulation (DearPyGui-backed)
+│       ├── fake_xp_graphics.py              # XPLMDisplay/XPLMGraphics simulation
+│       ├── fake_xp_dataref.py               # DataRef engine (managed + inferred + bridged)
+│       ├── fake_xp_utilities.py             # Commands, menus, misc XPLM shims
+│       ├── fake_xp_input.py                 # mouse / keyboard
+│       └── fake_xp_interface.pyi            # Typing surface for FakeXPInterface
 │
-├── stubs/                                  # IDE-visible stubs for real XPPython3 + simless Protocols
-│   ├── sshd_extensions/
-│   │   └── xp_interface.pyi                # Generated Protocol: full xp.* API surface
-│   │
-│   └── XPPython3/                          # Install the complete package here
-│       ├── xp.pyi                          # Full XPPython3 API surface
-│       ├── xp_types.pyi                    # XPLM typedefs, enums, structs
-│       └── ...
+├── tests/                                   # Unit tests for FakeXP + plugin lifecycle
 │
-├── tests/                                  # Unit tests for FakeXP + plugin lifecycle
-│
-└── pyproject.toml                          # Poetry package management
+└── pyproject.toml                           # Poetry package management
 ```
 ---------------------------------------------------------------------
 
@@ -176,12 +179,11 @@ No plugin code changes are required.
 
 A simple runner script is all that’s needed to execute plugins outside X‑Plane.
 
-import XPPython3
+```python
 from simless.libs.fake_xp import FakeXP
 
 def run_gui_sample() -> None:
     xp = FakeXP(enable_gui=True)
-    XPPython3.xp = xp
 
     plugins = [
         "PI_sshd_gui_sample",
@@ -191,6 +193,7 @@ def run_gui_sample() -> None:
 
 if __name__ == "__main__":
     run_gui_sample()
+```
 
 This runner:
 

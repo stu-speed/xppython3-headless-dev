@@ -27,9 +27,9 @@ from __future__ import annotations
 import threading
 from typing import Any, Callable, Dict, Optional
 
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 from simless.libs.fake_xp_dataref_api import FakeXPDataRefAPI
 from simless.libs.fake_xp_types import FakeDataRef
-from sshd_extensions.dataref_manager import DRefType
 
 
 class FakeXPDataRef(FakeXPDataRefAPI):

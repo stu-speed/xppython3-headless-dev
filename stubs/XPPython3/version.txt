@@ -1,1 +1,0 @@
-XPPython3 v4.7.0 for Python 3.12

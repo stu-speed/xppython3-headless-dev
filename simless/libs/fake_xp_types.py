@@ -5,9 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import auto, StrEnum
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from typing import TYPE_CHECKING, Protocol
 
-from sshd_extensions.dataref_manager import DRefType
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 from XPPython3.xp_typing import (
     XPLMCursorStatus, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer,
     XPWidgetClass, XPWidgetID, XPWidgetPropertyID
@@ -24,15 +23,8 @@ Type_Data = 32
 
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
 
-
-
-class XPProtocol(Protocol):
-    """Full xp API (merged from xp.pyi) + any simless extensions."""
-    pass
-if TYPE_CHECKING:
-    import XPPython3.xp as xp_stub
-    XPProtocol = xp_stub  # type: ignore
-
+# XP12-style struct dictionary
+FlightLoopStruct = Dict[str, Any]
 
 
 class XPShutdown(Exception):
@@ -164,14 +156,19 @@ class WidgetInfo:
     # XP geometry helpers
     @property
     def left(self) -> int: return self.geometry[0]
+
     @property
     def top(self) -> int: return self.geometry[1]
+
     @property
     def right(self) -> int: return self.geometry[2]
+
     @property
     def bottom(self) -> int: return self.geometry[3]
+
     @property
     def width(self) -> int: return max(0, self.right - self.left)
+
     @property
     def height(self) -> int: return max(0, self.bottom - self.top)
 
@@ -416,12 +413,12 @@ class DPGOp(StrEnum):
     # --------------------------------------------------
     # Menus (XPLMMenus → DearPyGui)
     # --------------------------------------------------
-    ADD_MENU_BAR = auto()          # dpg.add_menu_bar()
-    ADD_MENU = auto()              # dpg.add_menu()
-    ADD_MENU_ITEM = auto()         # dpg.add_menu_item()
-    ADD_MENU_SEPARATOR = auto()    # dpg.add_separator()
-    SET_MENU_ITEM_CHECKED = auto() # dpg.configure_item(check=True/False)
-    SET_MENU_ITEM_ENABLED = auto() # dpg.configure_item(enabled=True/False)
+    ADD_MENU_BAR = auto()  # dpg.add_menu_bar()
+    ADD_MENU = auto()  # dpg.add_menu()
+    ADD_MENU_ITEM = auto()  # dpg.add_menu_item()
+    ADD_MENU_SEPARATOR = auto()  # dpg.add_separator()
+    SET_MENU_ITEM_CHECKED = auto()  # dpg.configure_item(check=True/False)
+    SET_MENU_ITEM_ENABLED = auto()  # dpg.configure_item(enabled=True/False)
 
 
 @dataclass(frozen=True, slots=True)

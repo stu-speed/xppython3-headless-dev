@@ -9,7 +9,7 @@ import time
 import XPPython3
 
 from simless.libs.fake_xp import FakeXP
-from sshd_extensions.dataref_manager import DataRefManager
+from PythonPlugins.sshd_extensions.dataref_manager import DataRefManager
 
 
 # ===========================================================================

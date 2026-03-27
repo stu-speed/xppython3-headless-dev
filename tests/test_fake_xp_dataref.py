@@ -7,7 +7,7 @@ import pytest
 import XPPython3
 from simless.libs.fake_xp import FakeXP
 from simless.libs.fake_xp_types import FakeDataRef, Type_Data, Type_Int, Type_Unknown
-from sshd_extensions.dataref_manager import DRefType
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 
 
 @pytest.fixture

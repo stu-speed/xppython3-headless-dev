@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Pattern
+from typing import Any, Dict, Optional, Pattern, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import DRefType, FakeDataRef
-from simless.libs.fake_xp_interface import FakeXPInterface
 from XPPython3.xp_typing import XPWidgetID, XPWidgetMessage
+
+if TYPE_CHECKING:
+    from simless.libs.fake_xp import FakeXP
 
 
 # ============================================================
@@ -48,8 +50,8 @@ class ViewerState:
 class DataRefViewer:
     LOG_PREFIX = "[FakeXPDataRefViewer]"
 
-    def __init__(self, xp_: FakeXPInterface) -> None:
-        self.xp = xp_
+    def __init__(self, xp: FakeXP) -> None:
+        self.xp = xp
 
         self.win: XPWidgetID | None = None
         self.status_caption: XPWidgetID | None = None
@@ -68,9 +70,6 @@ class DataRefViewer:
         self._filter_regex: Optional[Pattern[str]] = None
 
     # --------------------------------------------------------
-
-    def log(self, msg: str) -> None:
-        self.xp.log(f"{DataRefViewer.LOG_PREFIX} {msg}")
 
     def open(self) -> None:
         if self.win:
@@ -219,9 +218,9 @@ class DataRefViewer:
 # ============================================================
 
 class FakeXPDataRefViewerClient:
-    def __init__(self, xp_: FakeXPInterface):
-        self.xp = xp_
-        self.viewer = DataRefViewer(xp_)
+    def __init__(self, xp: FakeXP):
+        self.xp = xp
+        self.viewer = DataRefViewer(xp)
         self._attached = False
 
     def attach(self) -> None:

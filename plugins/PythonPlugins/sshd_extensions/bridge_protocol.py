@@ -36,7 +36,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import select
 import socket
 import time
 from collections import namedtuple
@@ -44,10 +43,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, TextIO, Tuple, Union
 
-from XPPython3.xp_typing import XPLMFlightLoopID
+import select
 
-from sshd_extensions.xp_interface import XPInterface
-from sshd_extensions.dataref_manager import DataRefSpec, DataRefManager, DRefType
+from PythonPlugins.sshd_extensions.dataref_manager import DataRefManager, DataRefSpec, DRefType
+from XPPython3 import xp
+from XPPython3.xp_typing import XPLMFlightLoopID
 
 EPSILON: float = float(os.getenv("XPBRIDGE_EPSILON", "0.001"))
 RECONNECT_INTERVAL: float = float(os.getenv("XPBRIDGE_RECONNECT_INTERVAL", "10.0"))
@@ -377,7 +377,6 @@ class XPBridgeServer:
 
     def __init__(
         self,
-        xp_interface: XPInterface,
         rate: float = 0.05,
     ) -> None:
         """Initialize the bridge server.
@@ -390,7 +389,6 @@ class XPBridgeServer:
             rate (float, optional):
                 Flightloop callback interval in seconds. Defaults to 0.05.
         """
-        self.xp: XPInterface = xp_interface
         self.rate: float = rate
 
         # TCP state
@@ -400,7 +398,7 @@ class XPBridgeServer:
 
         # DataRef metadata and manager
         self.specs: Dict[str, DataRefSpec] = {}
-        self.manager: DataRefManager = DataRefManager(self.xp, timeout_seconds=0.0)
+        self.manager: DataRefManager = DataRefManager(xp, timeout_seconds=0.0)
 
         # Last-sent values for UPDATE deduplication
         self.last_sent: Dict[int, Any] = {}
@@ -430,35 +428,35 @@ class XPBridgeServer:
         srv.setblocking(False)
 
         self.server_sock = srv
-        self.xp.log(f"[Bridge] listening on {bind_host}:{BRIDGE_PORT}")
+        xp.log(f"[Bridge] listening on {bind_host}:{BRIDGE_PORT}")
 
     def _close_server(self) -> None:
         """Close the listening socket if open."""
         if self.server_sock:
-            self.xp.log("[Bridge] closing server socket")
+            xp.log("[Bridge] closing server socket")
             try:
                 self.server_sock.close()
             except Exception as exc:
-                self.xp.log(f"[Bridge] error closing server socket: {exc!r}")
+                xp.log(f"[Bridge] error closing server socket: {exc!r}")
             self.server_sock = None
 
     def _close_client(self) -> None:
         """Close the active client connection and reset session state."""
         if self.client_sock or self.client_file:
-            self.xp.log("[Bridge] closing client connection")
+            xp.log("[Bridge] closing client connection")
 
         if self.client_file:
             try:
                 self.client_file.close()
             except Exception as exc:
-                self.xp.log(f"[Bridge] error closing client_file: {exc!r}")
+                xp.log(f"[Bridge] error closing client_file: {exc!r}")
             self.client_file = None
 
         if self.client_sock:
             try:
                 self.client_sock.close()
             except Exception as exc:
-                self.xp.log(f"[Bridge] error closing client_sock: {exc!r}")
+                xp.log(f"[Bridge] error closing client_sock: {exc!r}")
             self.client_sock = None
 
         self._reset_session_full()
@@ -472,7 +470,7 @@ class XPBridgeServer:
         Clears all DataRef specs, manager state, last-sent values, and
         index mappings. Used when the client disconnects or sends RESET.
         """
-        self.xp.log("[Bridge] FULL RESET of session state")
+        xp.log("[Bridge] FULL RESET of session state")
         self.specs = {}
         self.manager.clear()
         self.last_sent = {}
@@ -499,7 +497,7 @@ class XPBridgeServer:
             self.client_sock.sendall(data)
             self._last_activity = time.time()
         except Exception as exc:
-            self.xp.log(f"[Bridge] send failed: {exc!r}")
+            xp.log(f"[Bridge] send failed: {exc!r}")
             self._close_client()
 
     def _send_error(self, text: str) -> None:
@@ -537,7 +535,7 @@ class XPBridgeServer:
                 client = None
                 addr = None
             except Exception as exc:
-                self.xp.log(f"[Bridge] accept() failed: {exc!r}")
+                xp.log(f"[Bridge] accept() failed: {exc!r}")
                 client = None
                 addr = None
 
@@ -546,7 +544,7 @@ class XPBridgeServer:
                 self.client_sock = client
                 self.client_file = client.makefile("r", encoding="utf-8", newline="\n")
                 self._reset_session_full()
-                self.xp.log(f"[Bridge] client connected from {addr}")
+                xp.log(f"[Bridge] client connected from {addr}")
                 self._last_activity = now
 
         if not self.client_sock or not self.client_file:
@@ -559,12 +557,12 @@ class XPBridgeServer:
             try:
                 line = self.client_file.readline()
             except Exception as exc:
-                self.xp.log(f"[Bridge] read failed: {exc!r}")
+                xp.log(f"[Bridge] read failed: {exc!r}")
                 self._close_client()
                 return -1.0
 
             if line == "":
-                self.xp.log("[Bridge] client disconnected (EOF)")
+                xp.log("[Bridge] client disconnected (EOF)")
                 self._close_client()
                 return -1.0
 
@@ -573,7 +571,7 @@ class XPBridgeServer:
                 try:
                     msgs = BridgeMsg.decode_batch(stripped)
                 except Exception as exc:
-                    self.xp.log(f"[Bridge] invalid JSON batch: {exc!r} line={stripped!r}")
+                    xp.log(f"[Bridge] invalid JSON batch: {exc!r} line={stripped!r}")
                     self._send_error("invalid json")
                 else:
                     for msg in msgs:
@@ -593,7 +591,7 @@ class XPBridgeServer:
 
         # Heartbeat timeout
         if now - self._last_activity > HEARTBEAT_TIMEOUT:
-            self.xp.log("[Bridge] heartbeat timeout — closing client and full reset")
+            xp.log("[Bridge] heartbeat timeout — closing client and full reset")
             self._close_client()
             return -1.0
 
@@ -608,12 +606,12 @@ class XPBridgeServer:
         v = msg.value
 
         if t == BridgeMsgType.ADD:
-            self.xp.log(f"[Bridge] ADD {v.paths!r}")
+            xp.log(f"[Bridge] ADD {v.paths!r}")
             for path in v.paths:
                 self._apply_add(path)
 
         elif t == BridgeMsgType.RESET:
-            self.xp.log("[Bridge] RESET from client — full reset")
+            xp.log("[Bridge] RESET from client — full reset")
             self._reset_session_full()
 
         elif t == BridgeMsgType.PONG:
@@ -638,27 +636,27 @@ class XPBridgeServer:
 
     def _apply_add(self, path: str) -> None:
         """Handle an ADD request for a DataRef path."""
-        handle = self.xp.findDataRef(path)
+        handle = xp.findDataRef(path)
         if handle is None:
-            self.xp.log(f"[Bridge] ADD failed: DataRef not found: {path}")
+            xp.log(f"[Bridge] ADD failed: DataRef not found: {path}")
             self._send_error(f"DataRef not found: {path}")
             return
 
-        info = self.xp.getDataRefInfo(handle)
+        info = xp.getDataRefInfo(handle)
         if info is None:
-            self.xp.log(f"[Bridge] ADD failed: DataRef info unavailable: handle={handle}")
+            xp.log(f"[Bridge] ADD failed: DataRef info unavailable: handle={handle}")
             self._send_error(f"DataRef info unavailable: handle={handle}")
             return
-        self.xp.log(f"[Bridge] INFO: {info} type={info.type}")
+        xp.log(f"[Bridge] INFO: {info} type={info.type}")
 
         # Determine array size
         t = info.type
         if t == int(DRefType.FLOAT_ARRAY):
-            array_size = self.xp.getDatavf(handle, None, 0, 0)
+            array_size = xp.getDatavf(handle, None, 0, 0)
         elif t == int(DRefType.INT_ARRAY):
-            array_size = self.xp.getDatavi(handle, None, 0, 0)
+            array_size = xp.getDatavi(handle, None, 0, 0)
         elif t == int(DRefType.BYTE_ARRAY):
-            array_size = self.xp.getDatab(handle, None, 0, 0)
+            array_size = xp.getDatab(handle, None, 0, 0)
         else:
             array_size = 0
 
@@ -674,7 +672,7 @@ class XPBridgeServer:
             self.specs[path] = spec
             self.manager.add_spec(path, spec)
         except Exception as exc:
-            self.xp.log(f"[Bridge] Failed to add spec for {path}: {exc!r}")
+            xp.log(f"[Bridge] Failed to add spec for {path}: {exc!r}")
             self._send_error(f"Failed to add spec for {path}: {exc!r}")
             return
 
@@ -687,7 +685,7 @@ class XPBridgeServer:
             writable=info.writable,
             array_size=array_size,
         )
-        self.xp.log(
+        xp.log(
             f"[Bridge] META for {path}: idx={idx} type={info.type} "
             f"writable={info.writable} array_size={array_size}"
         )
@@ -809,12 +807,9 @@ class XPBridgeClient:
 
     def __init__(
         self,
-        xp_interface: XPInterface,
         host: str = BRIDGE_HOST,
         port: int = BRIDGE_PORT,
     ) -> None:
-        self.xp: XPInterface = xp_interface
-
         # Production defaults (may be overridden by FakeXP)
         self.host: str = host
         self.port: int = port
@@ -846,7 +841,7 @@ class XPBridgeClient:
     def set_conn_status(self, status: str) -> None:
         self._conn_status = status
         if self._conn_status != self._prev_conn_status:
-            self.xp.log(f"[Bridge] {self._conn_status}")
+            xp.log(f"[Bridge] {self._conn_status}")
 
     def connect(self) -> None:
         self.disconnect()
