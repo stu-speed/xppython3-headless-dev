@@ -16,11 +16,13 @@ Do not open PyCharm inside `plugins/` or `simless/`.
 
 ---
 
-## 2. Configure plugin path
-XPPython treats the plugins directory as the import root.  
+## 2. Configure root source dirs
+XPPython3 has several source roots.  
 PyCharm must understand this behavior.
 
 Right‑click: plugins/ → Mark Directory As → Sources Root
+Right‑click: plugins/PythonPlugins → Mark Directory As → Sources Root
+Right‑click: plugins/XPPython3 → Mark Directory As → Sources Root
 
 ---
 
