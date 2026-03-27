@@ -5,13 +5,11 @@
 # See GUI_EMULATION.md for considerations in using GUI emulation
 # ===========================================================================
 
-import XPPython3
 from simless.libs.fake_xp import FakeXP
 
 
 def run_gui_sample() -> None:
     xp = FakeXP(enable_gui=True)
-    XPPython3.xp = xp
 
     plugins = [
         "PI_sshd_gui_sample",
