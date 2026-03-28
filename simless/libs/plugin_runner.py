@@ -68,7 +68,7 @@ class SimlessRunner:
 
     def __init__(
         self,
-        xp: FakeXP,
+        fake_xp: FakeXP,
         enable_dataref_bridge: bool = False,
         bridge_host: Optional[str] = None,
         bridge_port: Optional[int] = None,
@@ -76,7 +76,7 @@ class SimlessRunner:
         # ------------------------------------------------------------------
         # Core state
         # ------------------------------------------------------------------
-        self.xp = xp
+        self.xp = fake_xp
         self._running: bool = False
         self._bridge_connected: bool = False
         self._bridge_last_error: str | None = None

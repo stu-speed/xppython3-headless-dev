@@ -40,7 +40,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, cast, Dict, List, Optional, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import EventInfo, EventKind, WindowExInfo
 from XPPython3.xp_typing import (
@@ -56,8 +56,6 @@ if TYPE_CHECKING:
 class FakeXPInput:
     """Input routing subsystem mixin for FakeXP."""
 
-    xp: FakeXP
-
     # ------------------------------------------------------------------
     # WindowEx authoritative storage (owned by graphics subsystem)
     # ------------------------------------------------------------------
@@ -70,6 +68,10 @@ class FakeXPInput:
     _input_events: List[EventInfo]
     _mouse_capture_window: Optional[XPLMWindowID]
     _mouse_button_down: bool
+
+    @property
+    def fake_xp(self) -> FakeXP:
+        return cast("FakeXP", cast(object, self))
 
     # ------------------------------------------------------------------
     # INITIALIZATION
@@ -200,7 +202,7 @@ class FakeXPInput:
     ) -> XPLMCursorStatus:
         info = self._windows_ex.get(windowID)
         if info is None or info.cursor_cb is None:
-            return self.xp.CursorDefault
+            return self.fake_xp.CursorDefault
 
         return info.cursor_cb(windowID, xp_x, xp_y, info.refcon)
 
@@ -213,7 +215,7 @@ class FakeXPInput:
                 raise RuntimeError("MOUSE_BUTTON requires state")
 
             mouse_status = (
-                self.xp.MouseDown if event.state == "down" else self.xp.MouseUp
+                self.fake_xp.MouseDown if event.state == "down" else self.fake_xp.MouseUp
             )
 
             return self._handle_mouse_button(
@@ -259,7 +261,7 @@ class FakeXPInput:
             info = self._pick_window_ex_at(xp_x, xp_y)
 
         if info is None:
-            return self.xp.CursorDefault
+            return self.fake_xp.CursorDefault
 
         return self._dispatch_window_cursor(info.wid, xp_x, xp_y)
 
@@ -274,12 +276,12 @@ class FakeXPInput:
         # ------------------------------------------------------------
         # 1) Debounce MouseDown
         # ------------------------------------------------------------
-        if mouseStatus == self.xp.MouseDown:
+        if mouseStatus == self.fake_xp.MouseDown:
             if self._mouse_button_down:
                 return 0
             self._mouse_button_down = True
 
-        elif mouseStatus == self.xp.MouseUp:
+        elif mouseStatus == self.fake_xp.MouseUp:
             self._mouse_button_down = False
 
         # ------------------------------------------------------------
@@ -308,14 +310,14 @@ class FakeXPInput:
         # ------------------------------------------------------------
         # 4) Capture on MouseDown
         # ------------------------------------------------------------
-        if consumed and mouseStatus == self.xp.MouseDown:
+        if consumed and mouseStatus == self.fake_xp.MouseDown:
             self._mouse_capture_window = info.wid
             self._keyboard_focus_window = info.wid
 
         # ------------------------------------------------------------
         # 5) Release capture AFTER dispatch
         # ------------------------------------------------------------
-        if mouseStatus == self.xp.MouseUp:
+        if mouseStatus == self.fake_xp.MouseUp:
             if self._mouse_capture_window == info.wid:
                 self._mouse_capture_window = None
 

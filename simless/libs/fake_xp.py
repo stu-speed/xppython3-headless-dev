@@ -44,9 +44,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Optional
 
-import XPPython3
+from simless.libs.fake_xp_command import FakeXPCommand
 from simless.libs.fake_xp_constants import bind_xp_constants
 from simless.libs.fake_xp_dataref import FakeXPDataRef
 from simless.libs.fake_xp_flightloop import FakeXPFlightLoop
@@ -56,8 +56,6 @@ from simless.libs.fake_xp_utilities import FakeXPUtilities
 from simless.libs.fake_xp_widget import FakeXPWidget
 from simless.libs.plugin_runner import SimlessRunner
 
-FlightLoopCallback = Callable[[float, float, int, Any], float]
-
 
 class FakeXP(
     FakeXPDataRef,
@@ -66,6 +64,7 @@ class FakeXP(
     FakeXPFlightLoop,
     FakeXPUtilities,
     FakeXPInput,
+    FakeXPCommand,
 ):
     """
     Unified xp.* façade for simless plugin execution.
@@ -140,19 +139,17 @@ class FakeXP(
         self._init_flightloop()
         self._init_utilities()
         self._init_input()
+        self._init_command()
 
         # ------------------------------------------------------------------
-        # Bind xp.* namespace
+        # Bind constants
         # ------------------------------------------------------------------
-        XPPython3.xp = self
-        self.xp = XPPython3.xp  # type: ignore[arg-type]
-
-        bind_xp_constants(self.xp)
+        bind_xp_constants(self)
 
         # ------------------------------------------------------------------
-        # Create the SimlessRunner
+        # Bind SimlessRunner
         # ------------------------------------------------------------------
-        self.simless_runner = SimlessRunner(self.xp, enable_dataref_bridge, bridge_host, bridge_port)
+        self.simless_runner = SimlessRunner(self, enable_dataref_bridge, bridge_host, bridge_port)
 
     # ----------------------------------------------------------------------
     # Helpers

@@ -36,7 +36,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, TYPE_CHECKING
+from typing import Any, Callable, cast, Dict, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import FlightLoopStruct
 
@@ -53,7 +53,10 @@ class FakeXPFlightLoop:
       • Does NOT own any timing or scheduling
       • Exposes structs for an external runner (SimlessRunner) to consume
     """
-    xp: FakeXP
+
+    @property
+    def fake_xp(self) -> FakeXP:
+        return cast("FakeXP", cast(object, self))
 
     # ------------------------------------------------------------------
     # Initialization

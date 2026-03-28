@@ -43,15 +43,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import dearpygui.dearpygui as dpg
 
 from simless.libs.fake_xp_graphics_api import FakeXPGraphicsAPI
 from simless.libs.fake_xp_types import DPGCommand, DPGOp, EventInfo, EventKind, WindowExInfo
 from XPPython3.xp_typing import XPLMMenuID, XPLMWindowID
-
-DPGCallback = Callable[[int | str, Any, Any], Any]
 
 
 class FakeXPGraphics(FakeXPGraphicsAPI):
@@ -180,7 +178,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
         # 1) End run loop if viewport closed
         if not dpg.is_dearpygui_running():
-            self.xp.simless_runner.end_run_loop()
+            self.fake_xp.simless_runner.end_run_loop()
             return
 
         # 2) Clear global screen drawlists
@@ -225,8 +223,8 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self._consume_dpg_to_xp_changes()
 
         # 9) Input processing
-        for event in self.xp.drain_input_events():
-            self.xp.process_event_info(event)
+        for event in self.fake_xp.drain_input_events():
+            self.fake_xp.process_event_info(event)
 
         # 10) WindowEx drawing (enqueue only)
         for info in self._iter_window_ex_in_layer_order():
@@ -262,7 +260,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self._dpg_commands.clear()
 
         # 12) Widget rendering
-        self.xp.render_widget_frame()
+        self.fake_xp.render_widget_frame()
 
     # ----------------------------------------------------------------------
     # DPG HELPERS (ALL DPG calls handled by this class)
@@ -426,7 +424,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         )
 
     def _install_dpg_input_callbacks(self) -> None:
-        xp = self.xp  # FakeXP instance
+        xp = self.fake_xp  # FakeXP instance
 
         with dpg.handler_registry():
             dpg.add_mouse_down_handler(
@@ -620,7 +618,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
                 dpg.add_menu_item(
                     label="Quit",
                     tag="xp_menu_file_quit",
-                    callback=lambda: self.xp.simless_runner.end_run_loop()
+                    callback=lambda: self.fake_xp.simless_runner.end_run_loop()
                 )
 
             # The actual DPG root for plugin menus

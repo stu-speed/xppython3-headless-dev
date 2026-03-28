@@ -24,7 +24,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, cast, List, Optional, Tuple, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import WidgetInfo, WindowExInfo, XPWidgetCallback
 from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage, XPWidgetPropertyID
@@ -34,8 +34,6 @@ if TYPE_CHECKING:
 
 
 class FakeXPWidgetsAPI:
-    xp: FakeXP
-
     # ID generation
     _next_id: int
     _z_order: List[XPWidgetID]
@@ -51,6 +49,10 @@ class FakeXPWidgetsAPI:
     # Initialization guard
     _widgets_dirty: bool
     _widgets_initialized: bool
+
+    @property
+    def fake_xp(self) -> FakeXP:
+        return cast("FakeXP", cast(object, self))
 
     # Backend helpers (implemented in FakeXPWidget)
     def _get_widget(self, wid: XPWidgetID) -> WidgetInfo:
@@ -113,7 +115,7 @@ class FakeXPWidgetsAPI:
             visible=bool(visible),
         )
 
-        if widget_class == self.xp.WidgetClass_TextField:
+        if widget_class == self.fake_xp.WidgetClass_TextField:
             info.edit_buffer = descriptor
 
         # 4. Root widget → create WindowEx
@@ -187,11 +189,11 @@ class FakeXPWidgetsAPI:
     # ------------------------------------------------------------------
     # PROPERTIES
     # ------------------------------------------------------------------
-    def setWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID, value: Any) -> None:
+    def setWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID | int, value: Any) -> None:
         info = self._require_widget(wid)
         self._update_widget(info, prop=(prop, value))
 
-    def getWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID) -> Any:
+    def getWidgetProperty(self, wid: XPWidgetID, prop: XPWidgetPropertyID | int) -> Any:
         return self._require_widget(wid).properties.get(prop)
 
     # ------------------------------------------------------------------
@@ -205,7 +207,7 @@ class FakeXPWidgetsAPI:
     def sendMessageToWidget(
         self,
         wid: XPWidgetID,
-        msg: XPWidgetMessage,
+        msg: XPWidgetMessage | int,
         param1: Any,
         param2: Any,
     ) -> None:
@@ -301,16 +303,16 @@ class FakeXPWidgetsAPI:
     # INTERNAL
     # ------------------------------------------------------------------
     def _create_window_for_root_widget(self, wid: XPWidgetID, info: WidgetInfo):
-        win_id = self.xp.createWindowEx(
+        win_id = self.fake_xp.createWindowEx(
             left=info.geometry[0],
             top=info.geometry[1],
             right=info.geometry[2],
             bottom=info.geometry[3],
-            decoration=self.xp.WindowDecorationRoundRectangle,
-            layer=self.xp.WindowLayerFloatingWindows,
+            decoration=self.fake_xp.WindowDecorationRoundRectangle,
+            layer=self.fake_xp.WindowLayerFloatingWindows,
         )
 
-        win = self.xp.get_windowex(win_id)
+        win = self.fake_xp.get_windowex(win_id)
         win.widget_root = wid
         win.widgets[wid] = info
 
@@ -335,7 +337,7 @@ class FakeXPWidgetsAPI:
         is raised.
         """
 
-        for win in self.xp.all_windowex():
+        for win in self.fake_xp.all_windowex():
             info = win.widgets.get(wid)
             if info is not None:
                 return info
