@@ -51,7 +51,7 @@ class DataRefViewer:
     LOG_PREFIX = "[FakeXPDataRefViewer]"
 
     def __init__(self, xp: FakeXP) -> None:
-        self.xp = xp
+        self.fake_xp = xp
 
         self.win: XPWidgetID | None = None
         self.status_caption: XPWidgetID | None = None
@@ -75,84 +75,84 @@ class DataRefViewer:
         if self.win:
             return
 
-        self.win = self.xp.createWidget(
+        self.win = self.fake_xp.createWidget(
             100, 800, 1400, 200,
             1,
             "FakeXP DataRef Viewer",
             1,
             0,
-            self.xp.WidgetClass_MainWindow,
+            self.fake_xp.WidgetClass_MainWindow,
         )
-        self.xp.setWidgetProperty(self.win, self.xp.Property_MainWindowHasCloseBoxes, 1)
+        self.fake_xp.setWidgetProperty(self.win, self.fake_xp.Property_MainWindowHasCloseBoxes, 1)
 
         # STATUS (single line)
-        self.status_caption = self.xp.createWidget(
+        self.status_caption = self.fake_xp.createWidget(
             110, 770, 850, 735,
-            1, "", 0, self.win, self.xp.WidgetClass_Caption
+            1, "", 0, self.win, self.fake_xp.WidgetClass_Caption
         )
 
         # FILTER (single line, moved up)
         y_top = 745
         y_bot = 725
 
-        self.filter_label = self.xp.createWidget(
+        self.filter_label = self.fake_xp.createWidget(
             110, y_top, 220, y_bot,
-            1, "FILTER (regex):", 0, self.win, self.xp.WidgetClass_Caption
+            1, "FILTER (regex):", 0, self.win, self.fake_xp.WidgetClass_Caption
         )
 
-        self.filter_field = self.xp.createWidget(
+        self.filter_field = self.fake_xp.createWidget(
             225, y_top, 525, y_bot,
-            1, "", 0, self.win, self.xp.WidgetClass_TextField
+            1, "", 0, self.win, self.fake_xp.WidgetClass_TextField
         )
-        self.xp.setWidgetProperty(
+        self.fake_xp.setWidgetProperty(
             self.filter_field,
-            self.xp.Property_TextFieldType,
-            self.xp.TextEntryField,
+            self.fake_xp.Property_TextFieldType,
+            self.fake_xp.TextEntryField,
         )
 
-        self.filter_button = self.xp.createWidget(
+        self.filter_button = self.fake_xp.createWidget(
             530, y_top, 610, y_bot,
-            1, "Apply", 0, self.win, self.xp.WidgetClass_Button
+            1, "Apply", 0, self.win, self.fake_xp.WidgetClass_Button
         )
 
         # DATAREF LIST (nudged up to match reclaimed space)
-        self.data_caption = self.xp.createWidget(
+        self.data_caption = self.fake_xp.createWidget(
             110, 705, 1390, 250,
-            1, "", 0, self.win, self.xp.WidgetClass_Caption
+            1, "", 0, self.win, self.fake_xp.WidgetClass_Caption
         )
 
         # Callbacks
-        self.xp.addWidgetCallback(self.win, self._widget_handler)
-        self.xp.addWidgetCallback(self.filter_field, self._widget_handler)
-        self.xp.addWidgetCallback(self.filter_button, self._widget_handler)
+        self.fake_xp.addWidgetCallback(self.win, self._widget_handler)
+        self.fake_xp.addWidgetCallback(self.filter_field, self._widget_handler)
+        self.fake_xp.addWidgetCallback(self.filter_button, self._widget_handler)
 
         self._dirty = True
 
     def close(self) -> None:
         if self.win:
-            self.xp.destroyWidget(self.win, 1)
+            self.fake_xp.destroyWidget(self.win, 1)
             self.win = None
 
     # --------------------------------------------------------
 
     def _widget_handler(
         self,
-        msg: XPWidgetMessage,
-        widget: XPWidgetID,
+        msg: XPWidgetMessage | int,
+        widget: XPWidgetID | int,
         p1: Any,
         p2: Any,
     ) -> int:
-        if msg == self.xp.Message_CloseButtonPushed and widget == self.win:
-            self.xp.hideWidget(self.win)
+        if msg == self.fake_xp.Message_CloseButtonPushed and widget == self.win:
+            self.fake_xp.hideWidget(self.win)
             return 1
 
         # TextField commits are event-driven
-        if msg == self.xp.Msg_TextFieldChanged and widget == self.filter_field:
+        if msg == self.fake_xp.Msg_TextFieldChanged and widget == self.filter_field:
             self._filter_text = str(p1)
             return 1
 
         # Button presses are delivered to the parent window
-        if msg == self.xp.Msg_PushButtonPressed and widget == self.filter_button:
+        if msg == self.fake_xp.Msg_PushButtonPressed and widget == self.filter_button:
             self._apply_filter(self._filter_text)
             return 1
 
@@ -172,15 +172,14 @@ class DataRefViewer:
     # --------------------------------------------------------
 
     def _render_status(self) -> None:
-        runner = self.xp.simless_runner
-        enabled, connected, conn_status = runner.bridge_status
+        enabled, connected, conn_status = self.fake_xp.simless_runner.get_bridge_status()
 
         if not enabled:
             text = "Bridge: DISABLED"
         else:
             text = f"Bridge: {"CONNECTED" if connected else "DISCONNECTED"} - {conn_status}"
 
-        self.xp.setWidgetDescriptor(self.status_caption, text)
+        self.fake_xp.setWidgetDescriptor(self.status_caption, text)
 
     def _render_datarefs(self) -> None:
         lines: list[str] = []
@@ -200,7 +199,7 @@ class DataRefViewer:
                 f"{'W' if meta.writable else '-'} {ref.value}"
             )
 
-        self.xp.setWidgetDescriptor(self.data_caption, "\n".join(lines))
+        self.fake_xp.setWidgetDescriptor(self.data_caption, "\n".join(lines))
 
     def _apply_filter(self, text: str) -> None:
         text = (text or "").strip()
@@ -219,7 +218,7 @@ class DataRefViewer:
 
 class FakeXPDataRefViewerClient:
     def __init__(self, xp: FakeXP):
-        self.xp = xp
+        self.fake_xp = xp
         self.viewer = DataRefViewer(xp)
         self._attached = False
 
@@ -228,10 +227,10 @@ class FakeXPDataRefViewerClient:
             return
         self._attached = True
 
-        for ref in self.xp.all_handles():
+        for ref in self.fake_xp.all_handles():
             self._add_ref(ref)
 
-        self.xp.attach_handle_callback(self._on_new_handle)
+        self.fake_xp.attach_handle_callback(self._on_new_handle)
         self.viewer.open()
 
     def detach(self) -> None:
@@ -239,7 +238,7 @@ class FakeXPDataRefViewerClient:
             return
         self._attached = False
 
-        self.xp.detach_handle_callback()
+        self.fake_xp.detach_handle_callback()
         self.viewer.close()
 
     def update(self) -> None:
@@ -275,7 +274,7 @@ class FakeXPDataRefViewerClient:
         self.viewer._dirty = True
 
     def _update_value(self, state: RefState) -> None:
-        ref = self.xp.get_handle(state.meta.name)
+        ref = self.fake_xp.get_handle(state.meta.name)
         if ref is None:
             return
 
@@ -289,25 +288,24 @@ class FakeXPDataRefViewerClient:
 
     def _read_value(self, ref: FakeDataRef) -> Any:
         t = ref.type
-        xp_ = self.xp
 
         if t & DRefType.FLOAT:
-            return xp_.getDataf(ref)
+            return self.fake_xp.getDataf(ref)
         if t & DRefType.INT:
-            return xp_.getDatai(ref)
+            return self.fake_xp.getDatai(ref)
         if t & DRefType.DOUBLE:
-            return xp_.getDatad(ref)
+            return self.fake_xp.getDatad(ref)
         if t & DRefType.FLOAT_ARRAY:
             buf = [0.0] * ref.size
-            xp_.getDatavf(ref, buf, 0, ref.size)
+            self.fake_xp.getDatavf(ref, buf, 0, ref.size)
             return buf
         if t & DRefType.INT_ARRAY:
             buf = [0] * ref.size
-            xp_.getDatavi(ref, buf, 0, ref.size)
+            self.fake_xp.getDatavi(ref, buf, 0, ref.size)
             return buf
         if t & DRefType.BYTE_ARRAY:
             buf = bytearray(ref.size)
-            xp_.getDatab(ref, buf, 0, ref.size)
+            self.fake_xp.getDatab(ref, buf, 0, ref.size)
             return buf
 
         return None

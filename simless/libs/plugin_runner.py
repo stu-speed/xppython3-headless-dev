@@ -76,15 +76,12 @@ class SimlessRunner:
         # ------------------------------------------------------------------
         # Core state
         # ------------------------------------------------------------------
-        self.xp = fake_xp
+        self.fake_xp = fake_xp
         self._running: bool = False
         self._bridge_connected: bool = False
         self._bridge_last_error: str | None = None
         self._bridge_client = None
         self._dataref_viewer = None
-
-        # Allow FakeXP to call back into us
-        setattr(self.xp, "simless_runner", self)
 
         # ------------------------------------------------------------------
         # 1. Install synthetic XPPython3 runtime BEFORE importing plugin code
@@ -98,7 +95,7 @@ class SimlessRunner:
         # all resolve to the FakeXP façade, not plugins/XPPython3/xp.py.
         #
         from simless.libs.xppython3_runtime import wire_xppython3_runtime
-        wire_xppython3_runtime(self.xp)
+        wire_xppython3_runtime(self.fake_xp)
 
         # ------------------------------------------------------------------
         # 2. Now it is safe to import bridge_protocol
@@ -128,7 +125,7 @@ class SimlessRunner:
         # 4. Plugin loader (safe now that XPPython3 is synthetic)
         # ------------------------------------------------------------------
         from simless.libs.plugin_loader import SimlessPluginLoader
-        self.loader: SimlessPluginLoader = SimlessPluginLoader(self.xp)
+        self.loader: SimlessPluginLoader = SimlessPluginLoader(self.fake_xp)
 
         # ------------------------------------------------------------------
         # 5. Flightloop state
@@ -136,9 +133,9 @@ class SimlessRunner:
         self._next_flightloop_id: int = 1
         self._flightloops: Dict[int, Dict[str, Any]] = {}
         self._sim_time: float = 0.0
+        self._cycles: int = 0
 
-    @property
-    def bridge_status(self) -> tuple[bool, bool, str | None]:
+    def get_bridge_status(self) -> tuple[bool, bool, str | None]:
         """
         Return bridge status as enabled, connected, last_error.
         """
@@ -155,7 +152,7 @@ class SimlessRunner:
         The DataRef subsystem emits discovery events; the runner decides
         whether and how those paths are synchronized externally.
         """
-        self.xp.attach_handle_callback(self._on_dataref_handle_created)
+        self.fake_xp.attach_handle_callback(self._on_dataref_handle_created)
 
     def _on_dataref_handle_created(self, ref: Any) -> None:
         """Called synchronously when FakeXPDataRef creates a handle."""
@@ -169,7 +166,7 @@ class SimlessRunner:
             self._bridge_client.add(path)
         except Exception as exc:
             try:
-                self.xp.log(f"[Runner] Bridge registration failed for {path}: {exc}")
+                self.fake_xp.log(f"[Runner] Bridge registration failed for {path}: {exc}")
             except Exception:
                 pass
 
@@ -180,13 +177,13 @@ class SimlessRunner:
         """
         if self._bridge_client is None:
             return
-        all_handle_paths = self.xp.all_handle_paths()
+        all_handle_paths = self.fake_xp.all_handle_paths()
 
         try:
             self._bridge_client.add(all_handle_paths)
         except Exception:
             try:
-                self.xp.log(f"[Runner] Bridge registration failed for {all_handle_paths}")
+                self.fake_xp.log(f"[Runner] Bridge registration failed for {all_handle_paths}")
             except Exception:
                 pass
 
@@ -207,12 +204,11 @@ class SimlessRunner:
           • marks DataRefs dummy on disconnect,
           • logs bridge errors.
         """
-        xp = self.xp
 
         try:
             events: List[bridge_type.BridgeData] = self._bridge_client.poll_data()
         except ConnectionResetError as exc:
-            xp.log("[Runner] Bridge disconnected")
+            self.fake_xp.log("[Runner] Bridge disconnected")
             self._bridge_connected = False
             self._bridge_last_error = f"connection reset: {exc}"
             return
@@ -224,18 +220,18 @@ class SimlessRunner:
 
         for ev in events:
             if ev.type is self._bridge_mod.BridgeDataType.META:
-                ref = xp.get_handle(ev.path)
+                ref = self.fake_xp.get_handle(ev.path)
                 assert ref is not None
 
                 # Promote TYPE authority only
-                xp.promote_type(
+                self.fake_xp.promote_type(
                     ref=ref,
                     dtype=ev.dtype,
                     writable=bool(ev.writable),
                 )
 
             elif ev.type is self._bridge_mod.BridgeDataType.UPDATE:
-                ref = xp.get_handle(ev.path)
+                ref = self.fake_xp.get_handle(ev.path)
                 assert ref is not None, f"Unknown handle: {ev.path}"
                 value = ev.value
 
@@ -248,7 +244,7 @@ class SimlessRunner:
                     or ref.is_array != is_array
                     or ref.size != size
                 ):
-                    xp.promote_shape_from_value(
+                    self.fake_xp.promote_shape_from_value(
                         ref=ref,
                         value=value,
                     )
@@ -257,52 +253,20 @@ class SimlessRunner:
 
             elif ev.type is self._bridge_mod.BridgeDataType.ERROR:
                 self._bridge_last_error = ev.text
-                xp.log(f"[Bridge] ERROR: {ev.text}")
-
-    # ----------------------------------------------------------------------
-    # Flightloop API (runner‑owned)
-    # ----------------------------------------------------------------------
-    def create_flightloop(self, version: int, params: Dict[str, Any]) -> int:
-        loop_id = self._next_flightloop_id
-        self._next_flightloop_id += 1
-
-        self._flightloops[loop_id] = {
-            "callback": params["callback"],
-            "refcon": params.get("refcon"),
-            "phase": params.get("phase", 0),
-            "structSize": params.get("structSize", 1),
-            "interval": 0.0,
-            "next_call": 0.0,
-            "last_call": 0.0,
-            "counter": 0,
-        }
-        return loop_id
-
-    def schedule_flightloop(self, loop_id: int, interval: float) -> None:
-        fl = self._flightloops.get(loop_id)
-        if fl is None:
-            return
-
-        fl["interval"] = float(interval)
-        fl["next_call"] = (
-            self._sim_time if interval < 0 else self._sim_time + float(interval)
-        )
-
-    def destroy_flightloop(self, loop_id: int) -> None:
-        self._flightloops.pop(loop_id, None)
+                self.fake_xp.log(f"[Bridge] ERROR: {ev.text}")
 
     # ----------------------------------------------------------------------
     # Stop loop
     # ----------------------------------------------------------------------
     def end_run_loop(self) -> None:
         self._running = False
-        self.xp.log("[Runner] end_run_loop() called — stopping main loop")
+        self.fake_xp.log("[Runner] end_run_loop() called — stopping main loop")
 
     # ----------------------------------------------------------------------
     # One frame
     # ----------------------------------------------------------------------
     def _run_one_frame(self) -> None:
-        xp = self.xp
+        xp = self.fake_xp
 
         # 1. Advance sim time
         dt = 1.0 / 60.0
@@ -316,29 +280,66 @@ class SimlessRunner:
 
         # 3. Flightloops
         for fl in list(self._flightloops.values()):
-            if sim_time >= fl["next_call"]:
-                since = sim_time - fl["last_call"]
-                elapsed = since
-                counter = fl["counter"]
-                refcon = fl["refcon"]
+            interval = fl["interval"]
 
-                try:
-                    next_interval = fl["callback"](since, elapsed, counter, refcon)
-                except Exception as exc:
-                    xp.log(f"[Runner] modern flightloop error: {exc!r}")
-                    next_interval = fl["interval"]
+            # XP semantics: interval == 0 → unscheduled, never runs
+            if interval == 0:
+                continue
 
-                fl["last_call"] = sim_time
-                fl["counter"] += 1
+            # Negative interval → N flightloops (runner decrements)
+            if interval < 0:
+                # Use counter-based scheduling
+                if fl.get("_loops_remaining") is None:
+                    fl["_loops_remaining"] = abs(int(interval))
 
-                if next_interval is None or next_interval < 0:
-                    next_interval = fl["interval"]
+                fl["_loops_remaining"] -= 1
+                if fl["_loops_remaining"] > 0:
+                    continue  # not time yet
 
-                if next_interval == 0:
-                    fl["next_call"] = float("inf")
-                else:
-                    fl["interval"] = float(next_interval)
-                    fl["next_call"] = sim_time + float(next_interval)
+                # Reset for next cycle
+                fl["_loops_remaining"] = abs(int(interval))
+
+                # Treat as "ready to run now"
+                ready = True
+            else:
+                # Positive interval → time-based scheduling
+                ready = (sim_time >= fl["next_call"])
+
+            if not ready:
+                continue
+
+            # Compute callback args
+            since = sim_time - fl["last_call"]
+            elapsed = since
+            counter = fl["counter"]
+            refcon = fl["refcon"]
+
+            try:
+                next_interval = fl["callback"](since, elapsed, counter, refcon)
+            except Exception as exc:
+                xp.log(f"[Runner] modern flightloop error: {exc!r}")
+                next_interval = fl["interval"]
+
+            # Update timing
+            fl["last_call"] = sim_time
+            fl["counter"] += 1
+
+            # XP semantics: None or <0 → reuse previous interval
+            if next_interval is None or next_interval < 0:
+                next_interval = fl["interval"]
+
+            # interval == 0 → stop
+            if next_interval == 0:
+                fl["interval"] = 0
+                fl["next_call"] = float("inf")
+                continue
+
+            # Store new interval
+            fl["interval"] = float(next_interval)
+
+            # Positive interval → schedule next call
+            if next_interval > 0:
+                fl["next_call"] = sim_time + float(next_interval)
 
         # 4. viewer
         if self._dataref_viewer:
@@ -357,7 +358,7 @@ class SimlessRunner:
         enable_dataref_viewer: bool = False,
         run_time: float = -1,
     ) -> None:
-        xp = self.xp
+        xp = self.fake_xp
 
         if not plugin_names:
             xp.log("[Runner] No plugins to run")
