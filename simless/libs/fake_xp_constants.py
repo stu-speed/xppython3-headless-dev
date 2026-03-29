@@ -212,6 +212,8 @@ def bind_xp_constants(xp) -> None:
     xp.Property_Object = 4031
     xp.Property_Refcon = 4032
     xp.Property_UserStart = 4033
+    xp.Property_CaptionLit = 4034
+    xp.Property_CaptionFont = 4035
 
     # ----------------------------------------------------------------------
     # WIDGET / WINDOW STYLES & TRACKS (5000–5199)
