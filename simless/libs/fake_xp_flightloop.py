@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, cast, Dict, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import FlightLoopStruct
+from simless.libs._flightloop import FlightLoop
 from XPPython3.xp_typing import XPLMFlightLoopPhaseType, XPLMFlightLoopID
 
 if TYPE_CHECKING:
@@ -39,20 +39,23 @@ class FakeXPFlightLoop:
           • Struct metadata (callback, refcon, phase, structSize, etc.)
           • A read-only timing mirror (populated by SimlessRunner)
         """
-        self._flightloop_structs: Dict[int, FlightLoopStruct] = {}
+        self._flightloop_structs: Dict[int, FlightLoop] = {}
         self._next_flightloop_id: int = 1
+
+    def all_flightloop(self) -> list[FlightLoop]:
+        return list(self._flightloop_structs.values())
 
     def getElapsedTime(self) -> float:
         """
             Return elapsed time since sim started.
         """
-        return self.fake_xp.simless_runner._sim_time
+        return self.fake_xp.simless_runner.sim_time
 
     def getCycleNumber(self) -> int:
         """
             Get cycle number, increased for each cycle computed by sim.
         """
-        return self.fake_xp.simless_runner._cycles
+        return self.fake_xp.simless_runner.cycles
 
     def createFlightLoop(
         self,
@@ -60,26 +63,21 @@ class FakeXPFlightLoop:
         phase: XPLMFlightLoopPhaseType = None,
         refCon: Any = None,
     ) -> XPLMFlightLoopID | int:
-        """
-        Create an XP12‑style flightloop struct with only the fields
-        required by SimlessRunner.
-        """
+
         if phase is None:
             phase = self.fake_xp.FlightLoop_Phase_BeforeFlightModel
 
         fid = self._next_flightloop_id
         self._next_flightloop_id += 1
 
-        self._flightloop_structs[fid] = {
-            "callback": callback,
-            "refcon": refCon,
-            "phase": phase,
-            "interval": 0.0,  # default interval
-            "next_call": 0.0,  # absolute sim time for next invocation
-            "last_call": 0.0,  # absolute sim time of last invocation
-            "counter": 0,  # number of times invoked
-        }
+        fl = FlightLoop(
+            callback=callback,
+            refcon=refCon,
+            phase=phase,
+            plugin_id=self.fake_xp.getMyID()
+        )
 
+        self._flightloop_structs[fid] = fl
         return fid
 
     def destroyFlightLoop(self, fid: int) -> None:
@@ -94,39 +92,20 @@ class FakeXPFlightLoop:
         interval: float = 0.0,
         relativeToNow: int = 1,
     ) -> None:
-        """
-        XP12‑style scheduling:
-          • interval == 0 → stop
-          • interval > 0 → seconds until next call
-          • interval < 0 → N flightloops (runner interprets)
-          • relativeToNow:
-                1 → next_call = now + interval
-                0 → next_call = last_call + interval
-        """
+
         fl = self._flightloop_structs.get(flightLoopID)
         if fl is None:
             raise KeyError(f"Unknown FlightLoopID: {flightLoopID}")
 
-        interval = float(interval)
-        fl["interval"] = interval
-
         now = self.getElapsedTime()
+        cycle = self.getCycleNumber()
 
-        # Negative interval → runner interprets (XP12 behavior)
-        if interval < 0:
-            fl["next_call"] = now
-            return
-
-        # interval == 0 → stop
-        if interval == 0:
-            fl["next_call"] = float("inf")
-            return
-
-        # XP12 semantics for relativeToNow
-        if relativeToNow:
-            fl["next_call"] = now + interval
-        else:
-            fl["next_call"] = fl["last_call"] + interval
+        fl.schedule(
+            interval=interval,
+            relative_to_now=bool(relativeToNow),
+            now=now,
+            cycle=cycle,
+        )
 
     def isFlightLoopValid(self, flightLoopID: XPLMFlightLoopID) -> bool:
         """

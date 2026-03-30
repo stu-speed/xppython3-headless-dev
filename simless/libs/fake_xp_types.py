@@ -23,9 +23,6 @@ Type_Data = 32
 
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
 
-# XP12-style struct dictionary
-FlightLoopStruct = Dict[str, Any]
-
 
 class XPShutdown(Exception):
     """Raised when DearPyGui is no longer running (viewport closed)."""
@@ -233,22 +230,28 @@ class WidgetInfo:
     # ------------------------------------------------------------
 
     @property
-    def left(self) -> int: return self._geometry[0]
+    def left(self) -> int:
+        return self._geometry[0]
 
     @property
-    def top(self) -> int: return self._geometry[1]
+    def top(self) -> int:
+        return self._geometry[1]
 
     @property
-    def right(self) -> int: return self._geometry[2]
+    def right(self) -> int:
+        return self._geometry[2]
 
     @property
-    def bottom(self) -> int: return self._geometry[3]
+    def bottom(self) -> int:
+        return self._geometry[3]
 
     @property
-    def width(self) -> int: return max(0, self.right - self.left)
+    def width(self) -> int:
+        return max(0, self.right - self.left)
 
     @property
-    def height(self) -> int: return max(0, self.bottom - self.top)
+    def height(self) -> int:
+        return max(0, self.bottom - self.top)
 
 
 @dataclass(slots=True)
@@ -329,7 +332,7 @@ class WindowExInfo:
     drawlist_id: int | str
 
     # Dirty flags
-    dirty_xp_to_dpg: bool = True   # XP changed → must push to DPG
+    dirty_xp_to_dpg: bool = True  # XP changed → must push to DPG
     dirty_dpg_to_xp: bool = False  # DPG changed → must notify XP
 
     # Widget tree
@@ -447,15 +450,19 @@ class WindowExInfo:
 
     @property
     def left(self) -> int: return self.frame[0]
+
     @property
     def top(self) -> int: return self.frame[1]
+
     @property
     def right(self) -> int: return self.frame[2]
+
     @property
     def bottom(self) -> int: return self.frame[3]
 
     @property
     def width(self) -> int: return self.right - self.left
+
     @property
     def height(self) -> int: return self.top - self.bottom
 
@@ -468,10 +475,13 @@ class WindowExInfo:
 
     @property
     def client_left(self) -> int: return self.client[0]
+
     @property
     def client_top(self) -> int: return self.client[1]
+
     @property
     def client_right(self) -> int: return self.client[2]
+
     @property
     def client_bottom(self) -> int: return self.client[3]
 

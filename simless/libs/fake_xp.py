@@ -167,9 +167,9 @@ class FakeXP(
     def getMyID(self) -> int:
         """
         XPLMGetMyID()
-        In this simless environment we treat the current plugin as ID 1.
+        Returns the plugin ID of the currently executing plugin.
         """
-        return 1
+        return self.simless_runner.current_plugin_id or 0
 
     def disablePlugin(self, plugin_id: int) -> None:
         """

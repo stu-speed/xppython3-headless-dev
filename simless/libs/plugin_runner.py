@@ -43,7 +43,8 @@ from __future__ import annotations
 
 import time
 import traceback
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Optional, TYPE_CHECKING
 
 from simless.libs.dataref_viewer import FakeXPDataRefViewerClient
 from simless.libs.fake_xp_types import XPShutdown
@@ -135,6 +136,28 @@ class SimlessRunner:
         self._flightloops: Dict[int, Dict[str, Any]] = {}
         self._sim_time: float = 0.0
         self._cycles: int = 0
+        # No plugin executing by default
+        self._current_plugin_id: int | None = None
+
+    @property
+    def sim_time(self) -> float:
+        return self._sim_time
+
+    @sim_time.setter
+    def sim_time(self, value: float):
+        self._sim_time = value
+
+    @property
+    def cycles(self) -> int:
+        return self._cycles
+
+    @cycles.setter
+    def cycles(self, value: int):
+        self._cycles = value
+
+    @property
+    def current_plugin_id(self) -> int | None:
+        return self._current_plugin_id
 
     def get_bridge_status(self) -> tuple[bool, bool, str | None]:
         """
@@ -266,83 +289,50 @@ class SimlessRunner:
     # ----------------------------------------------------------------------
     # One frame
     # ----------------------------------------------------------------------
+    @contextmanager
+    def plugin_context(self, plugin_id: int) -> Iterator[None]:
+        prev = self._current_plugin_id
+        self._current_plugin_id = plugin_id
+        try:
+            yield
+        finally:
+            self._current_plugin_id = prev
+
     def _run_one_frame(self) -> None:
         xp = self.fake_xp
 
         # 1. Advance sim time
         dt = 1.0 / 60.0
-        self._sim_time += dt
-        xp._sim_time = self._sim_time
-        sim_time = self._sim_time
+        self.sim_time += dt
+        xp._sim_time = self.sim_time
+        now = self.sim_time
+
+        # Advance cycles
+        self._cycles += 1
+        cycle = self._cycles
 
         # 2. Bridge sync
         if self._bridge_client is not None:
             self._manage_bridged_datarefs()
 
         # 3. Flightloops
-        for fl in list(self._flightloops.values()):
-            interval = fl["interval"]
-
-            # XP semantics: interval == 0 → unscheduled, never runs
-            if interval == 0:
-                continue
-
-            # Negative interval → N flightloops (runner decrements)
-            if interval < 0:
-                # Use counter-based scheduling
-                if fl.get("_loops_remaining") is None:
-                    fl["_loops_remaining"] = abs(int(interval))
-
-                fl["_loops_remaining"] -= 1
-                if fl["_loops_remaining"] > 0:
-                    continue  # not time yet
-
-                # Reset for next cycle
-                fl["_loops_remaining"] = abs(int(interval))
-
-                # Treat as "ready to run now"
-                ready = True
-            else:
-                # Positive interval → time-based scheduling
-                ready = (sim_time >= fl["next_call"])
-
-            if not ready:
-                continue
-
-            # Compute callback args
-            since = sim_time - fl["last_call"]
-            elapsed = since
-            counter = fl["counter"]
-            refcon = fl["refcon"]
-
+        for fl in self.fake_xp.all_flightloop():
             try:
-                next_interval = fl["callback"](since, elapsed, counter, refcon)
-            except Exception as exc:
-                xp.log(f"[Runner] modern flightloop error: {exc!r}")
-                next_interval = fl["interval"]
+                # IMPORTANT: run callback under plugin context
+                with self._plugin_context(fl.plugin_id):
+                    fl.check_and_run(now, cycle)
+            except Exception:
+                tb = traceback.format_exc()
 
-            # Update timing
-            fl["last_call"] = sim_time
-            fl["counter"] += 1
+                plugin = self.loader.get_plugin(fl.plugin_id)
+                name = plugin.name if plugin else "<unknown plugin>"
 
-            # XP semantics: None or <0 → reuse previous interval
-            if next_interval is None or next_interval < 0:
-                next_interval = fl["interval"]
+                xp.log(f"[FlightLoop:{name}] callback exception:\n{tb}")
 
-            # interval == 0 → stop
-            if next_interval == 0:
-                fl["interval"] = 0
-                fl["next_call"] = float("inf")
+                fl.schedule(0.0, True, now, cycle)
                 continue
 
-            # Store new interval
-            fl["interval"] = float(next_interval)
-
-            # Positive interval → schedule next call
-            if next_interval > 0:
-                fl["next_call"] = sim_time + float(next_interval)
-
-        # 4. viewer
+        # 4. Dataref viewer
         if self._dataref_viewer:
             self._dataref_viewer.update()
 
@@ -389,7 +379,8 @@ class SimlessRunner:
 
         for p in plugins:
             try:
-                result = p.instance.XPluginEnable()
+                with self.plugin_context(p.plugin_id):
+                    result = p.instance.XPluginEnable()
                 xp.log(f"[Runner] → XPluginEnable: {p.name} ret={result}")
             except Exception as exc:
                 raise RuntimeError(
@@ -447,7 +438,8 @@ class SimlessRunner:
         for p in plugins:
             try:
                 xp.log(f"[Runner] → XPluginDisable: {p.name}")
-                p.instance.XPluginDisable()
+                with self.plugin_context(p.plugin_id):
+                    p.instance.XPluginDisable()
                 p.enabled = False
             except Exception as exc:
                 raise RuntimeError(
