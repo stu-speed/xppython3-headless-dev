@@ -42,6 +42,7 @@
 from __future__ import annotations
 
 import time
+import traceback
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from simless.libs.dataref_viewer import FakeXPDataRefViewerClient
@@ -424,7 +425,8 @@ class SimlessRunner:
                 xp.log("[Runner] Main loop exit: shutdown")
                 break
             except Exception as exc:
-                xp.log(f"[Runner] graphics/frame error: {exc!r}")
+                tb = traceback.format_exc()
+                xp.log(f"[Runner] graphics/frame error: {exc!r}\n{tb}")
                 break
 
             if 0 <= run_time <= (time.time() - start):

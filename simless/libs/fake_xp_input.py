@@ -114,24 +114,39 @@ class FakeXPInput:
     # WINDOWEX ORDERING / PICKING
     # ------------------------------------------------------------------
     def _iter_window_ex_top_to_bottom(self):
-        """Topmost-first ordering: higher layer, then higher wid."""
-        return sorted(
-            self._windows_ex.values(),
-            key=lambda w: (w.layer, w.wid),
+        """
+        Topmost-first ordering.
+        Since wid is stable identity (not Z-order), we rely on registry order.
+        Highest layer first, then insertion order within that layer.
+        """
+        # Group by layer, preserve insertion order within each layer
+        layers = sorted(
+            set(info.layer for info in self._windows_ex.values()),
             reverse=True,
         )
 
+        for layer in layers:
+            # Yield windows in this layer in insertion order (topmost last)
+            for info in reversed(
+                [
+                    w for w in self._windows_ex.values()
+                    if w.layer == layer
+                ]
+            ):
+                yield info
+
     def _pick_window_ex_at(self, xp_x: int, xp_y: int) -> Optional[WindowExInfo]:
+        """
+        Hit-test from topmost to bottommost.
+        Uses info.frame_contains() helper if available,
+        otherwise uses info.left/right/top/bottom.
+        """
         for info in self._iter_window_ex_top_to_bottom():
-            if info.visible and self._is_inside_frame(info, xp_x, xp_y):
+            if not info.visible:
+                continue
+            if info.frame_contains(xp_x, xp_y):  # preferred helper
                 return info
         return None
-
-    def _is_inside_client(self, info: WindowExInfo, xp_x: int, xp_y: int):
-        return (info.client_left <= xp_x <= info.client_right) and (info.client_bottom <= xp_y <= info.client_top)
-
-    def _is_inside_frame(self, info: WindowExInfo, xp_x: int, xp_y: int) -> bool:
-        return (info.left <= xp_x <= info.right) and (info.bottom <= xp_y <= info.top)
 
     # ------------------------------------------------------------------
     # DISPATCH HELPERS (engine-invoked only)
@@ -148,7 +163,7 @@ class FakeXPInput:
         if info is None:
             return 0
 
-        if not self._is_inside_client(info, xp_x, xp_y):
+        if not info.client_contains(xp_x, xp_y):
             return 0
 
         cb = info.right_click_cb if right else info.click_cb
@@ -297,7 +312,16 @@ class FakeXPInput:
             return 0
 
         # ------------------------------------------------------------
-        # 3) Dispatch click callback
+        # 3) Drag-to-front (XP-authentic)
+        #    MouseDown inside frame → bring to front
+        #    Happens BEFORE dispatch, regardless of consumption.
+        # ------------------------------------------------------------
+        if mouseStatus == self.fake_xp.MouseDown:
+            if info.frame_contains(xp_x, xp_y):
+                self.fake_xp.bring_window_to_front(info)
+
+        # ------------------------------------------------------------
+        # 4) Dispatch click callback
         # ------------------------------------------------------------
         consumed = self._dispatch_window_click(
             windowID=info.wid,
@@ -308,14 +332,14 @@ class FakeXPInput:
         )
 
         # ------------------------------------------------------------
-        # 4) Capture on MouseDown
+        # 5) Capture on MouseDown
         # ------------------------------------------------------------
         if consumed and mouseStatus == self.fake_xp.MouseDown:
             self._mouse_capture_window = info.wid
             self._keyboard_focus_window = info.wid
 
         # ------------------------------------------------------------
-        # 5) Release capture AFTER dispatch
+        # 6) Release capture AFTER dispatch
         # ------------------------------------------------------------
         if mouseStatus == self.fake_xp.MouseUp:
             if self._mouse_capture_window == info.wid:

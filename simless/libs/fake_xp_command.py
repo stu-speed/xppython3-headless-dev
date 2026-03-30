@@ -43,28 +43,10 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Tuple, TYPE_CHECKING
 
+from simless.libs.fake_xp_types import FakeXPCommandRef
+
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
-
-
-# ---------------------------------------------------------------------------
-# Opaque command reference (XPLM-style)
-# ---------------------------------------------------------------------------
-
-class FakeXPCommandRef:
-    """Opaque, hashable command reference object."""
-
-    def __init__(self, path: str) -> None:
-        self.path = path
-
-    def __repr__(self) -> str:
-        return f"<FakeXPCommandRef {self.path}>"
-
-    def __hash__(self) -> int:
-        return hash(self.path)
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, FakeXPCommandRef) and other.path == self.path
 
 
 # ---------------------------------------------------------------------------

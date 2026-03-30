@@ -224,9 +224,3 @@ class FakeXP(
             plugin.description,
             module_path,
         )
-
-    # ----------------------------------------------------------------------
-    # Time (SimlessXPInterface)
-    # ----------------------------------------------------------------------
-    def getElapsedTime(self) -> float:
-        return self._sim_time

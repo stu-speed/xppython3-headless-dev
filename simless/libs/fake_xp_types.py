@@ -32,6 +32,22 @@ class XPShutdown(Exception):
     pass
 
 
+class FakeXPCommandRef:
+    """Opaque, hashable command reference object."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+
+    def __repr__(self) -> str:
+        return f"<FakeXPCommandRef {self.path}>"
+
+    def __hash__(self) -> int:
+        return hash(self.path)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, FakeXPCommandRef) and other.path == self.path
+
+
 @dataclass(slots=True)
 class FakeDataRef:
     """
@@ -95,50 +111,52 @@ class WidgetInfo:
     """
     Authoritative record for a single XPWidget.
 
-    GEOMETRY DOMAINS
-    ----------------
+    GEOMETRY (authoritative XP domain)
+    ----------------------------------
+    geometry = (left, top, right, bottom)
+    • XP‑semantic rectangle.
+    • Local to the WindowEx client area.
+    • Origin at top-left, Y increases downward.
+    • Plugins read/write this through XP APIs.
 
-    1. XP GEOMETRY (authoritative)
-       geometry = (left, top, right, bottom)
-       • XP‑semantic rectangle.
-       • Local to the WindowEx client area.
-       • Origin at top-left, Y increases downward.
-       • This is what plugins read/write.
-
-    2. DPG CONTAINER GEOMETRY (derived)
-       container_geom_applied = (lx, ly, width, height)
-       • Geometry last applied to the DPG child_window.
-       • Derived from XP geometry + parent XP geometry.
-       • Used to enforce “apply exactly once”.
-
-    3. DPG WINDOW GEOMETRY (derived)
-       geom_applied = bool
-       • Whether the DPG window/control geometry has been applied.
-
-    BACKEND OBJECTS
+    BACK‑REFERENCES
     ---------------
-    dpg_id:
-        The DPG item representing the actual control (text, button, slider, etc.)
+    window:
+        The owning WindowExInfo. Required so that any widget mutation
+        automatically dirties the window for XP→DPG sync.
 
+    BACKEND OBJECTS (DPG)
+    ---------------------
+    dpg_id:
+        The DPG item representing the actual control (text, button, etc.)
     container_id:
         The DPG child_window used for absolute positioning.
-        All controls live inside this container.
 
-    These backend handles are created by _ensure_dpg_item_for_widget()
-    and destroyed by killWidget() or destroyWindow().
+    DPG GEOMETRY STATE
+    ------------------
+    geom_applied:
+        Whether the DPG control geometry has been applied.
+    container_geom_applied:
+        Last applied geometry for the DPG container.
     """
 
-    # XP identity and hierarchy
+    # Identity
     wid: XPWidgetID
     widget_class: XPWidgetClass
-    geometry: Tuple[int, int, int, int]  # XP geometry
+    window: "WindowExInfo"  # back-reference to owning window
 
+    # Authoritative XP geometry
+    _geometry: Tuple[int, int, int, int]
+
+    # Hierarchy
     parent: Optional[XPWidgetID] = None
     children: list[XPWidgetID] = field(default_factory=list)
-    descriptor: str = ""
-    visible: bool = True
 
-    # Backend handles (DPG)
+    # XPWidget state
+    _descriptor: str = ""
+    _visible: bool = True
+
+    # Backend handles
     dpg_id: Optional[str] = None
     container_id: Optional[str] = None
 
@@ -153,18 +171,78 @@ class WidgetInfo:
     # Interaction state
     edit_buffer: Optional[str] = None
 
-    # XP geometry helpers
-    @property
-    def left(self) -> int: return self.geometry[0]
+    # ------------------------------------------------------------
+    # PROTECTED SETTERS (all mutations dirty the owning WindowEx)
+    # ------------------------------------------------------------
 
     @property
-    def top(self) -> int: return self.geometry[1]
+    def geometry(self) -> Tuple[int, int, int, int]:
+        return self._geometry
+
+    @geometry.setter
+    def geometry(self, value: Tuple[int, int, int, int]):
+        self._geometry = value
+        self.geom_applied = False
+        self.container_geom_applied = None
+        self.window.dirty_xp_to_dpg = True
 
     @property
-    def right(self) -> int: return self.geometry[2]
+    def descriptor(self) -> str:
+        return self._descriptor
+
+    @descriptor.setter
+    def descriptor(self, value: str):
+        self._descriptor = value
+        self.geom_applied = False
+        self.window.dirty_xp_to_dpg = True
 
     @property
-    def bottom(self) -> int: return self.geometry[3]
+    def visible(self) -> bool:
+        return self._visible
+
+    @visible.setter
+    def visible(self, value: bool):
+        self._visible = value
+        self.geom_applied = False
+        self.window.dirty_xp_to_dpg = True
+
+    # ------------------------------------------------------------
+    # CHILD MANAGEMENT (must dirty window)
+    # ------------------------------------------------------------
+
+    def add_child(self, child_id: XPWidgetID):
+        self.children.append(child_id)
+        self.window.dirty_xp_to_dpg = True
+
+    def remove_child(self, child_id: XPWidgetID):
+        if child_id in self.children:
+            self.children.remove(child_id)
+            self.window.dirty_xp_to_dpg = True
+
+    # ------------------------------------------------------------
+    # PROPERTY MANAGEMENT (must dirty window)
+    # ------------------------------------------------------------
+
+    def set_property(self, prop: XPWidgetPropertyID, value: Any):
+        self.properties[prop] = value
+        self.geom_applied = False
+        self.window.dirty_xp_to_dpg = True
+
+    # ------------------------------------------------------------
+    # DERIVED GEOMETRY HELPERS (read‑only)
+    # ------------------------------------------------------------
+
+    @property
+    def left(self) -> int: return self._geometry[0]
+
+    @property
+    def top(self) -> int: return self._geometry[1]
+
+    @property
+    def right(self) -> int: return self._geometry[2]
+
+    @property
+    def bottom(self) -> int: return self._geometry[3]
 
     @property
     def width(self) -> int: return max(0, self.right - self.left)
@@ -178,24 +256,56 @@ class WindowExInfo:
     """
     Graphics-owned representation of an XPLM WindowEx window.
 
-    This is NOT a widget and does not participate in XPWidgets directly.
-    It owns a retained-mode widget tree that is rendered inside this window.
+    This object is the *authoritative XP-side model* of a WindowEx.
+    It stores XP geometry, XP state, callbacks, and the DearPyGui
+    backend IDs used to render the window.
+
+    ------------------------------------------------------------------
+    GEOMETRY AUTHORITY MODEL
+    ------------------------------------------------------------------
+
+    XP and DPG both modify window geometry, but only one side is
+    authoritative at a time.
+
+    • XP-originated changes (XPLMSetWindowGeometry, visibility,
+      decoration, layer changes) must push XP → DPG.
+      These use:
+          set_frame_from_xp()
+          set_client_from_xp()
+
+      These setters flip dirty_xp_to_dpg so the next frame applies
+      XP geometry to the DPG window.
+
+    • DPG-originated changes (user dragging/resizing the DPG window)
+      must update XP’s authoritative geometry model. These updates
+      always use:
+          set_frame_from_dpg()
+          set_client_from_dpg()
+
+      These setters update the XP-side _frame and _client rectangles
+      and flip dirty_dpg_to_xp so XP can consume the new geometry on
+      the next frame. They intentionally do NOT flip dirty_xp_to_dpg,
+      ensuring XP→DPG sync does not override the user’s drag.
+
+    The public properties .frame and .client are read-only views of
+    the authoritative XP geometry. They DO NOT flip dirty flags.
     """
 
     # ------------------------------------------------------------------
-    # XP-visible identity and geometry
+    # XP identity
     # ------------------------------------------------------------------
-    wid: XPLMWindowID
-    frame: Tuple[int, int, int, int]
-    client: Tuple[int, int, int, int]
+    wid: XPLMWindowID | int
 
-    visible: bool
-    decoration: XPLMWindowDecoration
-    layer: XPLMWindowLayer
+    # Authoritative XP geometry (screen-space)
+    _frame: Tuple[int, int, int, int]
+    _client: Tuple[int, int, int, int]
 
-    # ------------------------------------------------------------------
-    # XP callback hooks (verbatim, no wrapping)
-    # ------------------------------------------------------------------
+    # XP state
+    _visible: bool
+    _decoration: XPLMWindowDecoration
+    _layer: XPLMWindowLayer | int
+
+    # XP callback hooks
     draw_cb: Optional[Callable[[XPLMWindowID, Any], None]]
     click_cb: Optional[
         Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
@@ -214,67 +324,159 @@ class WindowExInfo:
     ]
     refcon: Any
 
-    # ------------------------------------------------------------------
-    # Graphics backend ownership (DearPyGui)
-    # ------------------------------------------------------------------
+    # Backend (DearPyGui)
     dpg_window_id: int | str
     drawlist_id: int | str
 
-    # ------------------------------------------------------------------
-    # XP ↔ DPG geometry state
-    # ------------------------------------------------------------------
-    dirty_xp_to_dpg: bool = True
-    dirty_dpg_to_xp: bool = False
+    # Dirty flags
+    dirty_xp_to_dpg: bool = True   # XP changed → must push to DPG
+    dirty_dpg_to_xp: bool = False  # DPG changed → must notify XP
 
-    # ------------------------------------------------------------------
-    # Widget tree (retained-mode UI inside this WindowEx)
-    # ------------------------------------------------------------------
+    # Widget tree
     widget_root: Optional[XPWidgetID] = None
-    widgets: Dict[XPWidgetID, WidgetInfo] = field(default_factory=dict)
+    widgets: Dict[XPWidgetID, "WidgetInfo"] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
-    # Frame geometry helpers
+    # Public read-only geometry properties
     # ------------------------------------------------------------------
+
+    @property
+    def frame(self) -> Tuple[int, int, int, int]:
+        """Authoritative XP frame rect (left, top, right, bottom)."""
+        return self._frame
+
+    @property
+    def client(self) -> Tuple[int, int, int, int]:
+        """Authoritative XP client rect (left, top, right, bottom)."""
+        return self._client
+
+    # ------------------------------------------------------------------
+    # XP-originated geometry setters (XP → DPG)
+    # ------------------------------------------------------------------
+
+    def set_frame_from_xp(self, value: Tuple[int, int, int, int]) -> None:
+        """
+        XP-originated geometry change.
+
+        XP is authoritative → mark dirty_xp_to_dpg so the next frame
+        pushes XP geometry into DPG.
+        """
+        self._frame = value
+        self.dirty_xp_to_dpg = True
+
+    def set_client_from_xp(self, value: Tuple[int, int, int, int]) -> None:
+        """
+        XP-originated client rect change.
+
+        XP is authoritative → mark dirty_xp_to_dpg so the next frame
+        pushes XP client rect into DPG.
+        """
+        self._client = value
+        self.dirty_xp_to_dpg = True
+
+    # ------------------------------------------------------------------
+    # DPG-originated geometry setters (DPG → XP)
+    # ------------------------------------------------------------------
+
+    def set_frame_from_dpg(self, value: Tuple[int, int, int, int]) -> None:
+        """
+        DPG-originated geometry change (drag/resize).
+
+        DPG is authoritative → update XP geometry WITHOUT marking
+        dirty_xp_to_dpg. This prevents XP→DPG from snapping the
+        window back to its old position.
+
+        We DO mark dirty_dpg_to_xp so XP can consume the change.
+        """
+        self._frame = value
+        self.dirty_dpg_to_xp = True
+
+    def set_client_from_dpg(self, value: Tuple[int, int, int, int]) -> None:
+        """
+        DPG-originated client rect change.
+
+        Same rules as set_frame_from_dpg(): update XP geometry but do
+        NOT trigger XP→DPG sync.
+        """
+        self._client = value
+        self.dirty_dpg_to_xp = True
+
+    # ------------------------------------------------------------------
+    # XP state setters (these DO push XP → DPG)
+    # ------------------------------------------------------------------
+
+    @property
+    def visible(self) -> bool:
+        return self._visible
+
+    @visible.setter
+    def visible(self, value: bool):
+        """
+        XP visibility change → XP is authoritative.
+        """
+        self._visible = value
+        self.dirty_xp_to_dpg = True
+
+    @property
+    def decoration(self) -> XPLMWindowDecoration:
+        return self._decoration
+
+    @decoration.setter
+    def decoration(self, value: XPLMWindowDecoration):
+        """
+        XP decoration change → XP is authoritative.
+        """
+        self._decoration = value
+        self.dirty_xp_to_dpg = True
+
+    @property
+    def layer(self) -> XPLMWindowLayer | int:
+        return self._layer
+
+    @layer.setter
+    def layer(self, value: XPLMWindowLayer):
+        """
+        XP layer change → XP is authoritative.
+        """
+        self._layer = value
+        self.dirty_xp_to_dpg = True
+
+    # ------------------------------------------------------------------
+    # Derived geometry helpers
+    # ------------------------------------------------------------------
+
     @property
     def left(self) -> int: return self.frame[0]
-
     @property
     def top(self) -> int: return self.frame[1]
-
     @property
     def right(self) -> int: return self.frame[2]
-
     @property
     def bottom(self) -> int: return self.frame[3]
 
     @property
     def width(self) -> int: return self.right - self.left
-
     @property
     def height(self) -> int: return self.top - self.bottom
 
-    def hit_test_frame(self, xp_x: int, xp_y: int) -> bool:
+    def frame_contains(self, xp_x: int, xp_y: int) -> bool:
+        """Return True if XP coords fall inside the frame rect."""
         return (
             self.left <= xp_x <= self.right
             and self.bottom <= xp_y <= self.top
         )
 
-    # ------------------------------------------------------------------
-    # Client geometry helpers
-    # ------------------------------------------------------------------
     @property
     def client_left(self) -> int: return self.client[0]
-
     @property
     def client_top(self) -> int: return self.client[1]
-
     @property
     def client_right(self) -> int: return self.client[2]
-
     @property
     def client_bottom(self) -> int: return self.client[3]
 
-    def hit_test_client(self, xp_x: int, xp_y: int) -> bool:
+    def client_contains(self, xp_x: int, xp_y: int) -> bool:
+        """Return True if XP coords fall inside the client rect."""
         return (
             self.client_left <= xp_x <= self.client_right
             and self.client_bottom <= xp_y <= self.client_top
@@ -284,7 +486,12 @@ class WindowExInfo:
     # XP → DPG transforms (window‑local)
     # ------------------------------------------------------------------
     def xp_to_window_dpg(self, xp_x: int, xp_y: int) -> tuple[int, int]:
-        """Convert XP screen coords to DPG coords local to this window."""
+        """
+        Convert XP screen coords to DPG coords local to this window.
+
+        XP origin: top-left
+        DPG origin: bottom-left
+        """
         dpg_x = xp_x - self.left
         dpg_y = self.top - xp_y
         return dpg_x, dpg_y

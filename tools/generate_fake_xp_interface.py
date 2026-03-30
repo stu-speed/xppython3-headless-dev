@@ -26,7 +26,11 @@ SIMLESS_SOURCES = {
     *SIMLESS_DIR.glob("fake_xp_*.py"),
     SIMLESS_DIR / "fake_xp.py",
 }
-SIMLESS_SOURCES = [p for p in SIMLESS_SOURCES if p.exists()]
+
+SIMLESS_SOURCES = [
+    p for p in SIMLESS_SOURCES
+    if p.exists() and not p.name.endswith("_types.py")
+]
 
 OUT = SIMLESS_DIR / "fake_xp.pyi"
 
@@ -285,6 +289,14 @@ def generate_fake_xp_pyi():
     out.append("        bridge_host: Optional[str] = None,")
     out.append("        bridge_port: Optional[int] = None,")
     out.append("    ) -> None: ...")
+    out.append("")
+    out.append("    def _init_dataref(self) -> None: ...")
+    out.append("    def _init_widgets(self) -> None: ...")
+    out.append("    def _init_graphics(self) -> None: ...")
+    out.append("    def _init_flightloop(self) -> None: ...")
+    out.append("    def _init_utilities(self) -> None: ...")
+    out.append("    def _init_input(self) -> None: ...")
+    out.append("    def _init_command(self) -> None: ...")
     out.append("")
 
     for name, typ in constants:

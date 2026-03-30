@@ -74,9 +74,6 @@ class FakeXPWidgetsAPI:
     def _kill_widget(self, wid: XPWidgetID) -> None:
         ...
 
-    # ------------------------------------------------------------------
-    # CREATE / DESTROY
-    # ------------------------------------------------------------------
     def createWidget(
         self,
         left: int,
@@ -90,46 +87,80 @@ class FakeXPWidgetsAPI:
         widget_class: XPWidgetClass,
     ) -> XPWidgetID:
 
-        # 1. Allocate ID
         wid = XPWidgetID(self._next_id)
         self._next_id += 1
 
-        # 2. Validate parent rules
+        # ---------------------------------------------------------
+        # ROOT WIDGET PATH (early return, no else needed)
+        # ---------------------------------------------------------
         if is_root:
             if parent != 0:
                 raise ValueError(f"Root widget {wid} must have parent=0")
-            parent_wid = None
-        else:
-            if parent == 0:
-                raise ValueError(f"Non-root widget {wid} cannot have parent=0")
-            parent_wid = XPWidgetID(parent)
-            self._get_widget(parent_wid)  # fail fast
 
-        # 3. Create logical XPWidget
+            # Create WindowEx FIRST
+            window_info = self._create_window_for_root_geometry(left, top, right, bottom)
+
+            # Create widget
+            info = WidgetInfo(
+                wid=wid,
+                widget_class=widget_class,
+                window=window_info,
+                parent=None,
+                _geometry=(left, top, right, bottom),
+                _descriptor=descriptor,
+                _visible=bool(visible),
+            )
+
+            if widget_class == self.fake_xp.WidgetClass_TextField:
+                info.edit_buffer = descriptor
+
+            # Register + mark as root
+            window_info.widgets[wid] = info
+            window_info.widget_root = wid
+
+            return wid
+
+        # ---------------------------------------------------------
+        # NON-ROOT WIDGET PATH (no else needed)
+        # ---------------------------------------------------------
+        if parent == 0:
+            raise ValueError(f"Non-root widget {wid} cannot have parent=0")
+
+        parent_wid = XPWidgetID(parent)
+        parent_info = self._get_widget(parent_wid)
+        window_info = parent_info.window
+
+        # Create widget
         info = WidgetInfo(
             wid=wid,
             widget_class=widget_class,
+            window=window_info,
             parent=parent_wid,
-            descriptor=descriptor,
-            geometry=(left, top, right, bottom),
-            visible=bool(visible),
+            _geometry=(left, top, right, bottom),
+            _descriptor=descriptor,
+            _visible=bool(visible),
         )
 
         if widget_class == self.fake_xp.WidgetClass_TextField:
             info.edit_buffer = descriptor
 
-        # 4. Root widget → create WindowEx
-        if is_root:
-            self._create_window_for_root_widget(wid, info)
-            return wid
-
-        # 5. Normal widget → attach to parent window
-        self._attach_widget_to_parent_window(wid, info)
-
-        self._widgets_initialized = False
-        self._widgets_dirty = True
+        # Register + link to parent
+        window_info.widgets[wid] = info
+        parent_info.children.append(wid)
+        window_info.dirty_xp_to_dpg = True
 
         return wid
+
+    def _create_window_for_root_geometry(self, left, top, right, bottom) -> WindowExInfo:
+        win_id = self.fake_xp.createWindowEx(
+            left=left,
+            top=top,
+            right=right,
+            bottom=bottom,
+            decoration=self.fake_xp.WindowDecorationRoundRectangle,
+            layer=self.fake_xp.WindowLayerFloatingWindows,
+        )
+        return self.fake_xp.get_windowex(win_id)
 
     def destroyWidget(self, wid: XPWidgetID, destroy_children: int = 1) -> None:
         """
@@ -212,7 +243,6 @@ class FakeXPWidgetsAPI:
         param2: Any,
     ) -> None:
 
-        origin = wid
         current = wid
         visited: set[XPWidgetID] = set()
 
@@ -220,11 +250,60 @@ class FakeXPWidgetsAPI:
             visited.add(current)
             info = self._require_widget(current)
 
+            # XP semantics: callbacks return int
+            #   0 → continue bubbling
+            #   non-zero → stop bubbling
             for cb in info.callbacks:
-                cb(msg, origin, param1, param2)
+                try:
+                    result = cb(current, msg, param1, param2)
+                except Exception:
+                    result = 0
+
+                if result:
+                    self._widgets_dirty = True
+                    return
 
             current = info.parent
 
+        self._widgets_dirty = True
+
+    def broadcastMessageToWidget(
+        self,
+        wid: XPWidgetID,
+        msg: XPWidgetMessage | int,
+        param1: Any,
+        param2: Any,
+    ) -> None:
+
+        visited: set[XPWidgetID] = set()
+
+        def _broadcast(current: XPWidgetID) -> bool:
+            # Returns True if bubbling should STOP
+            if current in visited:
+                return False
+            visited.add(current)
+
+            info = self._require_widget(current)
+
+            # Deliver to this widget first
+            for cb in info.callbacks:
+                try:
+                    result = cb(current, msg, param1, param2)
+                except Exception:
+                    result = 0
+
+                # XP semantics: non-zero return stops propagation
+                if result:
+                    return True
+
+            # Then deliver to children
+            for child in info.children:
+                if _broadcast(child):
+                    return True
+
+            return False
+
+        _broadcast(wid)
         self._widgets_dirty = True
 
     # ------------------------------------------------------------------
@@ -302,30 +381,6 @@ class FakeXPWidgetsAPI:
     # ------------------------------------------------------------------
     # INTERNAL
     # ------------------------------------------------------------------
-    def _create_window_for_root_widget(self, wid: XPWidgetID, info: WidgetInfo):
-        win_id = self.fake_xp.createWindowEx(
-            left=info.geometry[0],
-            top=info.geometry[1],
-            right=info.geometry[2],
-            bottom=info.geometry[3],
-            decoration=self.fake_xp.WindowDecorationRoundRectangle,
-            layer=self.fake_xp.WindowLayerFloatingWindows,
-        )
-
-        win = self.fake_xp.get_windowex(win_id)
-        win.widget_root = wid
-        win.widgets[wid] = info
-
-    def _attach_widget_to_parent_window(self, wid: XPWidgetID, info: WidgetInfo):
-        parent_wid = info.parent
-        if parent_wid is None:
-            raise RuntimeError(f"Internal error: non-root widget {wid} has no parent")
-
-        win = self._get_widget_windowex(parent_wid)
-        win.widgets[wid] = info
-
-        parent_info = self._get_widget(parent_wid)
-        parent_info.children.append(wid)
 
     def _require_widget(self, wid: XPWidgetID) -> WidgetInfo:
         """

@@ -43,13 +43,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from collections import OrderedDict
+from typing import Any, Callable, Optional
 
 import dearpygui.dearpygui as dpg
 
 from simless.libs.fake_xp_graphics_api import FakeXPGraphicsAPI
 from simless.libs.fake_xp_types import DPGCommand, DPGOp, EventInfo, EventKind, WindowExInfo
-from XPPython3.xp_typing import XPLMMenuID, XPLMWindowID
+from XPPython3.xp_typing import (
+    XPLMCursorStatus, XPLMMenuID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID,
+    XPLMWindowLayer
+)
 
 
 class FakeXPGraphics(FakeXPGraphicsAPI):
@@ -86,7 +90,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self._screen_drawlist_back = None  # Behind all windows
         self._screen_drawlist_front = None  # Above all windows (optional)
         self._active_drawlist = None
-        self._windows_ex = {}
+        self._windows_ex = OrderedDict()
         self._current_window_ex = None
         self._next_window_id = 1
         self._keyboard_focus_window = None
@@ -100,6 +104,62 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
     # ----------------------------------------------------------------------
     # DPG Helpers
     # ----------------------------------------------------------------------
+
+    def register_windowex(
+        self,
+        *,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+        visible: bool,
+        decoration: XPLMWindowDecoration,
+        layer: XPLMWindowLayer,
+        draw_cb: Optional[Callable[[XPLMWindowID, Any], None]],
+        click_cb: Optional[
+            Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+        ],
+        right_click_cb: Optional[
+            Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+        ],
+        key_cb: Optional[
+            Callable[[XPLMWindowID, int, int, int, Any, int], int]
+        ],
+        cursor_cb: Optional[
+            Callable[[XPLMWindowID, int, int, Any], XPLMCursorStatus]
+        ],
+        wheel_cb: Optional[
+            Callable[[XPLMWindowID, int, int, int, int, Any], int]
+        ],
+        refcon: Any
+    ) -> WindowExInfo:
+
+        wid = XPLMWindowID(self._next_window_id)
+        self._next_window_id += 1
+
+        info = WindowExInfo(
+            wid=wid,  # identity only, never changes
+            _frame=(left, top, right, bottom),
+            _client=(left, top, right, bottom),
+            _visible=visible,
+            _decoration=decoration,
+            _layer=layer,
+            draw_cb=draw_cb,
+            click_cb=click_cb,
+            right_click_cb=right_click_cb,
+            key_cb=key_cb,
+            cursor_cb=cursor_cb,
+            wheel_cb=wheel_cb,
+            refcon=refcon,
+            dpg_window_id=f"xplm_window_{wid}",
+            drawlist_id=f"xplm_window_drawlist_{wid}",
+        )
+
+        # Insert at end = top of Z‑order
+        self._windows_ex[wid] = info
+
+        return info
+
     def get_windowex(self, win_id: XPLMWindowID) -> WindowExInfo:
         """
         Return the WindowExInfo for the given XPLMWindowID.
@@ -115,6 +175,11 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
     def all_windowex(self) -> list[WindowExInfo]:
         return list(self._windows_ex.values())
+
+    def bring_window_to_front(self, info: WindowExInfo):
+        wid = info.wid
+        data = self._windows_ex.pop(wid)
+        self._windows_ex[wid] = data
 
     # ----------------------------------------------------------------------
     # DPG INITIALIZATION
@@ -534,10 +599,15 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             )
 
     def _window_ex_read_dpg_to_xp(self):
-        """Read DPG geometry after render and update XP geometry.
+        """
+        Read DPG geometry after render and update XP geometry.
 
-        Detects DPG-side movement/resizing and sets dirty_dpg_to_xp.
-        Always runs AFTER dpg.render_dearpygui_frame().
+        DPG is authoritative here (user dragging/resizing the DPG window).
+        We update XP geometry WITHOUT marking dirty_xp_to_dpg, so XP→DPG
+        does not overwrite the drag on the next frame.
+
+        If geometry changed, we set dirty_dpg_to_xp so the XP side can
+        consume the change.
         """
 
         client_h = dpg.get_viewport_client_height()
@@ -568,10 +638,8 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             )
 
             # Detect change BEFORE updating stored geometry
-            if info.frame != new_frame:
-                info.dirty_dpg_to_xp = True
-
-            info.frame = new_frame
+            if info._frame != new_frame:
+                info.set_frame_from_dpg(new_frame)
 
             # ----------------------------------------------------------
             # Read DPG drawlist rect → XP client rect
@@ -586,10 +654,8 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
                 client_h - dl_max_y,
             )
 
-            if info.client != new_client:
-                info.dirty_dpg_to_xp = True
-
-            info.client = new_client
+            if info._client != new_client:
+                info.set_client_from_dpg(new_client)
 
     def _consume_dpg_to_xp_changes(self) -> None:
         """React to DPG-side geometry changes.

@@ -34,6 +34,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import Any, Callable, cast, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import DPGOp, WindowExInfo
@@ -93,7 +94,7 @@ class FakeXPGraphicsAPI:
     #
     # Graphics-owned windows with independent drawlists and callbacks.
     # ------------------------------------------------------------------
-    _windows_ex: Dict[XPLMWindowID, WindowExInfo]
+    _windows_ex: OrderedDict[XPLMWindowID, WindowExInfo]
     _current_window_ex: Optional[WindowExInfo]
     _next_window_id: int
     _keyboard_focus_window: Optional[XPLMWindowID]
@@ -134,70 +135,20 @@ class FakeXPGraphicsAPI:
             Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
         ] = None,
     ) -> XPLMWindowID:
-
         if decoration is None:
             decoration = self.fake_xp.WindowDecorationRoundRectangle
         if layer is None:
             layer = self.fake_xp.WindowLayerFloatingWindows
 
-        wid = XPLMWindowID(self._next_window_id)
-        self._next_window_id += 1
-
         # --------------------------------------------------------------
-        # 1) XP authoritative frame rect
+        # Register FIRST — this creates the info object
         # --------------------------------------------------------------
-        frame = (left, top, right, bottom)
-        is_visible = bool(visible)
-
-        width = max(1, right - left)
-        height = max(1, top - bottom)
-
-        # --------------------------------------------------------------
-        # 3) Allocate backend IDs
-        # --------------------------------------------------------------
-        dpg_window_id = f"xplm_window_{wid}"
-        drawlist_id = f"xplm_window_drawlist_{wid}"
-
-        # --------------------------------------------------------------
-        # 4) Enqueue backend window creation
-        # --------------------------------------------------------------
-        self.fake_xp.enqueue_dpg(
-            DPGOp.ADD_WINDOW,
-            args=(),
-            kwargs=dict(
-                tag=dpg_window_id,
-                label=f"XPLMWindowEx {wid}",
-                pos=(0, 0),  # geometry applied later
-                width=width,
-                height=height,
-                no_title_bar=True,
-                no_resize=False,
-                no_move=False,
-                no_scrollbar=True,
-                no_collapse=True,
-                show=is_visible,
-            ),
-        )
-
-        self.fake_xp.enqueue_dpg(
-            DPGOp.ADD_DRAWLIST,
-            args=(),
-            kwargs=dict(
-                tag=drawlist_id,
-                width=width,
-                height=height,
-                parent=dpg_window_id,
-            ),
-        )
-
-        # --------------------------------------------------------------
-        # 5) Construct WindowExInfo with BOTH rects
-        # --------------------------------------------------------------
-        info = WindowExInfo(
-            wid=wid,
-            frame=frame,
-            client=frame,
-            visible=is_visible,
+        info = self.fake_xp.register_windowex(
+            left=left,
+            top=top,
+            right=right,
+            bottom=bottom,
+            visible=bool(visible),
             decoration=decoration,
             layer=layer,
             draw_cb=draw,
@@ -207,12 +158,41 @@ class FakeXPGraphicsAPI:
             cursor_cb=cursor,
             wheel_cb=wheel,
             refcon=refCon,
-            dpg_window_id=dpg_window_id,
-            drawlist_id=drawlist_id,
         )
 
-        self._windows_ex[wid] = info
-        return wid
+        # --------------------------------------------------------------
+        # Backend creation AFTER registration
+        # --------------------------------------------------------------
+        self.fake_xp.enqueue_dpg(
+            DPGOp.ADD_WINDOW,
+            args=(),
+            kwargs=dict(
+                tag=info.dpg_window_id,
+                label=f"XPLMWindowEx {info.wid}",
+                pos=(0, 0),
+                width=info.width,
+                height=info.height,
+                no_title_bar=False,
+                no_resize=False,
+                no_move=False,
+                no_scrollbar=True,
+                no_collapse=True,
+                show=info.visible,
+            ),
+        )
+
+        self.fake_xp.enqueue_dpg(
+            DPGOp.ADD_DRAWLIST,
+            args=(),
+            kwargs=dict(
+                tag=info.drawlist_id,
+                width=info.width,
+                height=info.height,
+                parent=info.dpg_window_id,
+            ),
+        )
+
+        return info.wid
 
     def destroyWindow(self, wid: XPLMWindowID) -> None:
         """
@@ -286,8 +266,7 @@ class FakeXPGraphicsAPI:
             raise RuntimeError(f"Invalid window ID: {windowID}")
 
         # Update XP authoritative frame rect
-        info.frame = (left, top, right, bottom)
-        info.dirty_xp_to_dpg = True
+        info.set_frame_from_xp((left, top, right, bottom))
 
     def getWindowRefCon(self, windowID: XPLMWindowID):
         info = self._windows_ex.get(windowID)
