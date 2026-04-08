@@ -34,10 +34,10 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from typing import Any, Callable, cast, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import DPGOp, WindowExInfo
+from simless.libs.fake_xp_types import DPGOp, WindowExInfo, XPGeom
+from simless.libs.window import WindowManager
 from XPPython3.xp_typing import (
     XPLMCursorStatus, XPLMFontID, XPLMMenuID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID,
     XPLMWindowLayer
@@ -82,27 +82,27 @@ class FakeXPGraphicsAPI:
     # Screen-level XPLMGraphics calls enqueue commands targeting
     # _active_drawlist.
     # ------------------------------------------------------------------
-    _screen_drawlist_back: Optional[int]  # Behind all windows
-    _screen_drawlist_front: Optional[int]  # Above all windows (optional)
+    _screen_drawlist_back: Optional[str]  # Behind all windows
+    _screen_drawlist_front: Optional[str]  # Above all windows (optional)
 
     # Currently selected draw target for XPLMGraphics enqueue.
     # Switched temporarily while processing WindowEx draw callbacks.
-    _active_drawlist: Optional[int]
+    _active_drawlist: Optional[str]
 
     # ------------------------------------------------------------------
     # WindowEx bookkeeping
     #
     # Graphics-owned windows with independent drawlists and callbacks.
     # ------------------------------------------------------------------
-    _windows_ex: OrderedDict[XPLMWindowID, WindowExInfo]
     _current_window_ex: Optional[WindowExInfo]
-    _next_window_id: int
     _keyboard_focus_window: Optional[XPLMWindowID]
 
     _menus: Dict[XPLMMenuID, Dict[str, Any]]
     _next_menu_id: int
     _menu_callbacks: Dict[XPLMMenuID, Callable]
     _root_plugins_menu: Optional[XPLMMenuID]
+
+    window_manager: WindowManager
 
     @property
     def fake_xp(self) -> FakeXP:
@@ -143,7 +143,7 @@ class FakeXPGraphicsAPI:
         # --------------------------------------------------------------
         # Register FIRST — this creates the info object
         # --------------------------------------------------------------
-        info = self.fake_xp.register_windowex(
+        info = self.fake_xp.window_manager.register_windowex(
             left=left,
             top=top,
             right=right,
@@ -160,18 +160,18 @@ class FakeXPGraphicsAPI:
             refcon=refCon,
         )
 
-        # --------------------------------------------------------------
-        # Backend creation AFTER registration
-        # --------------------------------------------------------------
+        # 2. Backend creation (DPG)
+        dpg_geom = info.frame.to_dpg(self.fake_xp.dpg_get_viewport_client_height())
+
         self.fake_xp.enqueue_dpg(
             DPGOp.ADD_WINDOW,
             args=(),
             kwargs=dict(
-                tag=info.dpg_window_id,
+                tag=info.dpg_tag,
                 label=f"XPLMWindowEx {info.wid}",
-                pos=(0, 0),
-                width=info.width,
-                height=info.height,
+                pos=(dpg_geom.x, dpg_geom.y),
+                width=dpg_geom.width,
+                height=dpg_geom.height,
                 no_title_bar=False,
                 no_resize=False,
                 no_move=False,
@@ -185,129 +185,65 @@ class FakeXPGraphicsAPI:
             DPGOp.ADD_DRAWLIST,
             args=(),
             kwargs=dict(
-                tag=info.drawlist_id,
-                width=info.width,
-                height=info.height,
-                parent=info.dpg_window_id,
+                tag=info.drawlist_tag,
+                width=dpg_geom.width,
+                height=dpg_geom.height,
+                parent=info.dpg_tag,
             ),
         )
 
         return info.wid
 
     def destroyWindow(self, wid: XPLMWindowID) -> None:
-        """
-        Destroy a graphics-owned WindowEx window.
-
-        XP-authentic behavior:
-        - Destroy the DPG window (auto-deletes all child DPG items)
-        - Destroy all widgets belonging to this WindowEx
-        - Remove the WindowEx from the registry
-        - Clear active drawlist if needed
-        - Mark graphics as needing redraw
-        """
-
-        info = self.fake_xp.get_windowex(wid)
+        info = self.fake_xp.window_manager.get_info(wid)
         if info is None:
-            # XP tolerates destroying an already-destroyed window
-            return
-        if info.widgets:
+            return  # XP silently ignores invalid IDs
+
+        # Destroy widgets first
+        if info.widget_root:
             self.fake_xp.destroyWidget(info.widget_root)
-            # destroyWidget will call this method again after cleanup
             return
 
-        # --------------------------------------------------------------
-        # 1. Remove the WindowEx record
-        # --------------------------------------------------------------
-        info = self._windows_ex.pop(wid, None)
+        # Remove from registry
+        self.fake_xp.window_manager.destroy_window(wid)
 
-        # --------------------------------------------------------------
-        # 2. Clear active drawlist if this window was the target
-        # --------------------------------------------------------------
-        if self._active_drawlist == info.drawlist_id:
-            self._active_drawlist = None
+        # Backend cleanup
+        self.fake_xp.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.drawlist_tag,))
+        self.fake_xp.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.dpg_tag,))
 
-        # --------------------------------------------------------------
-        # 4. Delete the DPG drawlist (if it exists)
-        # --------------------------------------------------------------
-        if info.drawlist_id is not None:
-            self.fake_xp.enqueue_dpg(
-                DPGOp.DELETE_ITEM,
-                args=(info.drawlist_id,),
-            )
+    def getWindowGeometry(self, wid: XPLMWindowID):
+        info = self.fake_xp.window_manager.require_info(wid)
+        return info.frame.left, info.frame.top, info.frame.right, info.frame.bottom
 
-        # --------------------------------------------------------------
-        # 5. Delete the DPG window (auto-deletes all children)
-        # --------------------------------------------------------------
-        if info.dpg_window_id is not None:
-            self.fake_xp.enqueue_dpg(
-                DPGOp.DELETE_ITEM,
-                args=(info.dpg_window_id,),
-            )
+    def setWindowGeometry(self, wid, left, top, right, bottom):
+        info = self.fake_xp.window_manager.require_info(wid)
+        info.set_frame_from_xp(XPGeom(left, top, right, bottom))
 
-    def getWindowGeometry(self, wid: XPLMWindowID) -> tuple[int, int, int, int]:
-        info = self._windows_ex.get(wid)
-        if info is None:
-            raise RuntimeError(f"Invalid window ID: {wid}")
-
-        # XP authoritative frame rect
-        return info.frame
-
-    def setWindowGeometry(
-        self,
-        windowID: XPLMWindowID,
-        left: int,
-        top: int,
-        right: int,
-        bottom: int,
-    ) -> None:
-
-        info = self._windows_ex.get(windowID)
-        if info is None:
-            raise RuntimeError(f"Invalid window ID: {windowID}")
-
-        # Update XP authoritative frame rect
-        info.set_frame_from_xp((left, top, right, bottom))
-
-    def getWindowRefCon(self, windowID: XPLMWindowID):
-        info = self._windows_ex.get(windowID)
-        if info is None:
-            raise RuntimeError(f"Invalid window ID: {windowID}")
-
+    def getWindowRefCon(self, wid: XPLMWindowID):
+        info = self.fake_xp.window_manager.require_info(wid)
         return info.refcon
 
-    def setWindowRefCon(self, windowID: XPLMWindowID, refCon) -> None:
-        info = self._windows_ex.get(windowID)
-        if info is None:
-            raise RuntimeError(f"Invalid window ID: {windowID}")
-
+    def setWindowRefCon(self, wid: XPLMWindowID, refCon):
+        info = self.fake_xp.window_manager.require_info(wid)
         info.refcon = refCon
 
-    def takeKeyboardFocus(self, windowID: XPLMWindowID) -> None:
-        if windowID not in self._windows_ex:
-            raise RuntimeError(f"Invalid window ID: {windowID}")
+    def takeKeyboardFocus(self, wid: XPLMWindowID):
+        self.fake_xp.window_manager.require_info(wid)
+        self.fake_xp._keyboard_focus_window = wid
 
-        self._keyboard_focus_window = windowID
-
-    def setWindowIsVisible(self, windowID: XPLMWindowID, visible: int) -> None:
-        info = self._windows_ex.get(windowID)
-        if info is None:
-            raise RuntimeError(f"Invalid window ID: {windowID}")
-
+    def setWindowIsVisible(self, wid: XPLMWindowID, visible: int):
+        info = self.fake_xp.window_manager.require_info(wid)
         info.visible = bool(visible)
 
         self.fake_xp.enqueue_dpg(
             DPGOp.CONFIGURE_ITEM,
-            args=(info.dpg_window_id,),
+            args=(info.dpg_tag,),
             kwargs=dict(show=info.visible),
         )
 
-    def getWindowIsVisible(self, windowID: XPLMWindowID) -> int:
-        info = self._windows_ex.get(windowID)
-        if info is None:
-            raise RuntimeError(f"Invalid window ID: {windowID}")
-
+    def getWindowIsVisible(self, wid: XPLMWindowID) -> int:
+        info = self.fake_xp.window_manager.require_info(wid)
         return int(info.visible)
-
     # ----------------------------------------------------------------------
     # DRAW CALLBACK REGISTRATION (XP SEMANTICS)
     # ----------------------------------------------------------------------
@@ -339,15 +275,21 @@ class FakeXPGraphicsAPI:
             raise RuntimeError("drawString outside draw phase")
 
         win = self._current_window_ex
-        left, top, right, bottom = win.frame  # authoritative XP frame rect
+        if win is None:
+            raise RuntimeError("drawString with no active window")
 
-        # XP → window-local DPG coords
-        local_x = x - left
-        local_y = top - y  # XP origin at top-left, DPG at top-left
+        # Authoritative XP frame geometry
+        w_left = win.frame.left
+        w_top = win.frame.top
+
+        # XP → window-local DPG coordinates
+        local_x = x - w_left
+        local_y = w_top - y
 
         # Optional baseline correction (DPG draws from top-left of glyph box)
         local_y -= 12
 
+        # Convert normalized XP color → 0–255 RGBA
         r = int(color[0] * 255)
         g = int(color[1] * 255)
         b = int(color[2] * 255)
@@ -410,14 +352,19 @@ class FakeXPGraphicsAPI:
     # ----------------------------------------------------------------------
     # XP-STYLE PRIMITIVES (DEFERRED)
     # ----------------------------------------------------------------------
-    def drawTranslucentDarkBox(self, left, top, right, bottom) -> None:
+    def drawTranslucentDarkBox(self, left: int, top: int, right: int, bottom: int) -> None:
         if self._active_drawlist is None:
             raise RuntimeError("drawTranslucentDarkBox outside draw phase")
 
         win = self._current_window_ex
-        w_left, w_top, w_right, w_bottom = win.frame  # authoritative XP frame rect
+        if win is None:
+            raise RuntimeError("drawTranslucentDarkBox with no active window")
 
-        # XP → window-local DPG coordinates
+        # Authoritative XP frame rectangle
+        w_left = win.frame.left
+        w_top = win.frame.top
+
+        # XP → window-local coordinates (DPG local space)
         local_left = left - w_left
         local_top = w_top - top
         local_right = right - w_left

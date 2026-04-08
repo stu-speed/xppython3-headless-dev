@@ -105,7 +105,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         Fail fast:
         - If no WindowEx contains this widget, raise a clear exception.
         """
-        for win in self.fake_xp.all_windowex():
+        for win in self.fake_xp.window_manager.all_info():
             if wid in win.widgets:
                 return win
 
@@ -209,14 +209,14 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         # 0. Detect if this widget is the WindowEx root
         # --------------------------------------------------------------
         win = self._get_widget_windowex(wid)
-        if win.widget_root == wid:
-            # Destroy ALL widgets in this WindowEx (including root)
+        if win.widget_root == wid: # Destroy ALL widgets in this WindowEx (including root)
             for child_wid in list(win.widgets.keys()):
                 if child_wid != wid:
                     self._kill_widget(child_wid)
 
             # Remove root widget from registry
             win.widgets.pop(wid, None)
+            win.set_widget_root(None)
 
             # Now that the WindowEx has NO widgets, destroy the WindowEx
             self.fake_xp.destroyWindow(win.wid)
@@ -302,7 +302,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             return
 
         # 1. Realize all widgets (per WindowEx)
-        for win in self.fake_xp.all_windowex():
+        for win in self.fake_xp.window_manager.all_info():
             for wid in win.widgets:
                 self._ensure_dpg_item_for_widget(wid)
 
@@ -338,7 +338,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             self._widgets_dirty = False
 
         # Dispatch draw callbacks for each WindowEx root
-        for win in self.fake_xp.all_windowex():
+        for win in self.fake_xp.window_manager.all_info():
             root = win.widget_root
             info = win.widgets.get(root)
             if info and info.dpg_id is not None:
@@ -368,7 +368,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     yield from iter_descendants(win, child_id)
 
         # Iterate per WindowEx (correct architecture)
-        for win in self.fake_xp.all_windowex():
+        for win in self.fake_xp.window_manager.all_info():
             for wid, info in win.widgets.items():
                 # Only normalize XP windows
                 if info.widget_class not in (
@@ -680,7 +680,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         Apply geometry and backend updates for all widgets in all WindowEx instances.
         """
         # Iterate per-window, because widgets now live inside WindowExInfo
-        for win in self.fake_xp.all_windowex():
+        for win in self.fake_xp.window_manager.all_info():
             for wid, info in list(win.widgets.items()):
                 # Geometry is applied exactly once per change
                 self._apply_geometry_if_needed(wid)

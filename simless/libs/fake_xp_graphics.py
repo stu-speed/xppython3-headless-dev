@@ -43,16 +43,15 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import dearpygui.dearpygui as dpg
 
 from simless.libs.fake_xp_graphics_api import FakeXPGraphicsAPI
-from simless.libs.fake_xp_types import DPGCommand, DPGOp, EventInfo, EventKind, WindowExInfo
+from simless.libs.fake_xp_types import DPGCommand, DPGGeom, DPGOp, EventInfo, EventKind
+from simless.libs.window import WindowManager
 from XPPython3.xp_typing import (
-    XPLMCursorStatus, XPLMMenuID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID,
-    XPLMWindowLayer
+    XPLMMenuID
 )
 
 
@@ -90,9 +89,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self._screen_drawlist_back = None  # Behind all windows
         self._screen_drawlist_front = None  # Above all windows (optional)
         self._active_drawlist = None
-        self._windows_ex = OrderedDict()
         self._current_window_ex = None
-        self._next_window_id = 1
         self._keyboard_focus_window = None
         self._menus = {}
         self._next_menu_id = 1
@@ -101,85 +98,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
         self._dpg_commands = []
 
-    # ----------------------------------------------------------------------
-    # DPG Helpers
-    # ----------------------------------------------------------------------
-
-    def register_windowex(
-        self,
-        *,
-        left: int,
-        top: int,
-        right: int,
-        bottom: int,
-        visible: bool,
-        decoration: XPLMWindowDecoration,
-        layer: XPLMWindowLayer,
-        draw_cb: Optional[Callable[[XPLMWindowID, Any], None]],
-        click_cb: Optional[
-            Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
-        ],
-        right_click_cb: Optional[
-            Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
-        ],
-        key_cb: Optional[
-            Callable[[XPLMWindowID, int, int, int, Any, int], int]
-        ],
-        cursor_cb: Optional[
-            Callable[[XPLMWindowID, int, int, Any], XPLMCursorStatus]
-        ],
-        wheel_cb: Optional[
-            Callable[[XPLMWindowID, int, int, int, int, Any], int]
-        ],
-        refcon: Any
-    ) -> WindowExInfo:
-
-        wid = XPLMWindowID(self._next_window_id)
-        self._next_window_id += 1
-
-        info = WindowExInfo(
-            wid=wid,  # identity only, never changes
-            _frame=(left, top, right, bottom),
-            _client=(left, top, right, bottom),
-            _visible=visible,
-            _decoration=decoration,
-            _layer=layer,
-            draw_cb=draw_cb,
-            click_cb=click_cb,
-            right_click_cb=right_click_cb,
-            key_cb=key_cb,
-            cursor_cb=cursor_cb,
-            wheel_cb=wheel_cb,
-            refcon=refcon,
-            dpg_window_id=f"xplm_window_{wid}",
-            drawlist_id=f"xplm_window_drawlist_{wid}",
-        )
-
-        # Insert at end = top of Z‑order
-        self._windows_ex[wid] = info
-
-        return info
-
-    def get_windowex(self, win_id: XPLMWindowID) -> WindowExInfo:
-        """
-        Return the WindowExInfo for the given XPLMWindowID.
-
-        Fail fast:
-        - If the window does not exist, raise a clear exception.
-        - This prevents silent corruption and makes plugin errors obvious.
-        """
-        try:
-            return self._windows_ex[win_id]
-        except KeyError:
-            raise KeyError(f"WindowEx {win_id} does not exist") from None
-
-    def all_windowex(self) -> list[WindowExInfo]:
-        return list(self._windows_ex.values())
-
-    def bring_window_to_front(self, info: WindowExInfo):
-        wid = info.wid
-        data = self._windows_ex.pop(wid)
-        self._windows_ex[wid] = data
+        self.window_manager = WindowManager(self.fake_xp)
 
     # ----------------------------------------------------------------------
     # DPG INITIALIZATION
@@ -278,8 +197,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         dpg.render_dearpygui_frame()
 
         # XP→DPG push is complete after render
-        for info in self._windows_ex.values():
-            info.dirty_xp_to_dpg = False
+        self.fake_xp.window_manager.clear_dirty_xp_to_dpg()
 
         # 7) Read DPG→XP geometry
         self._window_ex_read_dpg_to_xp()
@@ -292,16 +210,16 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             self.fake_xp.process_event_info(event)
 
         # 10) WindowEx drawing (enqueue only)
-        for info in self._iter_window_ex_in_layer_order():
+        for info in self.fake_xp.window_manager.all_info():
             if not info.visible or info.draw_cb is None:
                 continue
 
-            self._clear_drawlist_children(info.drawlist_id)
+            self._clear_drawlist_children(info.drawlist_tag)
 
             prev_drawlist = self._active_drawlist
             prev_window = self._current_window_ex
             try:
-                self._active_drawlist = info.drawlist_id
+                self._active_drawlist = info.drawlist_tag
                 self._current_window_ex = info
                 info.draw_cb(info.wid, info.refcon)
             finally:
@@ -352,7 +270,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self,
         op: DPGOp,
         *,
-        target_drawlist: int | None = None,
+        target_drawlist: str | None = None,
         args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
     ) -> None:
@@ -474,19 +392,13 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             case _:
                 raise RuntimeError(f"Unhandled DPG operation: {cmd.op}")
 
-    def _clear_drawlist_children(self, drawlist_id: Optional[int]) -> None:
+    def _clear_drawlist_children(self, drawlist_id: Optional[str]) -> None:
         """Clear per-frame draw primitives to avoid unbounded accumulation."""
         if drawlist_id is None:
             return
         if not dpg.does_item_exist(drawlist_id):
             return
         dpg.delete_item(drawlist_id, children_only=True)
-
-    def _iter_window_ex_in_layer_order(self):
-        return sorted(
-            self._windows_ex.values(),
-            key=lambda w: w.layer,
-        )
 
     def _install_dpg_input_callbacks(self) -> None:
         xp = self.fake_xp  # FakeXP instance
@@ -564,64 +476,70 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             )
 
     def _window_ex_apply_xp_to_dpg(self):
-        """Apply XP→DPG geometry before rendering.
-
-        XP is authoritative when XP code changes geometry.
-        Only runs when dirty_xp_to_dpg is True.
-        """
+        """Apply XP→DPG geometry using XPGeom/DPGGeom conversions."""
 
         client_h = dpg.get_viewport_client_height()
 
-        for wid, info in self._windows_ex.items():
-            if not info.dirty_xp_to_dpg:
+        for info in self.fake_xp.window_manager.all_info():
+            if not info._dirty_xp_to_dpg:
                 continue
 
-            dpg_id = info.dpg_window_id
+            wid = info.wid
+            dpg_id = info.dpg_tag
+
             if not dpg.does_item_exist(dpg_id):
+                print(f"[XP→DPG] SKIP: DPG item missing for wid={wid}")
                 continue
 
-            if info.frame is None:
-                continue
+            xp_geom = info.frame
+            print(f"[XP→DPG] wid={wid} XPGeom: {xp_geom}")
 
-            left, top, right, bottom = info.frame
+            # Convert XP → DPG
+            dpg_geom = xp_geom.to_dpg(client_h)
+            print(f"[XP→DPG] wid={wid} computed DPGGeom: {dpg_geom}")
 
-            width = max(1, right - left)
-            height = max(1, top - bottom)
-
-            dpg_x = left
-            dpg_y = client_h - top
-
+            # Apply geometry
             dpg.configure_item(
                 dpg_id,
-                pos=(dpg_x, dpg_y),
-                width=width,
-                height=height,
+                pos=(dpg_geom.x, dpg_geom.y),
+                width=dpg_geom.width,
+                height=dpg_geom.height,
             )
+
+            # Read back what DPG actually applied
+            applied_pos = dpg.get_item_pos(dpg_id)
+            applied_size = (
+                dpg.get_item_width(dpg_id),
+                dpg.get_item_height(dpg_id),
+            )
+
+            print(f"[XP→DPG] wid={wid} DPG applied: pos={applied_pos} size={applied_size}")
+
+            dx = applied_pos[0] - dpg_geom.x
+            dy = applied_pos[1] - dpg_geom.y
+            dw = applied_size[0] - dpg_geom.width
+            dh = applied_size[1] - dpg_geom.height
+
+            print(f"[XP→DPG] wid={wid} Δpos=({dx}, {dy}) Δsize=({dw}, {dh})")
 
     def _window_ex_read_dpg_to_xp(self):
         """
         Read DPG geometry after render and update XP geometry.
 
-        DPG is authoritative here (user dragging/resizing the DPG window).
-        We update XP geometry WITHOUT marking dirty_xp_to_dpg, so XP→DPG
-        does not overwrite the drag on the next frame.
-
-        If geometry changed, we set dirty_dpg_to_xp so the XP side can
-        consume the change.
+        DPG is authoritative here (user dragging/resizing).
+        XP geometry is updated WITHOUT marking dirty_xp_to_dpg.
         """
 
         client_h = dpg.get_viewport_client_height()
 
-        for wid, info in self._windows_ex.items():
-            dpg_id = info.dpg_window_id
-            dl_id = info.drawlist_id
+        for info in self.fake_xp.window_manager.all_info():
+            dpg_id = info.dpg_tag
+            dl_id = info.drawlist_tag
 
             if not dpg.does_item_exist(dpg_id) or not dpg.does_item_exist(dl_id):
                 continue
 
-            # ----------------------------------------------------------
             # Read DPG window geometry
-            # ----------------------------------------------------------
             try:
                 win_x, win_y = dpg.get_item_pos(dpg_id)
                 win_w = dpg.get_item_width(dpg_id)
@@ -629,51 +547,38 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             except Exception:
                 continue
 
-            # Convert to XP frame rect
-            new_frame = (
-                win_x,
-                client_h - win_y,
-                win_x + win_w,
-                client_h - win_y - win_h,
-            )
+            # Convert to XPGeom via DPGGeom
+            dpg_geom = DPGGeom(win_x, win_y, win_w, win_h)
+            xp_frame = dpg_geom.to_xp(client_h)
 
-            # Detect change BEFORE updating stored geometry
-            if info._frame != new_frame:
-                info.set_frame_from_dpg(new_frame)
+            if info.frame != xp_frame:
+                info.set_frame_from_dpg(dpg_geom, client_h)
 
-            # ----------------------------------------------------------
             # Read DPG drawlist rect → XP client rect
-            # ----------------------------------------------------------
             dl_min_x, dl_min_y = dpg.get_item_rect_min(dl_id)
             dl_max_x, dl_max_y = dpg.get_item_rect_max(dl_id)
 
-            new_client = (
+            dpg_client_geom = DPGGeom(
                 dl_min_x,
-                client_h - dl_min_y,
-                dl_max_x,
-                client_h - dl_max_y,
+                dl_min_y,
+                dl_max_x - dl_min_x,
+                dl_max_y - dl_min_y,
             )
+            xp_client = dpg_client_geom.to_xp(client_h)
 
-            if info._client != new_client:
-                info.set_client_from_dpg(new_client)
+            if info.client != xp_client:
+                info.set_client_from_dpg(dpg_client_geom, client_h)
 
     def _consume_dpg_to_xp_changes(self) -> None:
-        """React to DPG-side geometry changes.
+        """React to DPG-side geometry changes."""
 
-        _window_ex_geometry_update() has already updated info.frame/client
-        and set dirty_dpg_to_xp = True if geometry changed.
-        XP now acknowledges the change and clears the flag.
-        """
-
-        for info in self._windows_ex.values():
-            if not info.dirty_dpg_to_xp:
+        for info in self.fake_xp.window_manager.all_info():
+            if not info._dirty_dpg_to_xp:
                 continue
 
-            # Optional: fire XP callbacks or update window manager state here.
-            # (Currently no extra processing needed.)
+            # Optional: fire XP callbacks here
 
-            # Acknowledge the change.
-            info.dirty_dpg_to_xp = False
+            info._dirty_dpg_to_xp = False
 
     def _init_menu_bar(self) -> None:
         """Create the top-level X-Plane-style menu bar on the viewport."""

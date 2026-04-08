@@ -15,10 +15,7 @@ def xp() -> FakeXP:
     """
     fake = FakeXP(enable_gui=True, debug=True)
     XPPython3.xp = fake
-
-    # SimlessRunner initializes graphics BEFORE plugin enable
     fake.init_graphics_root()
-
     return fake
 
 
@@ -35,7 +32,7 @@ def _create_helloworld_window(xp: FakeXP):
         0,                               # refcon
         xp.WindowDecorationRoundRectangle,
         xp.WindowLayerFloatingWindows,
-        None,                            # right-click callback
+        None,
     )
 
 
@@ -45,27 +42,28 @@ def _create_helloworld_window(xp: FakeXP):
 
 def test_create_window_helloworld_signature(xp):
     wid = _create_helloworld_window(xp)
-
-    # Exercise full draw loop
     xp.draw_frame()
 
-    assert wid in xp._windows_ex
-    info = xp._windows_ex[wid]
+    info = xp.window_manager.require_info(wid)
 
     # Geometry must match XP frame
-    assert info.frame == (50, 600, 300, 400)
-    assert info.width == 250
-    assert info.height == 200
+    assert info.frame.left == 50
+    assert info.frame.top == 600
+    assert info.frame.right == 300
+    assert info.frame.bottom == 400
+
+    assert info.frame.width == 250
+    assert info.frame.height == 200
 
     # DPG window + drawlist must exist
-    assert info.dpg_window_id is not None
-    assert info.drawlist_id is not None
+    assert info.dpg_tag is not None
+    assert info.drawlist_tag is not None
 
     # Draw callback must be stored
     assert callable(info.draw_cb)
 
     # XP→DPG geometry must have been applied
-    assert info.dirty_xp_to_dpg is False
+    assert info._dirty_xp_to_dpg is False
 
 
 # ---------------------------------------------------------------------------
@@ -90,22 +88,22 @@ def test_multiple_windows_realized_and_drawn(xp):
 
     xp.draw_frame()
 
-    assert wid1 in xp._windows_ex
-    assert wid2 in xp._windows_ex
+    info1 = xp.window_manager.require_info(wid1)
+    info2 = xp.window_manager.require_info(wid2)
 
-    assert xp._windows_ex[wid1].dpg_window_id is not None
-    assert xp._windows_ex[wid2].dpg_window_id is not None
+    assert info1.dpg_tag is not None
+    assert info2.dpg_tag is not None
 
 
 # ---------------------------------------------------------------------------
-# 3. Visibility flag is honored (but DPG handles visibility internally)
+# 3. Visibility flag is honored
 # ---------------------------------------------------------------------------
 
 def test_window_visibility_flag(xp):
     wid = _create_helloworld_window(xp)
     xp.draw_frame()
 
-    info = xp._windows_ex[wid]
+    info = xp.window_manager.require_info(wid)
     assert info.visible is True
 
     xp.setWindowIsVisible(wid, 0)
@@ -122,15 +120,20 @@ def test_window_geometry_update(xp):
     wid = _create_helloworld_window(xp)
     xp.draw_frame()
 
-    info = xp._windows_ex[wid]
-    assert info.frame == (50, 600, 300, 400)
+    info = xp.window_manager.require_info(wid)
+    assert info.frame.left == 50
+    assert info.frame.top == 600
 
     xp.setWindowGeometry(wid, 100, 700, 400, 500)
     xp.draw_frame()
 
-    assert info.frame == (100, 700, 400, 500)
-    assert info.width == 300
-    assert info.height == 200
+    assert info.frame.left == 100
+    assert info.frame.top == 700
+    assert info.frame.right == 400
+    assert info.frame.bottom == 500
+
+    assert info.frame.width == 300
+    assert info.frame.height == 200
 
 
 # ---------------------------------------------------------------------------
@@ -141,12 +144,12 @@ def test_destroy_window(xp):
     wid = _create_helloworld_window(xp)
     xp.draw_frame()
 
-    assert wid in xp._windows_ex
+    assert xp.window_manager.get_info(wid)
 
     xp.destroyWindow(wid)
     xp.draw_frame()
 
-    assert wid not in xp._windows_ex
+    assert not xp.window_manager.get_info(wid)
 
 
 # ---------------------------------------------------------------------------
@@ -171,10 +174,8 @@ def test_window_layer_sorting(xp):
 
     xp.draw_frame()
 
-    # Windows are sorted by layer, not by creation order
-    windows = list(xp._iter_window_ex_in_layer_order())
+    windows = xp.window_manager.all_info()
 
-    # Both windows have the same layer, so ordering is undefined
     assert len(windows) == 2
     assert {w.wid for w in windows} == {wid1, wid2}
 
@@ -206,6 +207,11 @@ def test_draw_callback_invoked(xp):
     xp.draw_frame()
 
     assert calls == [wid]
+
+
+# ---------------------------------------------------------------------------
+# 8. Mouse click dispatch to correct window
+# ---------------------------------------------------------------------------
 
 def test_mouse_click_dispatch_to_window(xp):
     calls = []
@@ -244,7 +250,5 @@ def test_mouse_click_dispatch_to_window(xp):
     assert wid2 == wid
     assert x == 100
     assert y == 550
-
-    # Mouse is an XP bitmask, not a button number
     assert isinstance(mouse, int)
     assert mouse != 0

@@ -110,43 +110,6 @@ class FakeXPInput:
         left, top, right, bottom = rect
         return (left <= x < right) and (bottom <= y < top)
 
-    # ------------------------------------------------------------------
-    # WINDOWEX ORDERING / PICKING
-    # ------------------------------------------------------------------
-    def _iter_window_ex_top_to_bottom(self):
-        """
-        Topmost-first ordering.
-        Since wid is stable identity (not Z-order), we rely on registry order.
-        Highest layer first, then insertion order within that layer.
-        """
-        # Group by layer, preserve insertion order within each layer
-        layers = sorted(
-            set(info.layer for info in self._windows_ex.values()),
-            reverse=True,
-        )
-
-        for layer in layers:
-            # Yield windows in this layer in insertion order (topmost last)
-            for info in reversed(
-                [
-                    w for w in self._windows_ex.values()
-                    if w.layer == layer
-                ]
-            ):
-                yield info
-
-    def _pick_window_ex_at(self, xp_x: int, xp_y: int) -> Optional[WindowExInfo]:
-        """
-        Hit-test from topmost to bottommost.
-        Uses info.frame_contains() helper if available,
-        otherwise uses info.left/right/top/bottom.
-        """
-        for info in self._iter_window_ex_top_to_bottom():
-            if not info.visible:
-                continue
-            if info.frame_contains(xp_x, xp_y):  # preferred helper
-                return info
-        return None
 
     # ------------------------------------------------------------------
     # DISPATCH HELPERS (engine-invoked only)
@@ -159,11 +122,11 @@ class FakeXPInput:
         mouseStatus: XPLMMouseStatus,
         right: bool = False,
     ) -> int:
-        info = self._windows_ex.get(windowID)
+        info = self.fake_xp.window_manager.require_info(windowID)
         if info is None:
             return 0
 
-        if not info.client_contains(xp_x, xp_y):
+        if not info.client.contains(xp_x, xp_y):
             return 0
 
         cb = info.right_click_cb if right else info.click_cb
@@ -180,8 +143,8 @@ class FakeXPInput:
         vKey: int,
         losingFocus: int,
     ) -> int:
-        info = self._windows_ex.get(windowID)
-        if info is None or info.key_cb is None:
+        info = self.fake_xp.window_manager.require_info(windowID)
+        if info.key_cb is None:
             return 0
 
         return int(
@@ -203,8 +166,8 @@ class FakeXPInput:
         wheel: int,
         clicks: int,
     ) -> int:
-        info = self._windows_ex.get(windowID)
-        if info is None or info.wheel_cb is None:
+        info = self.fake_xp.window_manager.require_info(windowID)
+        if info.wheel_cb is None:
             return 0
 
         return int(info.wheel_cb(windowID, xp_x, xp_y, wheel, clicks, info.refcon))
@@ -215,8 +178,8 @@ class FakeXPInput:
         xp_x: int,
         xp_y: int,
     ) -> XPLMCursorStatus:
-        info = self._windows_ex.get(windowID)
-        if info is None or info.cursor_cb is None:
+        info = self.fake_xp.window_manager.require_info(windowID)
+        if info.cursor_cb is None:
             return self.fake_xp.CursorDefault
 
         return info.cursor_cb(windowID, xp_x, xp_y, info.refcon)
@@ -271,9 +234,9 @@ class FakeXPInput:
     # ------------------------------------------------------------------
     def _handle_cursor_query(self, xp_x: int, xp_y: int) -> XPLMCursorStatus:
         if self._mouse_capture_window is not None:
-            info = self._windows_ex.get(self._mouse_capture_window)
+            info = self.fake_xp.window_manager.get_info(self._mouse_capture_window)
         else:
-            info = self._pick_window_ex_at(xp_x, xp_y)
+            info = self.fake_xp.window_manager.hit_test(xp_x, xp_y)
 
         if info is None:
             return self.fake_xp.CursorDefault
@@ -304,9 +267,9 @@ class FakeXPInput:
         #    Capture bypasses hit-testing entirely
         # ------------------------------------------------------------
         if self._mouse_capture_window is not None:
-            info = self._windows_ex.get(self._mouse_capture_window)
+            info = self.fake_xp.window_manager.get_info(self._mouse_capture_window)
         else:
-            info = self._pick_window_ex_at(xp_x, xp_y)
+            info = self.fake_xp.window_manager.hit_test(xp_x, xp_y)
 
         if info is None:
             return 0
@@ -317,8 +280,8 @@ class FakeXPInput:
         #    Happens BEFORE dispatch, regardless of consumption.
         # ------------------------------------------------------------
         if mouseStatus == self.fake_xp.MouseDown:
-            if info.frame_contains(xp_x, xp_y):
-                self.fake_xp.bring_window_to_front(info)
+            if info.frame.contains(xp_x, xp_y):
+                self.fake_xp.window_manager.bring_to_front(info)
 
         # ------------------------------------------------------------
         # 4) Dispatch click callback
@@ -354,7 +317,7 @@ class FakeXPInput:
         wheel: int,
         clicks: int,
     ) -> int:
-        info = self._pick_window_ex_at(xp_x, xp_y)
+        info = self.fake_xp.window_manager.hit_test(xp_x, xp_y)
         if info is None:
             return 0
 

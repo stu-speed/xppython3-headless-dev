@@ -319,7 +319,7 @@ class SimlessRunner:
         for fl in self.fake_xp.all_flightloop():
             try:
                 # IMPORTANT: run callback under plugin context
-                with self._plugin_context(fl.plugin_id):
+                with self.plugin_context(fl.plugin_id):
                     fl.check_and_run(now, cycle)
             except Exception:
                 tb = traceback.format_exc()
@@ -355,11 +355,6 @@ class SimlessRunner:
             xp.log("[Runner] No plugins to run")
             return
 
-        # Optional FakeXP DataRef viewer (observer only)
-        if enable_dataref_viewer:
-            self._dataref_viewer = FakeXPDataRefViewerClient(xp)
-            self._dataref_viewer.attach()
-
         # ------------------------------------------------------------
         # 1. Initialize graphics BEFORE plugin load/start/enable
         # ------------------------------------------------------------
@@ -371,6 +366,11 @@ class SimlessRunner:
         # 2. XPluginStart (done by loader)
         # ------------------------------------------------------------
         plugins: List[LoadedPlugin] = self.loader.load_plugins(plugin_names)
+
+        # Optional FakeXP DataRef viewer (observer only)
+        if enable_dataref_viewer:
+            self._dataref_viewer = FakeXPDataRefViewerClient(xp)
+            self._dataref_viewer.attach()
 
         # ------------------------------------------------------------
         # 3. XPluginEnable

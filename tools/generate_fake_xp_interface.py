@@ -275,6 +275,7 @@ def generate_fake_xp_pyi():
     out.append("    bridge_port: int")
     out.append("")
     out.append("    simless_runner: SimlessRunner")
+    out.append("    window_manager: WindowManager")
     out.append("")
     out.append("    _debug: bool")
     out.append("    _sim_time: float")

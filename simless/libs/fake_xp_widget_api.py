@@ -116,7 +116,7 @@ class FakeXPWidgetsAPI:
 
             # Register + mark as root
             window_info.widgets[wid] = info
-            window_info.widget_root = wid
+            window_info._widget_root = wid
 
             return wid
 
@@ -147,7 +147,7 @@ class FakeXPWidgetsAPI:
         # Register + link to parent
         window_info.widgets[wid] = info
         parent_info.children.append(wid)
-        window_info.dirty_xp_to_dpg = True
+        window_info._dirty_xp_to_dpg = True
 
         return wid
 
@@ -160,7 +160,7 @@ class FakeXPWidgetsAPI:
             decoration=self.fake_xp.WindowDecorationRoundRectangle,
             layer=self.fake_xp.WindowLayerFloatingWindows,
         )
-        return self.fake_xp.get_windowex(win_id)
+        return self.fake_xp.window_manager.require_info(win_id)
 
     def destroyWidget(self, wid: XPWidgetID, destroy_children: int = 1) -> None:
         """
@@ -392,7 +392,7 @@ class FakeXPWidgetsAPI:
         is raised.
         """
 
-        for win in self.fake_xp.all_windowex():
+        for win in self.fake_xp.window_manager.all_info():
             info = win.widgets.get(wid)
             if info is not None:
                 return info
