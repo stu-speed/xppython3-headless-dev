@@ -6,10 +6,9 @@
 
 import XPPython3
 
-from sshd_extensions.bridge_protocol import BridgeData, BridgeDataType
-from sshd_extensions.dataref_manager import DRefType
+from PythonPlugins.sshd_extensions.bridge_protocol import BridgeData, BridgeDataType
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 from simless.libs.fake_xp import FakeXP
-from simless.libs.runner import SimlessRunner
 
 
 # ===========================================================================
@@ -227,6 +226,7 @@ def test_example_gui(inline_plugin):
     assert plugin.quit_btn is not None
     assert plugin.win is None
 
+
 # ===========================================================================
 # 5. Validate that FakeXP + SimlessRunner correctly process bridge META/UPDATE
 # ===========================================================================
@@ -296,8 +296,8 @@ def test_headless_bridge_enabled(inline_plugin, monkeypatch):
     # Bridge is runner-owned in headless mode
     runner = getattr(xp, "simless_runner", None)
     assert runner is not None, "FakeXP did not expose simless_runner"
-    assert hasattr(runner, "_bridge"), "Runner has no _bridge"
-    monkeypatch.setattr(runner._bridge, "poll_data", fake_poll)
+    assert hasattr(runner, "_bridge_client"), "Runner has no _bridge_client"
+    monkeypatch.setattr(runner._bridge_client, "poll_data", fake_poll)
 
     # ----------------------------------------------------------------------
     # 5. Run lifecycle

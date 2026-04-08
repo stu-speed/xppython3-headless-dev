@@ -43,15 +43,17 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 import dearpygui.dearpygui as dpg
 
 from simless.libs.fake_xp_graphics_api import FakeXPGraphicsAPI
 from simless.libs.fake_xp_types import DPGCommand, DPGOp, EventInfo, EventKind, WindowExInfo
-from XPPython3.xp_typing import XPLMWindowID
-
-DPGCallback = Callable[[int | str, Any, Any], Any]
+from XPPython3.xp_typing import (
+    XPLMCursorStatus, XPLMMenuID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID,
+    XPLMWindowLayer
+)
 
 
 class FakeXPGraphics(FakeXPGraphicsAPI):
@@ -88,16 +90,76 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self._screen_drawlist_back = None  # Behind all windows
         self._screen_drawlist_front = None  # Above all windows (optional)
         self._active_drawlist = None
-        self._windows_ex = {}
+        self._windows_ex = OrderedDict()
         self._current_window_ex = None
         self._next_window_id = 1
         self._keyboard_focus_window = None
+        self._menus = {}
+        self._next_menu_id = 1
+        self._menu_callbacks = {}
+        self._root_plugins_menu = None
 
         self._dpg_commands = []
 
     # ----------------------------------------------------------------------
-    # DPG INITIALIZATION
+    # DPG Helpers
     # ----------------------------------------------------------------------
+
+    def register_windowex(
+        self,
+        *,
+        left: int,
+        top: int,
+        right: int,
+        bottom: int,
+        visible: bool,
+        decoration: XPLMWindowDecoration,
+        layer: XPLMWindowLayer,
+        draw_cb: Optional[Callable[[XPLMWindowID, Any], None]],
+        click_cb: Optional[
+            Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+        ],
+        right_click_cb: Optional[
+            Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
+        ],
+        key_cb: Optional[
+            Callable[[XPLMWindowID, int, int, int, Any, int], int]
+        ],
+        cursor_cb: Optional[
+            Callable[[XPLMWindowID, int, int, Any], XPLMCursorStatus]
+        ],
+        wheel_cb: Optional[
+            Callable[[XPLMWindowID, int, int, int, int, Any], int]
+        ],
+        refcon: Any
+    ) -> WindowExInfo:
+
+        wid = XPLMWindowID(self._next_window_id)
+        self._next_window_id += 1
+
+        info = WindowExInfo(
+            wid=wid,  # identity only, never changes
+            _frame=(left, top, right, bottom),
+            _client=(left, top, right, bottom),
+            _visible=visible,
+            _decoration=decoration,
+            _layer=layer,
+            draw_cb=draw_cb,
+            click_cb=click_cb,
+            right_click_cb=right_click_cb,
+            key_cb=key_cb,
+            cursor_cb=cursor_cb,
+            wheel_cb=wheel_cb,
+            refcon=refcon,
+            dpg_window_id=f"xplm_window_{wid}",
+            drawlist_id=f"xplm_window_drawlist_{wid}",
+        )
+
+        # Insert at end = top of Z‑order
+        self._windows_ex[wid] = info
+
+        return info
+
     def get_windowex(self, win_id: XPLMWindowID) -> WindowExInfo:
         """
         Return the WindowExInfo for the given XPLMWindowID.
@@ -114,46 +176,48 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
     def all_windowex(self) -> list[WindowExInfo]:
         return list(self._windows_ex.values())
 
+    def bring_window_to_front(self, info: WindowExInfo):
+        wid = info.wid
+        data = self._windows_ex.pop(wid)
+        self._windows_ex[wid] = data
+
     # ----------------------------------------------------------------------
     # DPG INITIALIZATION
     # ----------------------------------------------------------------------
     def init_graphics_root(self) -> None:
-        """Initialize DearPyGui and create the global screen draw surfaces.
-
-        This creates:
-          - DPG context
-          - DPG viewport
-          - A viewport-attached drawlist representing the X-Plane screen
-          - Input handlers
-
-        Notes:
-          - This must run before plugin enable (simless rule).
-          - This surface is the target for drawString, drawLine, drawBox, etc.
-          - WindowEx windows and widgets draw on top of this surface.
-        """
         dpg.create_context()
         dpg.create_viewport(
             title="Fake X-Plane",
             width=1920,
             height=1080,
         )
+
+        # --------------------------------------------------------------
+        # 1. Finalize DPG internals BEFORE creating menu bar
+        # --------------------------------------------------------------
         dpg.setup_dearpygui()
+
+        # --------------------------------------------------------------
+        # 2. Now it is legal to create the menu bar
+        # --------------------------------------------------------------
+        self._init_menu_bar()
+
+        # --------------------------------------------------------------
+        # 3. Create viewport drawlists (legal after setup)
+        # --------------------------------------------------------------
+        self._screen_drawlist_back = dpg.add_viewport_drawlist(front=False)
+        self._screen_drawlist_front = dpg.add_viewport_drawlist(front=True)
+        self._active_drawlist = self._screen_drawlist_back
+
+        # --------------------------------------------------------------
+        # 4. Show the viewport
+        # --------------------------------------------------------------
         dpg.show_viewport()
 
+        # --------------------------------------------------------------
+        # 5. Install input callbacks AFTER viewport is visible
+        # --------------------------------------------------------------
         self._install_dpg_input_callbacks()
-
-        # ------------------------------------------------------------------
-        # Global screen draw surfaces (XP graphics layer)
-        # ------------------------------------------------------------------
-
-        # Background screen surface (behind all windows)
-        self._screen_drawlist_back = dpg.add_viewport_drawlist(front=False)
-
-        # Foreground screen surface (above all windows, optional)
-        self._screen_drawlist_front = dpg.add_viewport_drawlist(front=True)
-
-        # Default target for XPLMGraphics calls
-        self._active_drawlist = self._screen_drawlist_back
 
     # ----------------------------------------------------------------------
     # FRAME RENDERING
@@ -179,7 +243,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
         # 1) End run loop if viewport closed
         if not dpg.is_dearpygui_running():
-            self.xp.simless_runner.end_run_loop()
+            self.fake_xp.simless_runner.end_run_loop()
             return
 
         # 2) Clear global screen drawlists
@@ -224,8 +288,8 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self._consume_dpg_to_xp_changes()
 
         # 9) Input processing
-        for event in self.xp.drain_input_events():
-            self.xp.process_event_info(event)
+        for event in self.fake_xp.drain_input_events():
+            self.fake_xp.process_event_info(event)
 
         # 10) WindowEx drawing (enqueue only)
         for info in self._iter_window_ex_in_layer_order():
@@ -261,7 +325,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         self._dpg_commands.clear()
 
         # 12) Widget rendering
-        self.xp.render_widget_frame()
+        self.fake_xp.render_widget_frame()
 
     # ----------------------------------------------------------------------
     # DPG HELPERS (ALL DPG calls handled by this class)
@@ -313,24 +377,9 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
     # ----------------------------------------------------------------------
     # INTERNAL HELPERS
     # ----------------------------------------------------------------------
-
     def _execute_dpg_command(self, cmd: DPGCommand) -> None:
-        """Execute a single DearPyGui command immediately.
+        """Execute a single DearPyGui command immediately."""
 
-        This is the sole execution choke-point for all DearPyGui mutations.
-
-        Lifecycle enforcement:
-          - A DearPyGui context must exist
-          - DearPyGui must still be running
-          - Layout readiness is required ONLY for geometry-dependent commands
-
-        Caller responsibilities:
-          - Ensure this is not invoked from plugin callbacks
-          - Ensure the correct container stack has already been pushed
-            if cmd.target_drawlist is set
-        """
-
-        # Hard invariants — programmer error if violated
         assert isinstance(cmd, DPGCommand), "Expected DPGCommand"
         assert isinstance(cmd.op, DPGOp), f"Invalid DPGOp: {cmd.op}"
 
@@ -353,6 +402,9 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             case DPGOp.ADD_WINDOW:
                 dpg.add_window(*cmd.args, **cmd.kwargs)
 
+            case DPGOp.ADD_WINDOW:
+                dpg.add_window(*cmd.args, **cmd.kwargs)
+
             case DPGOp.ADD_CHILD_WINDOW:
                 dpg.add_child_window(*cmd.args, **cmd.kwargs)
 
@@ -367,6 +419,36 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
             case DPGOp.ADD_BUTTON:
                 dpg.add_button(*cmd.args, **cmd.kwargs)
+
+            # --------------------------------------------------
+            # Menus (XPLMMenus → DearPyGui)
+            # --------------------------------------------------
+            case DPGOp.ADD_MENU:
+                dpg.add_menu(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.ADD_MENU_ITEM:
+                label = cmd.kwargs["label"]
+                parent = cmd.kwargs["parent"]
+                tag = cmd.kwargs["tag"]
+
+                dpg.add_menu_item(
+                    label=label,
+                    parent=parent,
+                    tag=tag,
+                    callback=self._dispatch_menu_click
+                )
+
+            case DPGOp.ADD_MENU_SEPARATOR:
+                dpg.add_separator(*cmd.args, **cmd.kwargs)
+
+            case DPGOp.SET_MENU_ITEM_CHECKED:
+                # DearPyGui uses configure_item(check=True/False)
+                menu_item_tag, checked = cmd.args
+                dpg.configure_item(menu_item_tag, check=checked)
+
+            case DPGOp.SET_MENU_ITEM_ENABLED:
+                menu_item_tag, enabled = cmd.args
+                dpg.configure_item(menu_item_tag, enabled=enabled)
 
             # --------------------------------------------------
             # Item mutation
@@ -407,7 +489,7 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
         )
 
     def _install_dpg_input_callbacks(self) -> None:
-        xp = self.xp  # FakeXP instance
+        xp = self.fake_xp  # FakeXP instance
 
         with dpg.handler_registry():
             dpg.add_mouse_down_handler(
@@ -517,10 +599,15 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             )
 
     def _window_ex_read_dpg_to_xp(self):
-        """Read DPG geometry after render and update XP geometry.
+        """
+        Read DPG geometry after render and update XP geometry.
 
-        Detects DPG-side movement/resizing and sets dirty_dpg_to_xp.
-        Always runs AFTER dpg.render_dearpygui_frame().
+        DPG is authoritative here (user dragging/resizing the DPG window).
+        We update XP geometry WITHOUT marking dirty_xp_to_dpg, so XP→DPG
+        does not overwrite the drag on the next frame.
+
+        If geometry changed, we set dirty_dpg_to_xp so the XP side can
+        consume the change.
         """
 
         client_h = dpg.get_viewport_client_height()
@@ -551,10 +638,8 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
             )
 
             # Detect change BEFORE updating stored geometry
-            if info.frame != new_frame:
-                info.dirty_dpg_to_xp = True
-
-            info.frame = new_frame
+            if info._frame != new_frame:
+                info.set_frame_from_dpg(new_frame)
 
             # ----------------------------------------------------------
             # Read DPG drawlist rect → XP client rect
@@ -569,10 +654,8 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
                 client_h - dl_max_y,
             )
 
-            if info.client != new_client:
-                info.dirty_dpg_to_xp = True
-
-            info.client = new_client
+            if info._client != new_client:
+                info.set_client_from_dpg(new_client)
 
     def _consume_dpg_to_xp_changes(self) -> None:
         """React to DPG-side geometry changes.
@@ -591,3 +674,52 @@ class FakeXPGraphics(FakeXPGraphicsAPI):
 
             # Acknowledge the change.
             info.dirty_dpg_to_xp = False
+
+    def _init_menu_bar(self) -> None:
+        """Create the top-level X-Plane-style menu bar on the viewport."""
+
+        dpg_tag = "xp_menu_plugins"
+        with dpg.viewport_menu_bar(tag="xp_menu_bar"):
+            with dpg.menu(label="File", tag="xp_menu_file"):
+                dpg.add_menu_item(
+                    label="Quit",
+                    tag="xp_menu_file_quit",
+                    callback=lambda: self.fake_xp.simless_runner.end_run_loop()
+                )
+
+            # The actual DPG root for plugin menus
+            dpg.add_menu(
+                label="Plugins",
+                tag=dpg_tag
+            )
+
+        # Allocate a real XP menu ID for the plugin vroot
+        root_id = XPLMMenuID(self._next_menu_id)
+        self._next_menu_id += 1
+
+        self._root_plugins_menu = root_id
+
+        self._menus[root_id] = {
+            "name": "Plugins",
+            "parent": None,
+            "parent_item": None,
+            "handler": None,
+            "refcon": None,
+            "items": [],
+            "dpg_tag": dpg_tag,
+        }
+
+    def _dispatch_menu_click(self, sender, app_data):
+        tag = sender  # DPG gives us the authoritative tag
+
+        # Search all menus for this item tag
+        for menu_id, menu in self._menus.items():
+            for index, item in enumerate(menu["items"]):
+                if item.get("tag") == tag:
+                    handler = menu["handler"]
+                    if handler:
+                        handler(menu["refcon"], item["refcon"])
+                    return
+
+        # If we get here, the tag was not found — this is a real error
+        raise KeyError(f"[FakeXP] Menu item tag not found: {tag}")

@@ -34,13 +34,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from collections import OrderedDict
+from typing import Any, Callable, cast, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
-from simless.libs.fake_xp_interface import FakeXPInterface
 from simless.libs.fake_xp_types import DPGOp, WindowExInfo
-from XPPython3.xp_typing import XPLMCursorStatus, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer
+from XPPython3.xp_typing import (
+    XPLMCursorStatus, XPLMFontID, XPLMMenuID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID,
+    XPLMWindowLayer
+)
 
-DPGCallback = Callable[[int | str, Any, Any], Any]
+if TYPE_CHECKING:
+    from simless.libs.fake_xp import FakeXP
 
 
 class FakeXPGraphicsAPI:
@@ -90,13 +94,19 @@ class FakeXPGraphicsAPI:
     #
     # Graphics-owned windows with independent drawlists and callbacks.
     # ------------------------------------------------------------------
-    _windows_ex: Dict[XPLMWindowID, WindowExInfo]
+    _windows_ex: OrderedDict[XPLMWindowID, WindowExInfo]
     _current_window_ex: Optional[WindowExInfo]
     _next_window_id: int
     _keyboard_focus_window: Optional[XPLMWindowID]
 
-    xp: FakeXPInterface  # established in FakeXP
+    _menus: Dict[XPLMMenuID, Dict[str, Any]]
+    _next_menu_id: int
+    _menu_callbacks: Dict[XPLMMenuID, Callable]
+    _root_plugins_menu: Optional[XPLMMenuID]
 
+    @property
+    def fake_xp(self) -> FakeXP:
+        return cast("FakeXP", cast(object, self))
 
     def createWindowEx(
         self,
@@ -125,70 +135,20 @@ class FakeXPGraphicsAPI:
             Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
         ] = None,
     ) -> XPLMWindowID:
-
         if decoration is None:
-            decoration = self.xp.WindowDecorationRoundRectangle
+            decoration = self.fake_xp.WindowDecorationRoundRectangle
         if layer is None:
-            layer = self.xp.WindowLayerFloatingWindows
-
-        wid = XPLMWindowID(self._next_window_id)
-        self._next_window_id += 1
+            layer = self.fake_xp.WindowLayerFloatingWindows
 
         # --------------------------------------------------------------
-        # 1) XP authoritative frame rect
+        # Register FIRST — this creates the info object
         # --------------------------------------------------------------
-        frame = (left, top, right, bottom)
-        is_visible = bool(visible)
-
-        width = max(1, right - left)
-        height = max(1, top - bottom)
-
-        # --------------------------------------------------------------
-        # 3) Allocate backend IDs
-        # --------------------------------------------------------------
-        dpg_window_id = f"xplm_window_{wid}"
-        drawlist_id = f"xplm_window_drawlist_{wid}"
-
-        # --------------------------------------------------------------
-        # 4) Enqueue backend window creation
-        # --------------------------------------------------------------
-        self.xp.enqueue_dpg(
-            DPGOp.ADD_WINDOW,
-            args=(),
-            kwargs=dict(
-                tag=dpg_window_id,
-                label=f"XPLMWindowEx {wid}",
-                pos=(0, 0),  # geometry applied later
-                width=width,
-                height=height,
-                no_title_bar=False,
-                no_resize=False,
-                no_move=False,
-                no_scrollbar=True,
-                no_collapse=True,
-                show=is_visible,
-            ),
-        )
-
-        self.xp.enqueue_dpg(
-            DPGOp.ADD_DRAWLIST,
-            args=(),
-            kwargs=dict(
-                tag=drawlist_id,
-                width=width,
-                height=height,
-                parent=dpg_window_id,
-            ),
-        )
-
-        # --------------------------------------------------------------
-        # 5) Construct WindowExInfo with BOTH rects
-        # --------------------------------------------------------------
-        info = WindowExInfo(
-            wid=wid,
-            frame=frame,
-            client=frame,
-            visible=is_visible,
+        info = self.fake_xp.register_windowex(
+            left=left,
+            top=top,
+            right=right,
+            bottom=bottom,
+            visible=bool(visible),
             decoration=decoration,
             layer=layer,
             draw_cb=draw,
@@ -198,12 +158,41 @@ class FakeXPGraphicsAPI:
             cursor_cb=cursor,
             wheel_cb=wheel,
             refcon=refCon,
-            dpg_window_id=dpg_window_id,
-            drawlist_id=drawlist_id,
         )
 
-        self._windows_ex[wid] = info
-        return wid
+        # --------------------------------------------------------------
+        # Backend creation AFTER registration
+        # --------------------------------------------------------------
+        self.fake_xp.enqueue_dpg(
+            DPGOp.ADD_WINDOW,
+            args=(),
+            kwargs=dict(
+                tag=info.dpg_window_id,
+                label=f"XPLMWindowEx {info.wid}",
+                pos=(0, 0),
+                width=info.width,
+                height=info.height,
+                no_title_bar=False,
+                no_resize=False,
+                no_move=False,
+                no_scrollbar=True,
+                no_collapse=True,
+                show=info.visible,
+            ),
+        )
+
+        self.fake_xp.enqueue_dpg(
+            DPGOp.ADD_DRAWLIST,
+            args=(),
+            kwargs=dict(
+                tag=info.drawlist_id,
+                width=info.width,
+                height=info.height,
+                parent=info.dpg_window_id,
+            ),
+        )
+
+        return info.wid
 
     def destroyWindow(self, wid: XPLMWindowID) -> None:
         """
@@ -217,12 +206,12 @@ class FakeXPGraphicsAPI:
         - Mark graphics as needing redraw
         """
 
-        info = self.xp.get_windowex(wid)
+        info = self.fake_xp.get_windowex(wid)
         if info is None:
             # XP tolerates destroying an already-destroyed window
             return
         if info.widgets:
-            self.xp.destroyWidget(info.widget_root)
+            self.fake_xp.destroyWidget(info.widget_root)
             # destroyWidget will call this method again after cleanup
             return
 
@@ -241,7 +230,7 @@ class FakeXPGraphicsAPI:
         # 4. Delete the DPG drawlist (if it exists)
         # --------------------------------------------------------------
         if info.drawlist_id is not None:
-            self.xp.enqueue_dpg(
+            self.fake_xp.enqueue_dpg(
                 DPGOp.DELETE_ITEM,
                 args=(info.drawlist_id,),
             )
@@ -250,7 +239,7 @@ class FakeXPGraphicsAPI:
         # 5. Delete the DPG window (auto-deletes all children)
         # --------------------------------------------------------------
         if info.dpg_window_id is not None:
-            self.xp.enqueue_dpg(
+            self.fake_xp.enqueue_dpg(
                 DPGOp.DELETE_ITEM,
                 args=(info.dpg_window_id,),
             )
@@ -277,8 +266,7 @@ class FakeXPGraphicsAPI:
             raise RuntimeError(f"Invalid window ID: {windowID}")
 
         # Update XP authoritative frame rect
-        info.frame = (left, top, right, bottom)
-        info.dirty_xp_to_dpg = True
+        info.set_frame_from_xp((left, top, right, bottom))
 
     def getWindowRefCon(self, windowID: XPLMWindowID):
         info = self._windows_ex.get(windowID)
@@ -307,7 +295,7 @@ class FakeXPGraphicsAPI:
 
         info.visible = bool(visible)
 
-        self.xp.enqueue_dpg(
+        self.fake_xp.enqueue_dpg(
             DPGOp.CONFIGURE_ITEM,
             args=(info.dpg_window_id,),
             kwargs=dict(show=info.visible),
@@ -346,7 +334,7 @@ class FakeXPGraphicsAPI:
     # ----------------------------------------------------------------------
     # TEXT DRAWING (DEFERRED DPG COMMAND)
     # ----------------------------------------------------------------------
-    def drawString(self, color, x, y, text, wordWrap, fontID):
+    def drawString(self, color, x, y, text, wordWrap, fontID) -> None:
         if self._active_drawlist is None:
             raise RuntimeError("drawString outside draw phase")
 
@@ -364,7 +352,7 @@ class FakeXPGraphicsAPI:
         g = int(color[1] * 255)
         b = int(color[2] * 255)
 
-        self.xp.enqueue_dpg(
+        self.fake_xp.enqueue_dpg(
             DPGOp.DRAW_TEXT,
             target_drawlist=self._active_drawlist,
             args=((local_x, local_y), text),
@@ -422,7 +410,7 @@ class FakeXPGraphicsAPI:
     # ----------------------------------------------------------------------
     # XP-STYLE PRIMITIVES (DEFERRED)
     # ----------------------------------------------------------------------
-    def drawTranslucentDarkBox(self, left, top, right, bottom):
+    def drawTranslucentDarkBox(self, left, top, right, bottom) -> None:
         if self._active_drawlist is None:
             raise RuntimeError("drawTranslucentDarkBox outside draw phase")
 
@@ -435,7 +423,7 @@ class FakeXPGraphicsAPI:
         local_right = right - w_left
         local_bottom = w_top - bottom
 
-        self.xp.enqueue_dpg(
+        self.fake_xp.enqueue_dpg(
             DPGOp.DRAW_RECTANGLE,
             target_drawlist=self._active_drawlist,
             args=((local_left, local_top), (local_right, local_bottom)),
@@ -446,15 +434,271 @@ class FakeXPGraphicsAPI:
             ),
         )
 
-    # ----------------------------------------------------------------------
-    # SCREEN + MOUSE (XP API) — IMMEDIATE QUERIES
-    # ----------------------------------------------------------------------
     def getScreenSize(self) -> Tuple[int, int]:
         return (
-            self.xp.dpg_get_viewport_client_height(),
-            self.xp.dpg_get_viewport_client_height(),
+            self.fake_xp.dpg_get_viewport_client_height(),
+            self.fake_xp.dpg_get_viewport_client_height(),
         )
 
     def getMouseLocation(self) -> Tuple[int, int]:
-        x, y = self.xp.dpg_get_mouse_pos()
+        x, y = self.fake_xp.dpg_get_mouse_pos()
         return int(x), int(y)
+
+    def getFontDimensions(self, font_id: XPLMFontID) -> None | tuple[int, int, int]:
+        # Basic, XP-authentic defaults
+        if font_id == self.fake_xp.Font_Basic:
+            return 8, 14, 3
+        if font_id == self.fake_xp.Font_Proportional:
+            return 7, 11, 2
+
+        # fallback
+        return 8, 14, 3
+
+    # ================================================================
+    # XPLMMenus API — strongly typed, XP-faithful, Plugins-root aware
+    # ================================================================
+
+    def _resolve_parent(self, parentMenuID: Optional[XPLMMenuID]) -> XPLMMenuID:
+        """
+        XP semantics:
+          - None → Plugins menu
+          - 0 → Plugins menu
+          - otherwise → explicit parent
+        """
+        if parentMenuID is None or parentMenuID == XPLMMenuID(0):
+            return self._root_plugins_menu
+        return parentMenuID
+
+    def createMenu(
+        self,
+        name: Optional[str] = None,
+        parentMenuID: Optional[XPLMMenuID] = None,
+        parentItem: Optional[int] = 0,
+        handler: Optional[Callable[[Any, Any], None]] = None,
+        refCon: Optional[Any] = None,
+    ) -> Optional[XPLMMenuID]:
+
+        parent = self._resolve_parent(parentMenuID)
+
+        if parent not in self._menus:
+            return None
+
+        items = self._menus[parent]["items"]
+        if parentItem < 0 or parentItem > len(items):
+            return None
+
+        mid = XPLMMenuID(self._next_menu_id)
+        self._next_menu_id += 1
+
+        # Create DPG tag for this menu
+        dpg_tag = f"menu_{mid}"
+
+        self._menus[mid] = {
+            "name": name or "",
+            "parent": parent,
+            "parent_item": parentItem,
+            "handler": handler,
+            "refcon": refCon,
+            "items": [],
+            "dpg_tag": dpg_tag,  # ⭐ authoritative DPG tag
+        }
+
+        if handler:
+            self._menu_callbacks[mid] = handler
+
+        parent_tag = self._menus[parent]["dpg_tag"]
+
+        self.fake_xp.enqueue_dpg(
+            DPGOp.ADD_MENU,
+            args=(),
+            kwargs={
+                "label": name or "",
+                "parent": parent_tag,
+                "tag": dpg_tag,
+            },
+        )
+
+        return mid
+
+    def appendMenuItem(
+        self,
+        menuID: Optional[XPLMMenuID] = None,
+        name: str = "Item",
+        refCon: Any = None,
+    ) -> int:
+
+        if menuID is None or menuID not in self._menus:
+            return -1
+
+        menu = self._menus[menuID]
+        idx = len(menu["items"])
+        parent_tag = menu["dpg_tag"]
+        item_tag = f"{parent_tag}_{idx}"
+
+        menu["items"].append(
+            {
+                "name": name,
+                "refcon": refCon,
+                "enabled": True,
+                "checked": self.fake_xp.Menu_Unchecked,
+                "separator": False,
+                "command": None,
+                "tag": item_tag
+            }
+        )
+
+        self.fake_xp.enqueue_dpg(
+            DPGOp.ADD_MENU_ITEM,
+            args=(),
+            kwargs={
+                "label": name,
+                "parent": parent_tag,
+                "tag": item_tag,
+            },
+        )
+
+        return idx
+
+    def appendMenuItemWithCommand(
+        self,
+        menuID: Optional[XPLMMenuID] = None,
+        name: str = "Command",
+        commandRef: Any = None,
+    ) -> int:
+
+        if menuID is None or menuID not in self._menus:
+            return -1
+
+        menu = self._menus[menuID]
+        idx = len(menu["items"])
+        parent_tag = menu["dpg_tag"]
+        item_tag = f"{parent_tag}_{idx}"
+
+        menu["items"].append(
+            {
+                "name": name,
+                "refcon": None,
+                "enabled": True,
+                "checked": self.fake_xp.Menu_Unchecked,
+                "separator": False,
+                "command": commandRef,
+                "tag": item_tag
+            }
+        )
+
+        self.fake_xp.enqueue_dpg(
+            DPGOp.ADD_MENU_ITEM,
+            args=(),
+            kwargs={
+                "label": name,
+                "parent": parent_tag,
+                "tag": item_tag,
+            },
+        )
+
+        return idx
+
+    def appendMenuSeparator(self, menuID: XPLMMenuID = None) -> Optional[int]:
+        if menuID is None or menuID not in self._menus:
+            return None
+
+        menu = self._menus[menuID]
+        idx = len(menu["items"])
+
+        menu["items"].append(
+            {
+                "name": "",
+                "refcon": None,
+                "enabled": False,
+                "checked": self.fake_xp.Menu_NoCheck,
+                "separator": True,
+                "command": None,
+            }
+        )
+
+        parent_tag = menu["dpg_tag"]
+
+        self.fake_xp.enqueue_dpg(
+            DPGOp.ADD_MENU_SEPARATOR,
+            args=(),
+            kwargs={
+                "parent": parent_tag,
+            },
+        )
+
+        return idx
+
+    def setMenuItemName(self, menuID, index, name):
+        if menuID is None or menuID not in self._menus:
+            return
+
+        items = self._menus[menuID]["items"]
+        if index < 0 or index >= len(items):
+            return
+
+        items[index]["name"] = name
+
+        tag = f"{self._menus[menuID]['dpg_tag']}_{index}"
+
+        self.fake_xp.enqueue_dpg(
+            DPGOp.CONFIGURE_ITEM,
+            args=(tag,),
+            kwargs={"label": name},
+        )
+
+    def checkMenuItem(self, menuID, index, checked=None):
+        if checked is None:
+            checked = self.fake_xp.Menu_Checked
+
+        if menuID is None or menuID not in self._menus:
+            return
+
+        items = self._menus[menuID]["items"]
+        if index < 0 or index >= len(items):
+            return
+
+        items[index]["checked"] = checked
+
+        tag = f"{self._menus[menuID]['dpg_tag']}_{index}"
+
+        self.fake_xp.enqueue_dpg(
+            DPGOp.SET_MENU_ITEM_CHECKED,
+            args=(tag,),
+            kwargs={"check": (checked == self.fake_xp.Menu_Checked)},
+        )
+
+    def enableMenuItem(self, menuID, index, enabled=1):
+        if menuID is None or menuID not in self._menus:
+            return
+
+        items = self._menus[menuID]["items"]
+        if index < 0 or index >= len(items):
+            return
+
+        items[index]["enabled"] = bool(enabled)
+
+        tag = f"{self._menus[menuID]['dpg_tag']}_{index}"
+
+        self.fake_xp.enqueue_dpg(
+            DPGOp.SET_MENU_ITEM_ENABLED,
+            args=(tag,),
+            kwargs={"enabled": bool(enabled)},
+        )
+
+    def removeMenuItem(self, menuID, index):
+        if menuID is None or menuID not in self._menus:
+            return
+
+        items = self._menus[menuID]["items"]
+        if index < 0 or index >= len(items):
+            return
+
+        del items[index]
+
+        tag = f"{self._menus[menuID]['dpg_tag']}_{index}"
+
+        self.fake_xp.enqueue_dpg(
+            DPGOp.DELETE_ITEM,
+            args=(tag,),
+            kwargs={},
+        )

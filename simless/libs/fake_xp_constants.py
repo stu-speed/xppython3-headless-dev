@@ -28,10 +28,8 @@
 
 from __future__ import annotations
 
-from simless.libs.fake_xp_interface import FakeXPInterface
 
-
-def bind_xp_constants(xp: FakeXPInterface) -> None:
+def bind_xp_constants(xp) -> None:
     # ----------------------------------------------------------------------
     # AUDIO (1000–1999)
     # ----------------------------------------------------------------------
@@ -214,6 +212,8 @@ def bind_xp_constants(xp: FakeXPInterface) -> None:
     xp.Property_Object = 4031
     xp.Property_Refcon = 4032
     xp.Property_UserStart = 4033
+    xp.Property_CaptionLit = 4034
+    xp.Property_CaptionFont = 4035
 
     # ----------------------------------------------------------------------
     # WIDGET / WINDOW STYLES & TRACKS (5000–5199)
@@ -592,3 +592,10 @@ def bind_xp_constants(xp: FakeXPInterface) -> None:
     xp.VERSION = xp.Version = "12.4"
     xp.kVersion = 15100
     xp.kXPLM_Version = 15101
+
+    # ----------------------------------------------------------------------
+    # MENUS (XPLMMenus API)
+    # ----------------------------------------------------------------------
+    xp.Menu_NoCheck = 16000  # Item cannot be checked
+    xp.Menu_Unchecked = 16001  # Item is checkable and currently unchecked
+    xp.Menu_Checked = 16002  # Item is checkable and currently checked

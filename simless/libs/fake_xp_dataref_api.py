@@ -22,14 +22,16 @@
 from __future__ import annotations
 
 from threading import RLock
-from typing import Any, Callable, Dict, List, MutableSequence, Optional, Sequence, Tuple
+from typing import Any, Callable, cast, Dict, List, MutableSequence, Optional, Sequence, Tuple, TYPE_CHECKING
 
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 from simless.libs.fake_xp_types import (
     FakeDataRef, Type_Data, Type_Double, Type_Float, Type_FloatArray, Type_Int, Type_IntArray, Type_Unknown
 )
-from simless.libs.fake_xp_interface import FakeXPInterface
-from sshd_extensions.dataref_manager import DRefType
 from XPPython3.xp_typing import XPLMDataRefInfo_t
+
+if TYPE_CHECKING:
+    from simless.libs.fake_xp import FakeXP
 
 
 class FakeXPDataRefAPI:
@@ -40,7 +42,6 @@ class FakeXPDataRefAPI:
     It does not own lifecycle or bridge wiring.
     """
 
-    xp: FakeXPInterface  # established by FakeXP during subsystem composition
     _handle_callback: Optional[Callable[[FakeDataRef], None]]
     _handles: Dict[str, FakeDataRef]
     # accessor metadata for registered accessors (name -> metadata)
@@ -49,6 +50,10 @@ class FakeXPDataRefAPI:
     _handles_lock: RLock
     # simple owner id counter for registered accessors
     _next_owner_id: int
+
+    @property
+    def fake_xp(self) -> FakeXP:
+        return cast("FakeXP", cast(object, self))
 
     # -------------------------
     # Defaults and helpers
@@ -104,11 +109,7 @@ class FakeXPDataRefAPI:
         try:
             cb(ref)
         except Exception:
-            try:
-                if hasattr(self.xp, "log"):
-                    self.xp.log(f"[FakeXP] handle callback raised for {ref.path}")
-            except Exception:
-                pass
+            self.fake_xp.log(f"[FakeXP] handle callback raised for {ref.path}")
 
     def _require_array(self, ref: FakeDataRef, api: str) -> None:
         # Dummy refs have no authoritative shape — allow provisional arrays
@@ -144,7 +145,7 @@ class FakeXPDataRefAPI:
     # Lookup / dummy creation
     # ------------------------------------------------------------------
     def findDataRef(self, name: str) -> Optional[FakeDataRef]:
-        existing = self.xp.get_handle(name)
+        existing = self.fake_xp.get_handle(name)
         if existing is not None:
             return existing
 
@@ -155,7 +156,7 @@ class FakeXPDataRefAPI:
             size=1,
             value=0.0,
         )
-        self.xp.add_handle(name, ref)
+        self.fake_xp.add_handle(name, ref)
 
         self._notify_handle_created(ref)
         return ref
@@ -197,7 +198,7 @@ class FakeXPDataRefAPI:
     def _resolve_ref(self, dataRef: FakeDataRef) -> FakeDataRef:
         if not isinstance(dataRef, FakeDataRef):
             raise TypeError("invalid dataRef")
-        ref = self.xp.get_handle(dataRef.path)
+        ref = self.fake_xp.get_handle(dataRef.path)
         if ref is None or ref is not dataRef:
             raise TypeError("invalid dataRef")
         return ref
@@ -230,7 +231,7 @@ class FakeXPDataRefAPI:
 
         # Dummy has no contract — conform before enforcing
         if ref.is_dummy:
-            self.xp.conform_dummy_to_value(ref, float(v))
+            self.fake_xp.conform_dummy_to_value(ref, float(v))
 
         # Now enforce scalar contract
         self._require_scalar(ref, "setDataf")
@@ -251,7 +252,7 @@ class FakeXPDataRefAPI:
 
         # Dummy has no contract — conform first
         if ref.is_dummy:
-            self.xp.conform_dummy_to_value(ref, int(v))
+            self.fake_xp.conform_dummy_to_value(ref, int(v))
 
         # Enforce scalar contract
         self._require_scalar(ref, "setDatai")
@@ -272,7 +273,7 @@ class FakeXPDataRefAPI:
 
         # Dummy has no contract — conform first
         if ref.is_dummy:
-            self.xp.conform_dummy_to_value(ref, float(v))
+            self.fake_xp.conform_dummy_to_value(ref, float(v))
 
         # Enforce scalar contract
         self._require_scalar(ref, "setDatad")
@@ -380,7 +381,7 @@ class FakeXPDataRefAPI:
 
         # Dummy has no contract — conform first
         if ref.is_dummy:
-            self.xp.conform_dummy_to_value(ref, values, offset, count)
+            self.fake_xp.conform_dummy_to_value(ref, values, offset, count)
 
         if ref.type != DRefType.FLOAT_ARRAY:
             raise TypeError("setDatavf on non-float-array")
@@ -414,7 +415,7 @@ class FakeXPDataRefAPI:
             raise PermissionError("DataRef not writable")
 
         if ref.is_dummy:
-            self.xp.conform_dummy_to_value(ref, values, offset, count)
+            self.fake_xp.conform_dummy_to_value(ref, values, offset, count)
 
         if ref.type != DRefType.INT_ARRAY:
             raise TypeError("setDatavi on non-int-array")
@@ -448,7 +449,7 @@ class FakeXPDataRefAPI:
             raise PermissionError("DataRef not writable")
 
         if ref.is_dummy:
-            self.xp.conform_dummy_to_value(ref, values, offset, count)
+            self.fake_xp.conform_dummy_to_value(ref, values, offset, count)
 
         if ref.type != DRefType.BYTE_ARRAY:
             raise TypeError("setDatab on non-byte-array")
@@ -583,7 +584,7 @@ class FakeXPDataRefAPI:
         dtype, is_array, size = self._choose_dtype_from_mask(mask)
         default_value = self._default_value_for(dtype, size)
 
-        existing = self.xp.get_handle(name)
+        existing = self.fake_xp.get_handle(name)
         if existing is not None:
             ref = existing
         else:
@@ -594,11 +595,11 @@ class FakeXPDataRefAPI:
                 size=1,
                 value=0.0,
             )
-            self.xp.add_handle(name, ref)
+            self.fake_xp.add_handle(name, ref)
 
             # Explicit promotions: registration is authoritative.
-            self.xp.promote_type(ref=ref, dtype=dtype, writable=bool(writable_flag))
-            self.xp.promote_shape_from_value(ref=ref, value=default_value)
+            self.fake_xp.promote_type(ref=ref, dtype=dtype, writable=bool(writable_flag))
+            self.fake_xp.promote_shape_from_value(ref=ref, value=default_value)
 
             owner = self._next_owner_id
             self._next_owner_id += 1
@@ -631,11 +632,11 @@ class FakeXPDataRefAPI:
         """
         if not isinstance(dataRef, FakeDataRef):
             raise TypeError("invalid dataRef")
-        stored = self.xp.get_handle(dataRef.path)
+        stored = self.fake_xp.get_handle(dataRef.path)
         if stored is None or stored is not dataRef:
             raise TypeError("invalid dataRef")
         self._accessors.pop(dataRef.path, None)
-        self.xp.del_handle(dataRef.path)
+        self.fake_xp.del_handle(dataRef.path)
 
     # -------------------------
     # Helpers for registerDataAccessor

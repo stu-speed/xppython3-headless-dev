@@ -105,7 +105,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         Fail fast:
         - If no WindowEx contains this widget, raise a clear exception.
         """
-        for win in self.xp.all_windowex():
+        for win in self.fake_xp.all_windowex():
             if wid in win.widgets:
                 return win
 
@@ -126,7 +126,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         - Marks widget layer dirty
         """
 
-        xp = self.xp
+        xp = self.fake_xp
 
         # ------------------------------------------------------------
         # Visibility
@@ -219,7 +219,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             win.widgets.pop(wid, None)
 
             # Now that the WindowEx has NO widgets, destroy the WindowEx
-            self.xp.destroyWindow(win.wid)
+            self.fake_xp.destroyWindow(win.wid)
             return
 
         # --------------------------------------------------------------
@@ -237,10 +237,10 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         # 3. Queue DPG deletions (never execute directly)
         # --------------------------------------------------------------
         if info.dpg_id is not None:
-            self.xp.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.dpg_id,))
+            self.fake_xp.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.dpg_id,))
 
         if info.container_id is not None and info.container_id != info.dpg_id:
-            self.xp.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.container_id,))
+            self.fake_xp.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.container_id,))
 
         # --------------------------------------------------------------
         # 4. Remove from parent's children list
@@ -302,7 +302,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             return
 
         # 1. Realize all widgets (per WindowEx)
-        for win in self.xp.all_windowex():
+        for win in self.fake_xp.all_windowex():
             for wid in win.widgets:
                 self._ensure_dpg_item_for_widget(wid)
 
@@ -338,7 +338,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             self._widgets_dirty = False
 
         # Dispatch draw callbacks for each WindowEx root
-        for win in self.xp.all_windowex():
+        for win in self.fake_xp.all_windowex():
             root = win.widget_root
             info = win.widgets.get(root)
             if info and info.dpg_id is not None:
@@ -368,12 +368,12 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     yield from iter_descendants(win, child_id)
 
         # Iterate per WindowEx (correct architecture)
-        for win in self.xp.all_windowex():
+        for win in self.fake_xp.all_windowex():
             for wid, info in win.widgets.items():
                 # Only normalize XP windows
                 if info.widget_class not in (
-                        self.xp.WidgetClass_MainWindow,
-                        self.xp.WidgetClass_SubWindow,
+                        self.fake_xp.WidgetClass_MainWindow,
+                        self.fake_xp.WidgetClass_SubWindow,
                 ):
                     continue
 
@@ -406,7 +406,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                 new_h = top - min_bottom
 
                 if new_w > old_w or new_h > old_h:
-                    self.xp.log(
+                    self.fake_xp.log(
                         f"[Normalize] window wid={wid} "
                         f"expanded from {old_w}x{old_h} to {new_w}x{new_h}"
                     )
@@ -498,7 +498,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         if info.dpg_id is not None:
             return
 
-        xp = self.xp
+        xp = self.fake_xp
         wclass = info.widget_class
         desc = info.descriptor or ""
 
@@ -588,7 +588,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                 w.edit_buffer = app_data
                 self.sendMessageToWidget(
                     widget_id,
-                    xp.Msg_TextFieldChanged,
+                    self.fake_xp.Msg_TextFieldChanged,
                     widget_id,
                     app_data,
                 )
@@ -606,10 +606,10 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             )
 
         elif wclass == xp.WidgetClass_ScrollBar:
-            min_v = int(self.getWidgetProperty(wid, xp.Property_ScrollBarMin) or 0)
-            max_v = int(self.getWidgetProperty(wid, xp.Property_ScrollBarMax) or 100)
+            min_v = int(self.getWidgetProperty(wid, self.fake_xp.Property_ScrollBarMin) or 0)
+            max_v = int(self.getWidgetProperty(wid, self.fake_xp.Property_ScrollBarMax) or 100)
             cur_v = int(
-                self.getWidgetProperty(wid, xp.Property_ScrollBarSliderPosition)
+                self.getWidgetProperty(wid, self.fake_xp.Property_ScrollBarSliderPosition)
                 or min_v
             )
 
@@ -618,12 +618,12 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                 new_pos = int(app_data)
                 self.setWidgetProperty(
                     widget_id,
-                    xp.Property_ScrollBarSliderPosition,
+                    self.fake_xp.Property_ScrollBarSliderPosition,
                     new_pos,
                 )
                 self.sendMessageToWidget(
                     widget_id,
-                    xp.Msg_ScrollBarSliderPositionChanged,
+                    self.fake_xp.Msg_ScrollBarSliderPositionChanged,
                     widget_id,
                     new_pos,
                 )
@@ -647,7 +647,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                 widget_id = XPWidgetID(user_data)
                 self.sendMessageToWidget(
                     widget_id,
-                    xp.Msg_PushButtonPressed,
+                    self.fake_xp.Msg_PushButtonPressed,
                     widget_id,
                     None,
                 )
@@ -680,7 +680,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         Apply geometry and backend updates for all widgets in all WindowEx instances.
         """
         # Iterate per-window, because widgets now live inside WindowExInfo
-        for win in self.xp.all_windowex():
+        for win in self.fake_xp.all_windowex():
             for wid, info in list(win.widgets.items()):
                 # Geometry is applied exactly once per change
                 self._apply_geometry_if_needed(wid)
@@ -720,8 +720,8 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         # Top-level XP windows → configure the DPG window
         # --------------------------------------------------
         if info.widget_class in (
-                self.xp.WidgetClass_MainWindow,
-                self.xp.WidgetClass_SubWindow,
+                self.fake_xp.WidgetClass_MainWindow,
+                self.fake_xp.WidgetClass_SubWindow,
         ):
             if info.dpg_id is None:
                 raise RuntimeError(
@@ -730,7 +730,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
 
             if not info.geom_applied:
                 # Queue, do not execute
-                self.xp.enqueue_dpg(
+                self.fake_xp.enqueue_dpg(
                     op=DPGOp.CONFIGURE_ITEM,
                     args=(info.dpg_id,),
                     kwargs=dict(
@@ -763,7 +763,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
 
         if last != desired:
             # Queue, do not execute
-            self.xp.enqueue_dpg(
+            self.fake_xp.enqueue_dpg(
                 op=DPGOp.CONFIGURE_ITEM,
                 args=(info.container_id,),
                 kwargs=dict(
@@ -793,12 +793,12 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             return
 
         if info.visible:
-            self.xp.enqueue_dpg(
+            self.fake_xp.enqueue_dpg(
                 op=DPGOp.SHOW_ITEM,
                 args=(info.container_id,),
             )
         else:
-            self.xp.enqueue_dpg(
+            self.fake_xp.enqueue_dpg(
                 op=DPGOp.HIDE_ITEM,
                 args=(info.container_id,),
             )
@@ -818,4 +818,4 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         """
         info = self._require_widget(wid)
         for cb in info.callbacks:
-            cb(self.xp.Msg_Draw, wid, wid, None)
+            cb(self.fake_xp.Msg_Draw, wid, wid, None)

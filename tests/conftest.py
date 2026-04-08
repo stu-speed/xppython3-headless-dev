@@ -5,63 +5,61 @@
 # ROLE
 #   • Ensure each test begins with a clean XPPython3.xp binding.
 #   • Provide a deterministic inline plugin module factory for loader tests.
+#   • Install the synthetic XPPython3 runtime early so production modules
+#     (e.g., bridge_protocol) can import safely.
 #
 # INVARIANTS
-#   • Never instantiate FakeXP here.
+#   • Never instantiate FakeXP for normal tests.
 #   • Never import plugin modules here.
 #   • Inline plugin modules must define PythonInterface explicitly.
 # ===========================================================================
 
-import pytest
 import types
-import XPPython3
+
 import dearpygui.dearpygui as dpg
+import pytest
 
-from sshd_extensions.dataref_manager import DRefType
+import XPPython3
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
+from simless.libs.fake_xp import FakeXP
+from simless.libs.xppython3_runtime import wire_xppython3_runtime
+
+# This must run at import time, not inside a fixture
+wire_xppython3_runtime(FakeXP(debug=False, enable_gui=False))
 
 
-
+# ---------------------------------------------------------------------------
+# Reset xp binding per test
+# ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def reset_xp():
     """
-    Ensure each test starts with a clean FakeXP binding.
+    Ensure each test starts with a clean XPPython3.xp binding.
 
-    Tests are responsible for constructing FakeXP and assigning:
+    Tests that need FakeXP must explicitly assign:
         XPPython3.xp = FakeXP(...)
     """
     XPPython3.xp = None
 
 
+# ---------------------------------------------------------------------------
+# Ensure DPG teardown between tests
+# ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def teardown_dpg():
     yield
-    # Ensure DPG is fully torn down between tests
     try:
         dpg.destroy_context()
     except Exception:
         pass
 
 
-
+# ---------------------------------------------------------------------------
+# Inline plugin factory
+# ---------------------------------------------------------------------------
 @pytest.fixture
 def inline_plugin():
-    """
-    Factory for creating inline plugin modules.
-
-    Usage:
-        mod = inline_plugin(
-            name="my_plugin",
-            plugin_obj=plugin_instance
-        )
-
-    The returned object is a ModuleType suitable for SimlessPluginLoader.
-    """
-
-    def _create(
-        *,
-        name: str,
-        plugin_obj,
-    ):
+    def _create(*, name: str, plugin_obj):
         mod = types.ModuleType(name)
 
         class PythonInterface:
@@ -85,22 +83,19 @@ def inline_plugin():
 
     return _create
 
+
+# ---------------------------------------------------------------------------
+# Dummy DataRef coercion helper
+# ---------------------------------------------------------------------------
 @pytest.fixture
 def update_dataref():
-    """
-    Test-only helper that coerces dummy FakeDataRef fields without promoting.
-    Mirrors the semantics expected by test_update_dummy_ref_validation.
-    """
     def _update(ref, *, dtype: DRefType, size=None, value=None):
-        # Must be dummy
         if not ref.is_dummy:
             raise RuntimeError("update_dataref only valid for dummy refs")
 
-        # Validate size
         if size is not None and size <= 0:
             raise ValueError("size must be > 0")
 
-        # Apply coercions
         if dtype is not None:
             ref.type = dtype
             ref.type_known = True
@@ -116,4 +111,3 @@ def update_dataref():
         return True
 
     return _update
-
