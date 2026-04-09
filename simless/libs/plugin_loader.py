@@ -71,7 +71,6 @@ class SimlessPluginLoader:
         self._next_id: int = 1
 
         self._ensure_sys_path()
-        self._wire_xppython3_runtime()
 
     # ----------------------------------------------------------------------
     # sys.path setup
@@ -90,58 +89,6 @@ class SimlessPluginLoader:
             if s not in sys.path:
                 sys.path.insert(0, s)
                 self.xp.log(f"[Loader] Added to sys.path: {s}")
-
-    # ----------------------------------------------------------------------
-    # Synthetic XPPython3 runtime
-    # ----------------------------------------------------------------------
-
-    def _wire_xppython3_runtime(self) -> None:
-        """
-        Provide a synthetic XPPython3 runtime environment:
-
-          • from XPPython3 import xp
-          • import XPPython3.xp
-          • import xp
-
-        xp.* is a façade over FakeXP.
-        """
-        import types
-
-        # ------------------------------------------------------------
-        # 1. Create synthetic XPPython3 package
-        # ------------------------------------------------------------
-        xpp_pkg = types.ModuleType("XPPython3")
-        xpp_pkg.__path__ = [str(self.xppython3_root)]
-        xpp_pkg.__package__ = "XPPython3"
-        sys.modules["XPPython3"] = xpp_pkg
-
-        # ------------------------------------------------------------
-        # 2. Create xp façade module
-        # ------------------------------------------------------------
-        xp_mod = types.ModuleType("xp")
-        backend = self.xp
-
-        # Optional: keep reference
-        xp_mod.xp = backend
-
-        # Provide VERSION for plugin logging
-        xp_mod.VERSION = getattr(backend, "VERSION", "FakeXP")
-
-        # Expose ALL public FakeXP methods/attributes as xp.*
-        for name in dir(backend):
-            if not name.startswith("_"):
-                setattr(xp_mod, name, getattr(backend, name))
-
-        # ------------------------------------------------------------
-        # 3. Register xp in all expected import locations
-        # ------------------------------------------------------------
-        sys.modules["xp"] = xp_mod
-        sys.modules["XPPython3.xp"] = xp_mod
-
-        # Allow: from XPPython3 import xp
-        setattr(xpp_pkg, "xp", xp_mod)
-
-        self.xp.log("[Loader] Synthetic XPPython3 runtime wired (supports import xp, XPPython3.xp)")
 
     # ----------------------------------------------------------------------
     # Plugin lookup APIs

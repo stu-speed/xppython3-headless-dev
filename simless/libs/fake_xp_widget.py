@@ -126,8 +126,6 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         - Marks widget layer dirty
         """
 
-        xp = self.fake_xp
-
         # ------------------------------------------------------------
         # Visibility
         # ------------------------------------------------------------
@@ -135,9 +133,9 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             info.visible = bool(visible)
             if info.container_id is not None:
                 if info.visible:
-                    xp.enqueue_dpg(DPGOp.SHOW_ITEM, args=(info.container_id,))
+                    self.gm.enqueue_dpg(DPGOp.SHOW_ITEM, args=(info.container_id,))
                 else:
-                    xp.enqueue_dpg(DPGOp.HIDE_ITEM, args=(info.container_id,))
+                    self.gm.enqueue_dpg(DPGOp.HIDE_ITEM, args=(info.container_id,))
 
         # ------------------------------------------------------------
         # Descriptor
@@ -146,20 +144,20 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             info.descriptor = descriptor
             if info.dpg_id is not None:
                 desc = descriptor or ""
-                if info.widget_class == xp.WidgetClass_TextField:
-                    xp.enqueue_dpg(
+                if info.widget_class == self.fake_xp.WidgetClass_TextField:
+                    self.gm.enqueue_dpg(
                         DPGOp.SET_VALUE,
                         args=(info.dpg_id,),
                         kwargs=dict(value=desc.strip()),
                     )
-                elif info.widget_class == xp.WidgetClass_Caption:
-                    xp.enqueue_dpg(
+                elif info.widget_class == self.fake_xp.WidgetClass_Caption:
+                    self.gm.enqueue_dpg(
                         DPGOp.SET_VALUE,
                         args=(info.dpg_id,),
                         kwargs=dict(value=desc),
                     )
-                elif info.widget_class == xp.WidgetClass_Button:
-                    xp.enqueue_dpg(
+                elif info.widget_class == self.fake_xp.WidgetClass_Button:
+                    self.gm.enqueue_dpg(
                         DPGOp.CONFIGURE_ITEM,
                         args=(info.dpg_id,),
                         kwargs=dict(label=desc),
@@ -172,21 +170,21 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             prop_id, new_val = prop
             info.properties[prop_id] = new_val
 
-            if info.widget_class == xp.WidgetClass_ScrollBar and info.dpg_id is not None:
-                if prop_id == xp.Property_ScrollBarMin:
-                    xp.enqueue_dpg(
+            if info.widget_class == self.fake_xp.WidgetClass_ScrollBar and info.dpg_id is not None:
+                if prop_id == self.fake_xp.Property_ScrollBarMin:
+                    self.gm.enqueue_dpg(
                         DPGOp.CONFIGURE_ITEM,
                         args=(info.dpg_id,),
                         kwargs=dict(min_value=int(new_val)),
                     )
-                elif prop_id == xp.Property_ScrollBarMax:
-                    xp.enqueue_dpg(
+                elif prop_id == self.fake_xp.Property_ScrollBarMax:
+                    self.gm.enqueue_dpg(
                         DPGOp.CONFIGURE_ITEM,
                         args=(info.dpg_id,),
                         kwargs=dict(max_value=int(new_val)),
                     )
-                elif prop_id == xp.Property_ScrollBarSliderPosition:
-                    xp.enqueue_dpg(
+                elif prop_id == self.fake_xp.Property_ScrollBarSliderPosition:
+                    self.gm.enqueue_dpg(
                         DPGOp.SET_VALUE,
                         args=(info.dpg_id,),
                         kwargs=dict(value=int(new_val)),
@@ -237,10 +235,10 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         # 3. Queue DPG deletions (never execute directly)
         # --------------------------------------------------------------
         if info.dpg_id is not None:
-            self.fake_xp.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.dpg_id,))
+            self.gm.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.dpg_id,))
 
         if info.container_id is not None and info.container_id != info.dpg_id:
-            self.fake_xp.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.container_id,))
+            self.gm.enqueue_dpg(DPGOp.DELETE_ITEM, args=(info.container_id,))
 
         # --------------------------------------------------------------
         # 4. Remove from parent's children list
@@ -484,7 +482,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         Ensure that a DearPyGui representation exists for the given XPWidget.
 
         This performs *structural realization only* and queues all backend
-        operations via xp.enqueue_dpg(). No backend commands are executed
+        operations via self.gm.enqueue_dpg(). No backend commands are executed
         immediately.
 
         Preconditions:
@@ -498,7 +496,6 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         if info.dpg_id is not None:
             return
 
-        xp = self.fake_xp
         wclass = info.widget_class
         desc = info.descriptor or ""
 
@@ -507,15 +504,15 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         container_id = f"xp_widget_container_{wid}"
 
         is_window = wclass in (
-            xp.WidgetClass_MainWindow,
-            xp.WidgetClass_SubWindow,
+            self.fake_xp.WidgetClass_MainWindow,
+            self.fake_xp.WidgetClass_SubWindow,
         )
 
         # ------------------------------------------------------------
         # XP WINDOWS → top-level DPG windows
         # ------------------------------------------------------------
         if is_window:
-            xp.enqueue_dpg(
+            self.gm.enqueue_dpg(
                 op=DPGOp.ADD_WINDOW,
                 kwargs=dict(
                     tag=dpg_id,
@@ -552,7 +549,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
 
         # Create container if needed
         if info.container_id is None:
-            xp.enqueue_dpg(
+            self.gm.enqueue_dpg(
                 op=DPGOp.ADD_CHILD_WINDOW,
                 kwargs=dict(
                     tag=container_id,
@@ -571,8 +568,8 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         # ------------------------------------------------------------
         # Create actual control
         # ------------------------------------------------------------
-        if wclass == xp.WidgetClass_Caption:
-            xp.enqueue_dpg(
+        if wclass == self.fake_xp.WidgetClass_Caption:
+            self.gm.enqueue_dpg(
                 op=DPGOp.ADD_TEXT,
                 kwargs=dict(
                     tag=dpg_id,
@@ -581,7 +578,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                 ),
             )
 
-        elif wclass == xp.WidgetClass_TextField:
+        elif wclass == self.fake_xp.WidgetClass_TextField:
             def _on_text(sender, app_data, user_data):
                 widget_id = XPWidgetID(user_data)
                 w = self._require_widget(widget_id)
@@ -593,7 +590,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     app_data,
                 )
 
-            xp.enqueue_dpg(
+            self.gm.enqueue_dpg(
                 op=DPGOp.ADD_INPUT_TEXT,
                 kwargs=dict(
                     tag=dpg_id,
@@ -605,7 +602,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                 ),
             )
 
-        elif wclass == xp.WidgetClass_ScrollBar:
+        elif wclass == self.fake_xp.WidgetClass_ScrollBar:
             min_v = int(self.getWidgetProperty(wid, self.fake_xp.Property_ScrollBarMin) or 0)
             max_v = int(self.getWidgetProperty(wid, self.fake_xp.Property_ScrollBarMax) or 100)
             cur_v = int(
@@ -628,7 +625,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     new_pos,
                 )
 
-            xp.enqueue_dpg(
+            self.gm.enqueue_dpg(
                 op=DPGOp.ADD_SLIDER_INT,
                 kwargs=dict(
                     tag=dpg_id,
@@ -642,7 +639,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                 ),
             )
 
-        elif wclass == xp.WidgetClass_Button:
+        elif wclass == self.fake_xp.WidgetClass_Button:
             def _on_button(sender, app_data, user_data):
                 widget_id = XPWidgetID(user_data)
                 self.sendMessageToWidget(
@@ -652,7 +649,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
                     None,
                 )
 
-            xp.enqueue_dpg(
+            self.gm.enqueue_dpg(
                 op=DPGOp.ADD_BUTTON,
                 kwargs=dict(
                     tag=dpg_id,
@@ -664,7 +661,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             )
 
         else:
-            xp.enqueue_dpg(
+            self.gm.enqueue_dpg(
                 op=DPGOp.ADD_TEXT,
                 kwargs=dict(
                     tag=dpg_id,
@@ -730,7 +727,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
 
             if not info.geom_applied:
                 # Queue, do not execute
-                self.fake_xp.enqueue_dpg(
+                self.gm.enqueue_dpg(
                     op=DPGOp.CONFIGURE_ITEM,
                     args=(info.dpg_id,),
                     kwargs=dict(
@@ -763,7 +760,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
 
         if last != desired:
             # Queue, do not execute
-            self.fake_xp.enqueue_dpg(
+            self.gm.enqueue_dpg(
                 op=DPGOp.CONFIGURE_ITEM,
                 args=(info.container_id,),
                 kwargs=dict(
@@ -782,7 +779,7 @@ class FakeXPWidget(FakeXPWidgetsAPI):
         If the widget has not yet been structurally realized (container_id is None),
         this is a no-op.
 
-        All backend operations are queued via xp.enqueue_dpg() and executed later
+        All backend operations are queued via self.gm.enqueue_dpg() and executed later
         during the render pass. No backend commands are executed immediately.
         """
 
@@ -793,12 +790,12 @@ class FakeXPWidget(FakeXPWidgetsAPI):
             return
 
         if info.visible:
-            self.fake_xp.enqueue_dpg(
+            self.gm.enqueue_dpg(
                 op=DPGOp.SHOW_ITEM,
                 args=(info.container_id,),
             )
         else:
-            self.fake_xp.enqueue_dpg(
+            self.gm.enqueue_dpg(
                 op=DPGOp.HIDE_ITEM,
                 args=(info.container_id,),
             )

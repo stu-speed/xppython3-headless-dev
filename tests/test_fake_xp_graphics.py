@@ -15,7 +15,7 @@ def xp() -> FakeXP:
     """
     fake = FakeXP(enable_gui=True, debug=True)
     XPPython3.xp = fake
-    fake.init_graphics_root()
+    fake.graphics_manager.init_graphics_root()
     return fake
 
 
@@ -42,7 +42,7 @@ def _create_helloworld_window(xp: FakeXP):
 
 def test_create_window_helloworld_signature(xp):
     wid = _create_helloworld_window(xp)
-    xp.draw_frame()
+    xp.graphics_manager.draw_frame()
 
     info = xp.window_manager.require_info(wid)
 
@@ -86,7 +86,7 @@ def test_multiple_windows_realized_and_drawn(xp):
         None,
     )
 
-    xp.draw_frame()
+    xp.graphics_manager.draw_frame()
 
     info1 = xp.window_manager.require_info(wid1)
     info2 = xp.window_manager.require_info(wid2)
@@ -101,13 +101,13 @@ def test_multiple_windows_realized_and_drawn(xp):
 
 def test_window_visibility_flag(xp):
     wid = _create_helloworld_window(xp)
-    xp.draw_frame()
+    xp.graphics_manager.draw_frame()
 
     info = xp.window_manager.require_info(wid)
     assert info.visible is True
 
     xp.setWindowIsVisible(wid, 0)
-    xp.draw_frame()
+    xp.graphics_manager.draw_frame()
 
     assert info.visible is False
 
@@ -118,14 +118,14 @@ def test_window_visibility_flag(xp):
 
 def test_window_geometry_update(xp):
     wid = _create_helloworld_window(xp)
-    xp.draw_frame()
+    xp.graphics_manager.draw_frame()
 
     info = xp.window_manager.require_info(wid)
     assert info.frame.left == 50
     assert info.frame.top == 600
 
     xp.setWindowGeometry(wid, 100, 700, 400, 500)
-    xp.draw_frame()
+    xp.graphics_manager.draw_frame()
 
     assert info.frame.left == 100
     assert info.frame.top == 700
@@ -142,12 +142,12 @@ def test_window_geometry_update(xp):
 
 def test_destroy_window(xp):
     wid = _create_helloworld_window(xp)
-    xp.draw_frame()
+    xp.graphics_manager.draw_frame()
 
     assert xp.window_manager.get_info(wid)
 
     xp.destroyWindow(wid)
-    xp.draw_frame()
+    xp.graphics_manager.draw_frame()
 
     assert not xp.window_manager.get_info(wid)
 
@@ -172,7 +172,7 @@ def test_window_layer_sorting(xp):
         None,
     )
 
-    xp.draw_frame()
+    xp.graphics_manager.draw_frame()
 
     windows = xp.window_manager.all_info()
 
@@ -204,7 +204,7 @@ def test_draw_callback_invoked(xp):
         None,
     )
 
-    xp.draw_frame()
+    xp.graphics_manager.draw_frame()
 
     assert calls == [wid]
 
@@ -242,7 +242,7 @@ def test_mouse_click_dispatch_to_window(xp):
         button=0,
     ))
 
-    xp.draw_frame()
+    xp.graphics_manager.draw_frame()
 
     assert len(calls) == 1
     wid2, x, y, mouse = calls[0]

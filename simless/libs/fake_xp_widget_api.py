@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import Any, cast, List, Optional, Tuple, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import WidgetInfo, WindowExInfo, XPWidgetCallback
+from simless.libs.graphics import GraphicsManager
 from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage, XPWidgetPropertyID
 
 if TYPE_CHECKING:
@@ -53,6 +54,10 @@ class FakeXPWidgetsAPI:
     @property
     def fake_xp(self) -> FakeXP:
         return cast("FakeXP", cast(object, self))
+
+    @property
+    def gm(self) -> GraphicsManager:
+        return self.fake_xp.graphics_manager
 
     # Backend helpers (implemented in FakeXPWidget)
     def _get_widget(self, wid: XPWidgetID) -> WidgetInfo:

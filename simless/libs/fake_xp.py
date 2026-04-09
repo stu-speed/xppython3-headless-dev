@@ -55,6 +55,8 @@ from simless.libs.fake_xp_input import FakeXPInput
 from simless.libs.fake_xp_utilities import FakeXPUtilities
 from simless.libs.fake_xp_widget import FakeXPWidget
 from simless.libs.plugin_runner import SimlessRunner
+from simless.libs.window import WindowManager
+from simless.libs.graphics import GraphicsManager
 
 
 class FakeXP(
@@ -82,6 +84,8 @@ class FakeXP(
     bridge_port: int
 
     simless_runner: SimlessRunner
+    window_manager: WindowManager
+    graphics_manager: GraphicsManager
 
     _debug: bool
     _sim_time: float
@@ -147,9 +151,11 @@ class FakeXP(
         bind_xp_constants(self)
 
         # ------------------------------------------------------------------
-        # Bind SimlessRunner
+        # Bind Modules
         # ------------------------------------------------------------------
         self.simless_runner = SimlessRunner(self, enable_dataref_bridge, bridge_host, bridge_port)
+        self.window_manager = WindowManager(self)
+        self.graphics_manager = GraphicsManager(self)
 
     # ----------------------------------------------------------------------
     # Helpers

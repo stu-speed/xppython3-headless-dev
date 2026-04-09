@@ -120,8 +120,8 @@ class WindowManager:
         if removed is None:
             return
 
-        if self.fake_xp._active_drawlist == removed.drawlist_tag:
-            self.fake_xp._active_drawlist = None
+        if self.fake_xp.graphics_manager.get_active_drawlist() == removed.drawlist_tag:
+            self.fake_xp.graphics_manager.set_active_drawlist(None)
 
     # ------------------------------------------------------------
     # WINDOW LOOKUP / Z-ORDER

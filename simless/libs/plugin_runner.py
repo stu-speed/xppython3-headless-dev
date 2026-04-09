@@ -338,7 +338,7 @@ class SimlessRunner:
 
         # 5. Graphics frame
         if xp.enable_gui:
-            xp.draw_frame()
+            xp.graphics_manager.draw_frame()
 
     # ----------------------------------------------------------------------
     # Full lifecycle (plugins = list of plugin names)
@@ -359,18 +359,18 @@ class SimlessRunner:
         # 1. Initialize graphics BEFORE plugin load/start/enable
         # ------------------------------------------------------------
         if xp.enable_gui:
-            xp.init_graphics_root()
+            xp.graphics_manager.init_graphics_root()
             xp.log("[Runner] GUI enabled (FakeXPGraphics manages DearPyGui)")
+
+            # Optional FakeXP DataRef viewer (observer only)
+            if enable_dataref_viewer:
+                self._dataref_viewer = FakeXPDataRefViewerClient(xp)
+                self._dataref_viewer.attach()
 
         # ------------------------------------------------------------
         # 2. XPluginStart (done by loader)
         # ------------------------------------------------------------
         plugins: List[LoadedPlugin] = self.loader.load_plugins(plugin_names)
-
-        # Optional FakeXP DataRef viewer (observer only)
-        if enable_dataref_viewer:
-            self._dataref_viewer = FakeXPDataRefViewerClient(xp)
-            self._dataref_viewer.attach()
 
         # ------------------------------------------------------------
         # 3. XPluginEnable
