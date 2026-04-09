@@ -40,9 +40,11 @@
 
 from __future__ import annotations
 
-from typing import Any, cast, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, List, Optional, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import EventInfo, EventKind, WindowExInfo
+import dearpygui.dearpygui as dpg
+
+from simless.libs.fake_xp_types import EventInfo, EventKind
 from XPPython3.xp_typing import (
     XPLMCursorStatus,
     XPLMMouseStatus,
@@ -53,13 +55,8 @@ if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
 
 
-class FakeXPInput:
+class InputManager:
     """Input routing subsystem mixin for FakeXP."""
-
-    # ------------------------------------------------------------------
-    # WindowEx authoritative storage (owned by graphics subsystem)
-    # ------------------------------------------------------------------
-    _windows_ex: Dict[XPLMWindowID, WindowExInfo]
 
     # ------------------------------------------------------------------
     # Input state
@@ -69,19 +66,13 @@ class FakeXPInput:
     _mouse_capture_window: Optional[XPLMWindowID]
     _mouse_button_down: bool
 
-    @property
-    def fake_xp(self) -> FakeXP:
-        return cast("FakeXP", cast(object, self))
-
-    # ------------------------------------------------------------------
-    # INITIALIZATION
-    # ------------------------------------------------------------------
-    def _init_input(self) -> None:
+    def __init__(self, fake_xp: FakeXP) -> None:
         """Initialize internal input state. Called by FakeXP during construction."""
         self._keyboard_focus_window = None
         self._input_events = []
         self._mouse_capture_window = None
         self._mouse_button_down = False
+        self.fake_xp = fake_xp
 
     # ------------------------------------------------------------------
     # INPUT QUEUE (engine-owned)
@@ -103,13 +94,129 @@ class FakeXPInput:
         return events
 
     # ------------------------------------------------------------------
-    # GEOMETRY HELPERS
+    # FOCUS CONTROL
     # ------------------------------------------------------------------
-    @staticmethod
-    def _point_in_rect(x: int, y: int, rect: tuple[int, int, int, int]) -> bool:
-        left, top, right, bottom = rect
-        return (left <= x < right) and (bottom <= y < top)
+    def clear_keyboard_focus(self) -> None:
+        """Explicitly clear keyboard focus."""
+        self._keyboard_focus_window = None
 
+    def install_dpg_input_callbacks(self) -> None:
+        with dpg.handler_registry():
+            dpg.add_mouse_down_handler(
+                callback=lambda sender, app_data: (
+                    self.queue_input_event(
+                        EventInfo.from_dpg(
+                            kind=EventKind.MOUSE_BUTTON,
+                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
+                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
+                            dpg_vp_height=dpg.get_viewport_client_height(),
+                            state="down",
+                            button=int(app_data) if isinstance(app_data, int) else 0,
+                        )
+                    )
+                )
+            )
+
+            dpg.add_mouse_release_handler(
+                callback=lambda sender, app_data: (
+                    self.queue_input_event(
+                        EventInfo.from_dpg(
+                            kind=EventKind.MOUSE_BUTTON,
+                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
+                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
+                            dpg_vp_height=dpg.get_viewport_client_height(),
+                            state="up",
+                            button=int(app_data) if isinstance(app_data, int) else 0,
+                        )
+                    )
+                )
+            )
+
+            dpg.add_mouse_move_handler(
+                callback=lambda sender, app_data: (
+                    self.queue_input_event(
+                        EventInfo.from_dpg(
+                            kind=EventKind.CURSOR,
+                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
+                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
+                            dpg_vp_height=dpg.get_viewport_client_height(),
+                        )
+                    )
+                )
+            )
+
+            dpg.add_mouse_wheel_handler(
+                callback=lambda sender, app_data: (
+                    self.queue_input_event(
+                        EventInfo.from_dpg(
+                            kind=EventKind.MOUSE_WHEEL,
+                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
+                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
+                            dpg_vp_height=dpg.get_viewport_client_height(),
+                            wheel=int(app_data),
+                            clicks=int(app_data),
+                        )
+                    )
+                )
+            )
+
+            dpg.add_key_press_handler(
+                callback=lambda sender, app_data: (
+                    self.queue_input_event(
+                        EventInfo.from_xp(
+                            kind=EventKind.KEY,
+                            key=int(app_data),
+                            flags=0,
+                            vKey=int(app_data),
+                        )
+                    )
+                )
+            )
+
+    # ------------------------------------------------------------------
+    # SINGLE RUNNER ENTRY POINT (typed)
+    # ------------------------------------------------------------------
+    def process_event_info(self, event: EventInfo) -> Any:
+        if event.kind is EventKind.MOUSE_BUTTON:
+            if event.state is None:
+                raise RuntimeError("MOUSE_BUTTON requires state")
+
+            mouse_status = (
+                self.fake_xp.MouseDown if event.state == "down" else self.fake_xp.MouseUp
+            )
+
+            return self._handle_mouse_button(
+                xp_x=event.xp_x,
+                xp_y=event.xp_y,
+                mouseStatus=mouse_status,
+                right=event.right,
+            )
+
+        if event.kind is EventKind.MOUSE_WHEEL:
+            if event.wheel is None or event.clicks is None:
+                raise RuntimeError("MOUSE_WHEEL requires wheel, clicks")
+
+            return self._handle_mouse_wheel(
+                xp_x=event.xp_x,
+                xp_y=event.xp_y,
+                wheel=event.wheel,
+                clicks=event.clicks,
+            )
+
+        if event.kind is EventKind.CURSOR:
+            return self._handle_cursor_query(event.xp_x, event.xp_y)
+
+        if event.kind is EventKind.KEY:
+            if event.key is None or event.flags is None or event.vKey is None:
+                raise RuntimeError("KEY requires key, flags, vKey")
+
+            return self._handle_key(
+                key=event.key,
+                flags=event.flags,
+                vKey=event.vKey,
+            )
+
+        raise ValueError(f"Unhandled EventKind: {event.kind}")
 
     # ------------------------------------------------------------------
     # DISPATCH HELPERS (engine-invoked only)
@@ -183,53 +290,6 @@ class FakeXPInput:
             return self.fake_xp.CursorDefault
 
         return info.cursor_cb(windowID, xp_x, xp_y, info.refcon)
-
-    # ------------------------------------------------------------------
-    # SINGLE RUNNER ENTRY POINT (typed)
-    # ------------------------------------------------------------------
-    def process_event_info(self, event: EventInfo) -> Any:
-        if event.kind is EventKind.MOUSE_BUTTON:
-            if event.state is None:
-                raise RuntimeError("MOUSE_BUTTON requires state")
-
-            mouse_status = (
-                self.fake_xp.MouseDown if event.state == "down" else self.fake_xp.MouseUp
-            )
-
-            return self._handle_mouse_button(
-                xp_x=event.xp_x,
-                xp_y=event.xp_y,
-                mouseStatus=mouse_status,
-                right=event.right,
-            )
-
-        if event.kind is EventKind.MOUSE_WHEEL:
-            if event.wheel is None or event.clicks is None:
-                raise RuntimeError("MOUSE_WHEEL requires wheel, clicks")
-
-            return self._handle_mouse_wheel(
-                xp_x=event.xp_x,
-                xp_y=event.xp_y,
-                wheel=event.wheel,
-                clicks=event.clicks,
-            )
-
-        if event.kind is EventKind.CURSOR:
-            return self._handle_cursor_query(event.xp_x, event.xp_y)
-
-        if event.kind is EventKind.KEY:
-            if event.key is None or event.flags is None or event.vKey is None:
-                raise RuntimeError("KEY requires key, flags, vKey")
-
-            return self._handle_key(
-                key=event.key,
-                flags=event.flags,
-                vKey=event.vKey,
-            )
-
-        raise ValueError(f"Unhandled EventKind: {event.kind}")
-
-
 
     # ------------------------------------------------------------------
     # ROUTERS
@@ -342,10 +402,3 @@ class FakeXPInput:
             vKey=vKey,
             losingFocus=0,
         )
-
-    # ------------------------------------------------------------------
-    # FOCUS CONTROL
-    # ------------------------------------------------------------------
-    def clear_keyboard_focus(self) -> None:
-        """Explicitly clear keyboard focus."""
-        self._keyboard_focus_window = None

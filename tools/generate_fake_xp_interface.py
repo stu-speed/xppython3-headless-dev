@@ -277,6 +277,7 @@ def generate_fake_xp_pyi():
     out.append("    simless_runner: SimlessRunner")
     out.append("    window_manager: WindowManager")
     out.append("    graphics_manager: GraphicsManager")
+    out.append("    input_manager: InputManager")
     out.append("")
     out.append("    _debug: bool")
     out.append("    _sim_time: float")
@@ -297,7 +298,6 @@ def generate_fake_xp_pyi():
     out.append("    def _init_graphics(self) -> None: ...")
     out.append("    def _init_flightloop(self) -> None: ...")
     out.append("    def _init_utilities(self) -> None: ...")
-    out.append("    def _init_input(self) -> None: ...")
     out.append("    def _init_command(self) -> None: ...")
     out.append("")
 

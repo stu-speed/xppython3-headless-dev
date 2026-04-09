@@ -326,7 +326,7 @@ class GraphicsManager(GraphicsDpg):
         # --------------------------------------------------------------
         # 5. Install input callbacks AFTER viewport is visible
         # --------------------------------------------------------------
-        self._install_dpg_input_callbacks()
+        self.fake_xp.input_manager.install_dpg_input_callbacks()
 
     # ----------------------------------------------------------------------
     # FRAME RENDERING
@@ -396,8 +396,8 @@ class GraphicsManager(GraphicsDpg):
         self._consume_dpg_to_xp_changes()
 
         # 9) Input processing
-        for event in self.fake_xp.drain_input_events():
-            self.fake_xp.process_event_info(event)
+        for event in self.fake_xp.input_manager.drain_input_events():
+            self.fake_xp.input_manager.process_event_info(event)
 
         # 10) WindowEx drawing (enqueue only)
         for info in self.fake_xp.window_manager.all_info():

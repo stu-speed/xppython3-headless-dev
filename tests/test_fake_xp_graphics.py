@@ -234,7 +234,7 @@ def test_mouse_click_dispatch_to_window(xp):
         None,
     )
 
-    xp.queue_input_event(EventInfo.from_xp(
+    xp.input_manager.queue_input_event(EventInfo.from_xp(
         kind=EventKind.MOUSE_BUTTON,
         xp_x=100,
         xp_y=550,

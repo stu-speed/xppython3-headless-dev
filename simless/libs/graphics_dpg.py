@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 import dearpygui.dearpygui as dpg
 
 from simless.libs.fake_xp_types import (
-    DPGCommand, DPGGeom, DPGOp, EventInfo, EventKind, WindowExInfo
+    DPGCommand, DPGGeom, DPGOp, WindowExInfo
 )
 from XPPython3.xp_typing import XPLMMenuID, XPLMWindowID
 
@@ -332,78 +332,3 @@ class GraphicsDpg:
 
         # If we get here, the tag was not found — this is a real error
         raise KeyError(f"[FakeXP] Menu item tag not found: {tag}")
-
-    def _install_dpg_input_callbacks(self) -> None:
-        xp = self.fake_xp  # FakeXP instance
-
-        with dpg.handler_registry():
-            dpg.add_mouse_down_handler(
-                callback=lambda sender, app_data: (
-                    xp.queue_input_event(
-                        EventInfo.from_dpg(
-                            kind=EventKind.MOUSE_BUTTON,
-                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
-                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
-                            dpg_vp_height=dpg.get_viewport_client_height(),
-                            state="down",
-                            button=int(app_data) if isinstance(app_data, int) else 0,
-                        )
-                    )
-                )
-            )
-
-            dpg.add_mouse_release_handler(
-                callback=lambda sender, app_data: (
-                    xp.queue_input_event(
-                        EventInfo.from_dpg(
-                            kind=EventKind.MOUSE_BUTTON,
-                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
-                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
-                            dpg_vp_height=dpg.get_viewport_client_height(),
-                            state="up",
-                            button=int(app_data) if isinstance(app_data, int) else 0,
-                        )
-                    )
-                )
-            )
-
-            dpg.add_mouse_move_handler(
-                callback=lambda sender, app_data: (
-                    xp.queue_input_event(
-                        EventInfo.from_dpg(
-                            kind=EventKind.CURSOR,
-                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
-                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
-                            dpg_vp_height=dpg.get_viewport_client_height(),
-                        )
-                    )
-                )
-            )
-
-            dpg.add_mouse_wheel_handler(
-                callback=lambda sender, app_data: (
-                    xp.queue_input_event(
-                        EventInfo.from_dpg(
-                            kind=EventKind.MOUSE_WHEEL,
-                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
-                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
-                            dpg_vp_height=dpg.get_viewport_client_height(),
-                            wheel=int(app_data),
-                            clicks=int(app_data),
-                        )
-                    )
-                )
-            )
-
-            dpg.add_key_press_handler(
-                callback=lambda sender, app_data: (
-                    xp.queue_input_event(
-                        EventInfo.from_xp(
-                            kind=EventKind.KEY,
-                            key=int(app_data),
-                            flags=0,
-                            vKey=int(app_data),
-                        )
-                    )
-                )
-            )
