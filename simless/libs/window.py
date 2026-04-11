@@ -53,23 +53,23 @@ class WindowManager:
         visible: bool,
         decoration: XPLMWindowDecoration,
         layer: XPLMWindowLayer,
-        draw_cb: Optional[Callable[[XPLMWindowID, Any], None]],
+        draw_cb: Optional[Callable[[XPLMWindowID, Any], None]] = None,
         click_cb: Optional[
             Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
-        ],
+        ] = None,
         right_click_cb: Optional[
             Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
-        ],
+        ] = None,
         key_cb: Optional[
             Callable[[XPLMWindowID, int, int, int, Any, int], int]
-        ],
+        ] = None,
         cursor_cb: Optional[
             Callable[[XPLMWindowID, int, int, Any], XPLMCursorStatus]
-        ],
+        ] = None,
         wheel_cb: Optional[
             Callable[[XPLMWindowID, int, int, int, int, Any], int]
-        ],
-        refcon: Any,
+        ] = None,
+        refcon: Optional[Any] = None,
     ) -> WindowExInfo:
 
         wid = XPLMWindowID(self._next_window_id)

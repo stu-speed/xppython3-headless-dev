@@ -117,9 +117,6 @@ class GraphicsDpg:
             case DPGOp.ADD_WINDOW:
                 dpg.add_window(*cmd.args, **cmd.kwargs)
 
-            case DPGOp.ADD_WINDOW:
-                dpg.add_window(*cmd.args, **cmd.kwargs)
-
             case DPGOp.ADD_CHILD_WINDOW:
                 dpg.add_child_window(*cmd.args, **cmd.kwargs)
 

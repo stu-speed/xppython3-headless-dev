@@ -104,146 +104,24 @@ class FakeDataRef:
 
 
 @dataclass(slots=True)
-class WidgetInfo:
+class WGeom:
     """
-    Authoritative record for a single XPWidget.
+    XPWidget geometry in window-local coordinates.
 
-    GEOMETRY (authoritative XP domain)
-    ----------------------------------
-    geometry = (left, top, right, bottom)
-    • XP‑semantic rectangle.
-    • Local to the WindowEx client area.
-    • Origin at top-left, Y increases downward.
-    • Plugins read/write this through XP APIs.
+    Coordinate system:
+        • Origin: (0, 0) at the top-left of the window's client area
+        • X increases to the right
+        • Y increases downward
+        • Geometry is stored as (left, top, right, bottom)
 
-    BACK‑REFERENCES
-    ---------------
-    window:
-        The owning WindowExInfo. Required so that any widget mutation
-        automatically dirties the window for XP→DPG sync.
-
-    BACKEND OBJECTS (DPG)
-    ---------------------
-    dpg_id:
-        The DPG item representing the actual control (text, button, etc.)
-    container_id:
-        The DPG child_window used for absolute positioning.
-
-    DPG GEOMETRY STATE
-    ------------------
-    geom_applied:
-        Whether the DPG control geometry has been applied.
-    container_geom_applied:
-        Last applied geometry for the DPG container.
+    Width  = right  - left
+    Height = bottom - top
     """
 
-    # Identity
-    wid: XPWidgetID
-    widget_class: XPWidgetClass
-    window: "WindowExInfo"  # back-reference to owning window
-
-    # Authoritative XP geometry
-    _geometry: Tuple[int, int, int, int]
-
-    # Hierarchy
-    parent: Optional[XPWidgetID] = None
-    children: list[XPWidgetID] = field(default_factory=list)
-
-    # XPWidget state
-    _descriptor: str = ""
-    _visible: bool = True
-
-    # Backend handles
-    dpg_id: Optional[str] = None
-    container_id: Optional[str] = None
-
-    # DPG geometry state
-    geom_applied: bool = False
-    container_geom_applied: Optional[Tuple[int, int, int, int]] = None
-
-    # XPWidget properties and callbacks
-    properties: Dict[XPWidgetPropertyID, Any] = field(default_factory=dict)
-    callbacks: List[XPWidgetCallback] = field(default_factory=list)
-
-    # Interaction state
-    edit_buffer: Optional[str] = None
-
-    # ------------------------------------------------------------
-    # PROTECTED SETTERS (all mutations dirty the owning WindowEx)
-    # ------------------------------------------------------------
-
-    @property
-    def geometry(self) -> Tuple[int, int, int, int]:
-        return self._geometry
-
-    @geometry.setter
-    def geometry(self, value: Tuple[int, int, int, int]):
-        self._geometry = value
-        self.geom_applied = False
-        self.container_geom_applied = None
-        self.window._dirty_xp_to_dpg = True
-
-    @property
-    def descriptor(self) -> str:
-        return self._descriptor
-
-    @descriptor.setter
-    def descriptor(self, value: str):
-        self._descriptor = value
-        self.geom_applied = False
-        self.window._dirty_xp_to_dpg = True
-
-    @property
-    def visible(self) -> bool:
-        return self._visible
-
-    @visible.setter
-    def visible(self, value: bool):
-        self._visible = value
-        self.geom_applied = False
-        self.window._dirty_xp_to_dpg = True
-
-    # ------------------------------------------------------------
-    # CHILD MANAGEMENT (must dirty window)
-    # ------------------------------------------------------------
-
-    def add_child(self, child_id: XPWidgetID):
-        self.children.append(child_id)
-        self.window._dirty_xp_to_dpg = True
-
-    def remove_child(self, child_id: XPWidgetID):
-        if child_id in self.children:
-            self.children.remove(child_id)
-            self.window._dirty_xp_to_dpg = True
-
-    # ------------------------------------------------------------
-    # PROPERTY MANAGEMENT (must dirty window)
-    # ------------------------------------------------------------
-
-    def set_property(self, prop: XPWidgetPropertyID, value: Any):
-        self.properties[prop] = value
-        self.geom_applied = False
-        self.window._dirty_xp_to_dpg = True
-
-    # ------------------------------------------------------------
-    # DERIVED GEOMETRY HELPERS (read‑only)
-    # ------------------------------------------------------------
-
-    @property
-    def left(self) -> int:
-        return self._geometry[0]
-
-    @property
-    def top(self) -> int:
-        return self._geometry[1]
-
-    @property
-    def right(self) -> int:
-        return self._geometry[2]
-
-    @property
-    def bottom(self) -> int:
-        return self._geometry[3]
+    left: int
+    top: int
+    right: int
+    bottom: int
 
     @property
     def width(self) -> int:
@@ -253,6 +131,140 @@ class WidgetInfo:
     def height(self) -> int:
         return max(0, self.bottom - self.top)
 
+    def as_tuple(self) -> tuple[int, int, int, int]:
+        return self.left, self.top, self.right, self.bottom
+
+    def contains(self, x: int, y: int) -> bool:
+        return (self.left <= x <= self.right) and (self.top <= y <= self.bottom)
+
+
+@dataclass(slots=True)
+class WidgetInfo:
+    """
+    Authoritative record for a single XPWidget.
+    """
+
+    # Identity
+    wid: XPWidgetID
+    widget_class: XPWidgetClass
+    window: "WindowExInfo"
+
+    # Authoritative XP geometry
+    _geometry: WGeom
+
+    # Hierarchy
+    parent: Optional[XPWidgetID] = None
+    _children: list[XPWidgetID] = field(default_factory=list)
+
+    # XPWidget state
+    _descriptor: str = ""
+    _last_descriptor: str = "<<NONE>>"   # updated only by DPG sync
+    _visible: bool = True
+
+    # Backend handles
+    dpg_id: Optional[str] = None
+    container_id: Optional[str] = None
+
+    # DPG geometry state
+    geom_applied: bool = False
+    container_geom_applied: Optional[DPGGeom] = None
+
+    # XPWidget properties and callbacks
+    _properties: Dict[XPWidgetPropertyID|int, Any] = field(default_factory=dict)
+    _callbacks: List[XPWidgetCallback] = field(default_factory=list)
+
+    # Interaction state
+    edit_buffer: Optional[str] = None
+
+    # ------------------------------------------------------------
+    # PROTECTED SETTERS (all mutations dirty the owning WindowEx)
+    # ------------------------------------------------------------
+
+    @property
+    def geometry(self) -> WGeom:
+        return self._geometry
+
+    @geometry.setter
+    def geometry(self, value: WGeom):
+        self._geometry = value
+        self.geom_applied = False
+        self.container_geom_applied = None
+        self.window._dirty_widgets = True
+
+    @property
+    def descriptor(self) -> str:
+        return self._descriptor
+
+    def set_descriptor(self, value: str):
+        self._descriptor = value
+        self.window._dirty_widgets = True
+
+    @property
+    def visible(self) -> bool:
+        return self._visible
+
+    def set_visible(self, value: bool):
+        self._visible = value
+        self.window._dirty_widgets = True
+
+    @property
+    def properties(self) -> Dict[XPWidgetPropertyID|int, Any]:
+        return self._properties
+
+    def set_property(self, prop: XPWidgetPropertyID, value: Any):
+        self._properties[prop] = value
+        self.window._dirty_widgets = True
+
+    @property
+    def callbacks(self) -> List[XPWidgetCallback]:
+        return self._callbacks
+
+    def add_callback(self, cb: XPWidgetCallback):
+        self._callbacks.append(cb)
+
+    def remove_callback(self, cb: XPWidgetCallback):
+        self._callbacks.remove(cb)
+
+    @property
+    def children(self) -> List[XPWidgetID]:
+        return self._children
+
+    def add_child(self, child_id: XPWidgetID):
+        self._children.append(child_id)
+        self.window._dirty_widgets = True
+
+    def remove_child(self, child_id: XPWidgetID):
+        if child_id in self._children:
+            self._children.remove(child_id)
+            self.window._dirty_widgets = True
+
+    # ------------------------------------------------------------
+    # DERIVED GEOMETRY HELPERS (read‑only)
+    # ------------------------------------------------------------
+
+    @property
+    def left(self) -> int:
+        return self._geometry.left
+
+    @property
+    def top(self) -> int:
+        return self._geometry.top
+
+    @property
+    def right(self) -> int:
+        return self._geometry.right
+
+    @property
+    def bottom(self) -> int:
+        return self._geometry.bottom
+
+    @property
+    def width(self) -> int:
+        return max(0, self.right - self.left)
+
+    @property
+    def height(self) -> int:
+        return max(0, self.bottom - self.top)
 
 
 @dataclass(slots=True)
@@ -411,17 +423,21 @@ class WindowExInfo:
     ]
     refcon: Any
 
-    # Backend (DPG)
-    _dpg_window_id: str
-    _drawlist_id: str
+    # Backend (DPG) — created lazily
+    _dpg_window_id: Optional[str] = None
+    _drawlist_id: Optional[str] = None
 
     # Dirty flags
-    _dirty_xp_to_dpg: bool = True
-    _dirty_dpg_to_xp: bool = False
+    _dirty_xp_to_dpg: bool = True      # XP window state changed
+    _dirty_dpg_to_xp: bool = False     # DPG window state changed
+    _dirty_widgets: bool = True        # Widget tree changed (requires _render_widgets)
 
-    # Widget tree
+    # Widget tree root
     _widget_root: Optional[XPWidgetID] = None
-    widgets: Dict[XPWidgetID, "WidgetInfo"] = field(default_factory=dict)  # TODO: Deprecate
+
+    # XP WIDGET STATE (PER-WINDOW)
+    _z_order: list[XPWidgetID] = field(default_factory=list)
+    _focused_widget: Optional[XPWidgetID] = None
 
     # ------------------------------------------------------------
     # PUBLIC READ-ONLY GEOMETRY
@@ -436,11 +452,11 @@ class WindowExInfo:
         return self._client
 
     @property
-    def dpg_tag(self) -> str:
+    def dpg_tag(self) -> Optional[str]:
         return self._dpg_window_id
 
     @property
-    def drawlist_tag(self) -> str:
+    def drawlist_tag(self) -> Optional[str]:
         return self._drawlist_id
 
     # ------------------------------------------------------------
@@ -460,12 +476,10 @@ class WindowExInfo:
     # ------------------------------------------------------------
 
     def set_frame_from_dpg(self, geom: DPGGeom, client_h: int) -> None:
-        """DPG → XP frame update (conversion to be implemented)."""
         self._frame = geom.to_xp(client_h)
         self._dirty_dpg_to_xp = True
 
     def set_client_from_dpg(self, geom: DPGGeom, client_h: int) -> None:
-        """DPG → XP client update (conversion to be implemented)."""
         self._client = geom.to_xp(client_h)
         self._dirty_dpg_to_xp = True
 
@@ -510,10 +524,55 @@ class WindowExInfo:
 
     def set_widget_root(self, wid: Optional[XPWidgetID]) -> None:
         self._widget_root = wid
+        self._dirty_widgets = True
 
-    def mark_widget_modified(self) -> None:
-        """Any widget mutation dirties the entire window subtree."""
-        self._dirty_xp_to_dpg = True
+    # ------------------------------------------------------------
+    # WIDGET Z-ORDER HELPERS
+    # ------------------------------------------------------------
+
+    @property
+    def z_order(self) -> list[XPWidgetID]:
+        return self._z_order
+
+    def add_to_z_order(self, wid: XPWidgetID) -> None:
+        self._z_order.append(wid)
+        self._dirty_widgets = True
+
+    def remove_from_z_order(self, wid: XPWidgetID) -> None:
+        if wid in self._z_order:
+            self._z_order.remove(wid)
+            self._dirty_widgets = True
+
+        if self._focused_widget == wid:
+            self._focused_widget = None
+
+    def raise_widget(self, wid: XPWidgetID) -> None:
+        if wid in self._z_order:
+            self._z_order.remove(wid)
+            self._z_order.append(wid)
+            self._dirty_widgets = True
+
+    def lower_widget(self, wid: XPWidgetID) -> None:
+        if wid in self._z_order:
+            self._z_order.remove(wid)
+            self._z_order.insert(0, wid)
+            self._dirty_widgets = True
+
+    # ------------------------------------------------------------
+    # WIDGET FOCUS HELPERS
+    # ------------------------------------------------------------
+
+    @property
+    def focused_widget(self) -> Optional[XPWidgetID]:
+        return self._focused_widget
+
+    def set_focused_widget(self, wid: Optional[XPWidgetID]) -> None:
+        self._focused_widget = wid
+        self._dirty_widgets = True
+
+    def clear_widget_focus(self) -> None:
+        self._focused_widget = None
+        self._dirty_widgets = True
 
 
 class EventKind(StrEnum):

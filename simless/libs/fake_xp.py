@@ -57,6 +57,7 @@ from simless.libs.fake_xp_widget import FakeXPWidget
 from simless.libs.plugin_runner import SimlessRunner
 from simless.libs.window import WindowManager
 from simless.libs.graphics import GraphicsManager
+from simless.libs.widget import WidgetManager
 
 
 class FakeXP(
@@ -86,6 +87,7 @@ class FakeXP(
     window_manager: WindowManager
     graphics_manager: GraphicsManager
     input_manager: InputManager
+    widget_manager: WidgetManager
 
     _debug: bool
     _sim_time: float
@@ -138,8 +140,6 @@ class FakeXP(
         # Initialize subsystems
         # ------------------------------------------------------------------
         self._init_dataref()
-        self._init_widgets()
-        self._init_graphics()
         self._init_flightloop()
         self._init_utilities()
         self._init_command()
@@ -156,6 +156,7 @@ class FakeXP(
         self.window_manager = WindowManager(self)
         self.graphics_manager = GraphicsManager(self)
         self.input_manager = InputManager(self)
+        self.widget_manager = WidgetManager(self)
 
     # ----------------------------------------------------------------------
     # Helpers

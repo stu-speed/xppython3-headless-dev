@@ -328,9 +328,6 @@ class GraphicsManager(GraphicsDpg):
         # --------------------------------------------------------------
         self.fake_xp.input_manager.install_dpg_input_callbacks()
 
-    # ----------------------------------------------------------------------
-    # FRAME RENDERING
-    # ----------------------------------------------------------------------
     def draw_frame(self) -> None:
         """Render one simless frame.
 
@@ -349,10 +346,11 @@ class GraphicsManager(GraphicsDpg):
          11) Execute deferred DPG commands (window-level).
          12) Render widget frame.
         """
+        xp = self.fake_xp
 
         # 1) End run loop if viewport closed
         if not dpg.is_dearpygui_running():
-            self.fake_xp.simless_runner.end_run_loop()
+            xp.simless_runner.end_run_loop()
             return
 
         # 2) Clear global screen drawlists
@@ -380,14 +378,14 @@ class GraphicsManager(GraphicsDpg):
                 self._execute_dpg_command(cmd)
         self._dpg_commands.clear()
 
-        # 5) Apply XP→DPG geometry
+        # 5) Apply XP→DPG geometry (per-window sync)
         self._window_ex_apply_xp_to_dpg()
 
         # 6) Render one DearPyGui frame
         dpg.render_dearpygui_frame()
 
         # XP→DPG push is complete after render
-        self.fake_xp.window_manager.clear_dirty_xp_to_dpg()
+        xp.window_manager.clear_dirty_xp_to_dpg()
 
         # 7) Read DPG→XP geometry
         self._window_ex_read_dpg_to_xp()
@@ -395,12 +393,12 @@ class GraphicsManager(GraphicsDpg):
         # 8) Consume DPG→XP geometry changes
         self._consume_dpg_to_xp_changes()
 
-        # 9) Input processing
-        for event in self.fake_xp.input_manager.drain_input_events():
-            self.fake_xp.input_manager.process_event_info(event)
+        # 9) Input processing (via InputManager)
+        for event in xp.input_manager.drain_input_events():
+            xp.input_manager.process_event_info(event)
 
-        # 10) WindowEx drawing (enqueue only)
-        for info in self.fake_xp.window_manager.all_info():
+        # 10) WindowEx drawing (enqueue only, in layer order)
+        for info in xp.window_manager.iter_top_to_bottom():
             if not info.visible or info.draw_cb is None:
                 continue
 
@@ -433,4 +431,4 @@ class GraphicsManager(GraphicsDpg):
         self._dpg_commands.clear()
 
         # 12) Widget rendering
-        self.fake_xp.render_widget_frame()
+        self.fake_xp.widget_manager.render_widget_frame()

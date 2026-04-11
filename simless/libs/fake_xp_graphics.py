@@ -65,12 +65,6 @@ class FakeXPGraphics:
     def gm(self) -> GraphicsManager:
         return self.fake_xp.graphics_manager
 
-    # ----------------------------------------------------------------------
-    # INITIALIZATION
-    # ----------------------------------------------------------------------
-    def _init_graphics(self) -> None:
-        pass
-
     def createWindowEx(
         self,
         left: int = 100,
