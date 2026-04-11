@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import sys
+import types
 from pathlib import Path
 from types import ModuleType
 from typing import List, Protocol, TYPE_CHECKING
@@ -71,6 +72,7 @@ class SimlessPluginLoader:
         self._next_id: int = 1
 
         self._ensure_sys_path()
+        self._install_xp_facade()
 
     # ----------------------------------------------------------------------
     # sys.path setup
@@ -78,17 +80,61 @@ class SimlessPluginLoader:
 
     def _ensure_sys_path(self) -> None:
         """
-        Ensure sys.path contains all XPPython3‑authentic roots:
+        Ensure sys.path contains XPPython3‑authentic roots in the correct order:
 
-          • plugins/                     → supports `import xp`
-          • plugins/PythonPlugins/       → plugin modules
-          • plugins/XPPython3/           → synthetic XPPython3 runtime
+          1. plugins/XPPython3/           → real XPPython3 package
+          2. plugins/                     → supports import XPPython3
+          3. plugins/PythonPlugins/       → plugin modules
         """
-        for path in (self.plugins_root, self.root, self.xppython3_root):
+        xpp = self.xppython3_root
+        plugins = self.plugins_root
+        py_plugins = self.root
+
+        # Remove any pre‑existing XPPython3 (namespace or site‑package)
+        if "XPPython3" in sys.modules:
+            del sys.modules["XPPython3"]
+
+        for path in (xpp, plugins, py_plugins):
             s = str(path)
             if s not in sys.path:
                 sys.path.insert(0, s)
                 self.xp.log(f"[Loader] Added to sys.path: {s}")
+
+        # Debug: confirm which XPPython3 we actually see
+        try:
+            mod = importlib.import_module("XPPython3")
+            self.xp.log(f"[Loader] XPPython3 resolved to: {getattr(mod, '__file__', '<no __file__>')}")
+        except Exception as e:
+            self.xp.log(f"[Loader] XPPython3 import failed: {e}")
+
+    # ----------------------------------------------------------------------
+    # xp façade (top‑level module)
+    # ----------------------------------------------------------------------
+
+    def _install_xp_facade(self) -> None:
+        """
+        Provide a real top‑level `xp` module so plugins can `import xp`
+        exactly like in X‑Plane.
+        """
+        xp_mod = types.ModuleType("xp")
+        xp_mod.VERSION = "simless"
+        xp_mod.log = self.xp.log
+
+        # Expose FakeXP API surface
+        for name in dir(self.xp):
+            if not name.startswith("_"):
+                setattr(xp_mod, name, getattr(self.xp, name))
+
+        sys.modules["xp"] = xp_mod
+        self.xp.log("[Loader] Installed xp façade module")
+
+        # Also expose xp inside XPPython3 if present
+        try:
+            import XPPython3
+            XPPython3.xp = xp_mod
+            self.xp.log("[Loader] Bound xp façade into XPPython3.xp")
+        except Exception:
+            pass
 
     # ----------------------------------------------------------------------
     # Plugin lookup APIs
@@ -134,6 +180,7 @@ class SimlessPluginLoader:
 
     def _load_single(self, name: str) -> LoadedPlugin:
         self.xp.log(f"[Loader] Loading module {name}")
+
         try:
             module: ModuleType = importlib.import_module(name)
         except Exception as exc:
