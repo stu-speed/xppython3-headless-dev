@@ -33,20 +33,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from enum import IntEnum
 from typing import Any, Dict, Optional
 
+from XPPython3 import xp
 from XPPython3.xp_typing import XPLMDataRef, XPLMDataRefInfo_t
-
-
-class DRefType(IntEnum):
-    UNKNOWN = 0
-    INT = 1
-    FLOAT = 2
-    DOUBLE = 4
-    FLOAT_ARRAY = 8
-    INT_ARRAY = 16
-    BYTE_ARRAY = 32
 
 
 @dataclass(slots=True)
@@ -59,7 +49,7 @@ class DataRefSpec:
     - `default` is returned by get_value() when no handle exists (unless required).
     """
     name: str
-    type: DRefType
+    type: int               # xp.Type_* bitmask
     writable: bool
 
     required: bool = False
@@ -69,29 +59,31 @@ class DataRefSpec:
     is_dummy: bool = True
 
     @staticmethod
-    def _mask_to_dtype(mask: int) -> DRefType:
+    def _mask_to_dtype(mask: int) -> int:
         """
-        XPLM reports a *bitmask* of supported types. Choose one canonical dtype
-        for manager get/set dispatch.
+        XPLM reports a *bitmask* of supported types.
+        Choose one canonical dtype for manager get/set dispatch.
         Preference: arrays first, then scalars (double > float > int).
         """
         m = int(mask) if mask is not None else 0
 
-        if m & int(DRefType.FLOAT_ARRAY):
-            return DRefType.FLOAT_ARRAY
-        if m & int(DRefType.INT_ARRAY):
-            return DRefType.INT_ARRAY
-        if m & int(DRefType.BYTE_ARRAY):
-            return DRefType.BYTE_ARRAY
+        # Arrays first
+        if m & xp.Type_FloatArray:
+            return xp.Type_FloatArray
+        if m & xp.Type_IntArray:
+            return xp.Type_IntArray
+        if m & xp.Type_Data:
+            return xp.Type_Data
 
-        if m & int(DRefType.DOUBLE):
-            return DRefType.DOUBLE
-        if m & int(DRefType.FLOAT):
-            return DRefType.FLOAT
-        if m & int(DRefType.INT):
-            return DRefType.INT
+        # Scalars
+        if m & xp.Type_Double:
+            return xp.Type_Double
+        if m & xp.Type_Float:
+            return xp.Type_Float
+        if m & xp.Type_Int:
+            return xp.Type_Int
 
-        return DRefType.UNKNOWN
+        return 0  # unknown
 
     @classmethod
     def from_info(
@@ -102,9 +94,12 @@ class DataRefSpec:
         default: Any,
         handle: XPLMDataRef,
     ) -> "DataRefSpec":
-        dtype = cls._mask_to_dtype(int(getattr(info, "type", 0)))
-        if dtype == DRefType.UNKNOWN:
-            raise TypeError(f"Invalid/unknown dtype mask from xp for DataRef '{path}': {getattr(info, 'type', None)!r}")
+        raw_mask = int(getattr(info, "type", 0))
+        dtype = cls._mask_to_dtype(raw_mask)
+        if dtype == 0:
+            raise TypeError(
+                f"Invalid/unknown dtype mask from xp for DataRef '{path}': {raw_mask!r}"
+            )
 
         return cls(
             name=path,
@@ -120,22 +115,22 @@ class DataRefSpec:
     def dummy(cls, path: str, *, required: bool, default: Any) -> "DataRefSpec":
         if default is None:
             default = [0.0]
-            dtype = DRefType.FLOAT_ARRAY
+            dtype = xp.Type_FloatArray
         else:
             if isinstance(default, (list, tuple)):
                 if default and all(isinstance(x, int) for x in default):
-                    dtype = DRefType.INT_ARRAY
+                    dtype = xp.Type_IntArray
                 else:
-                    dtype = DRefType.FLOAT_ARRAY
+                    dtype = xp.Type_FloatArray
             elif isinstance(default, (bytes, bytearray)):
-                dtype = DRefType.BYTE_ARRAY
+                dtype = xp.Type_Data
             elif isinstance(default, int):
-                dtype = DRefType.INT
+                dtype = xp.Type_Int
             elif isinstance(default, float):
-                dtype = DRefType.FLOAT
+                dtype = xp.Type_Float
             else:
                 default = [0.0]
-                dtype = DRefType.FLOAT_ARRAY
+                dtype = xp.Type_FloatArray
 
         return cls(
             name=path,
@@ -162,7 +157,7 @@ class DataRefSpec:
             dtype = self.type
         else:
             dtype = self._mask_to_dtype(raw_mask)
-            if dtype == DRefType.UNKNOWN:
+            if dtype == 0:
                 raise TypeError(
                     f"Invalid/unknown dtype mask from xp for DataRef '{self.name}': {raw_mask!r}"
                 )
@@ -173,7 +168,7 @@ class DataRefSpec:
         self.writable = bool(getattr(info, "writable", False))
 
         # Normalize default for convenience
-        if dtype in (DRefType.FLOAT_ARRAY, DRefType.INT_ARRAY, DRefType.BYTE_ARRAY):
+        if dtype in (xp.Type_FloatArray, xp.Type_IntArray, xp.Type_Data):
             if not isinstance(self.default, (list, tuple, bytes, bytearray)):
                 self.default = [
                     float(self.default) if isinstance(self.default, (int, float)) else 0.0
@@ -234,28 +229,28 @@ class DataRefManager:
                 raise RuntimeError(f"DataRef '{path}' not ready; call ready() first")
             return spec.default
 
-        xp = self.xp
+        xp_mod = self.xp
         h = spec.handle
         t = spec.type
 
-        if t == DRefType.FLOAT:
-            return xp.getDataf(h)
-        if t == DRefType.INT:
-            return xp.getDatai(h)
-        if t == DRefType.DOUBLE:
-            return xp.getDatad(h)
-        if t == DRefType.FLOAT_ARRAY:
+        if t == xp.Type_Float:
+            return xp_mod.getDataf(h)
+        if t == xp.Type_Int:
+            return xp_mod.getDatai(h)
+        if t == xp.Type_Double:
+            return xp_mod.getDatad(h)
+        if t == xp.Type_FloatArray:
             out: list[float] = [0.0] * 8
-            got = xp.getDatavf(h, out, 0, len(out))
+            got = xp_mod.getDatavf(h, out, 0, len(out))
             return out if got is None else out[:int(got)]
-        if t == DRefType.INT_ARRAY:
+        if t == xp.Type_IntArray:
             out: list[int] = [0] * 8
-            got = xp.getDatavi(h, out, 0, len(out))
+            got = xp_mod.getDatavi(h, out, 0, len(out))
             return out if got is None else out[:int(got)]
-        if t == DRefType.BYTE_ARRAY:
-            out = bytearray(8)
-            got = xp.getDatab(h, out, 0, len(out))
-            return out if got is None else out[:int(got)]
+        if t == xp.Type_Data:
+            outb = bytearray(8)
+            got = xp_mod.getDatab(h, outb, 0, len(outb))
+            return outb if got is None else outb[:int(got)]
 
         raise TypeError(f"Unsupported dtype {t} for '{path}'")
 
@@ -268,44 +263,44 @@ class DataRefManager:
             spec.default = value
             return
 
-        xp = self.xp
+        xp_mod = self.xp
         h = spec.handle
         t = spec.type
 
-        if t == DRefType.FLOAT:
+        if t == xp.Type_Float:
             if not isinstance(value, (int, float)):
                 raise TypeError(f"Expected float for '{path}'")
-            xp.setDataf(h, float(value))
+            xp_mod.setDataf(h, float(value))
             return
 
-        if t == DRefType.INT:
+        if t == xp.Type_Int:
             if not isinstance(value, (int, float)):
                 raise TypeError(f"Expected int for '{path}'")
-            xp.setDatai(h, int(value))
+            xp_mod.setDatai(h, int(value))
             return
 
-        if t == DRefType.DOUBLE:
+        if t == xp.Type_Double:
             if not isinstance(value, (int, float)):
                 raise TypeError(f"Expected double for '{path}'")
-            xp.setDatad(h, float(value))
+            xp_mod.setDatad(h, float(value))
             return
 
-        if t == DRefType.FLOAT_ARRAY:
+        if t == xp.Type_FloatArray:
             if not isinstance(value, (list, tuple)):
                 raise TypeError(f"Expected list[float] for '{path}'")
-            xp.setDatavf(h, list(value), 0, len(value))
+            xp_mod.setDatavf(h, list(value), 0, len(value))
             return
 
-        if t == DRefType.INT_ARRAY:
+        if t == xp.Type_IntArray:
             if not isinstance(value, (list, tuple)):
                 raise TypeError(f"Expected list[int] for '{path}'")
-            xp.setDatavi(h, list(value), 0, len(value))
+            xp_mod.setDatavi(h, list(value), 0, len(value))
             return
 
-        if t == DRefType.BYTE_ARRAY:
+        if t == xp.Type_Data:
             if not isinstance(value, (bytes, bytearray)):
                 raise TypeError(f"Expected bytes/bytearray for '{path}'")
-            xp.setDatab(h, value, 0, len(value))
+            xp_mod.setDatab(h, value, 0, len(value))
             return
 
         raise TypeError(f"Unsupported dtype {t} for '{path}'")

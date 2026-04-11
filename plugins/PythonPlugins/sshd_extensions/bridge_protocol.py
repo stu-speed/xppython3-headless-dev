@@ -45,7 +45,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, TextIO, Tuple,
 
 import select
 
-from PythonPlugins.sshd_extensions.dataref_manager import DataRefManager, DataRefSpec, DRefType
+from PythonPlugins.sshd_extensions.dataref_manager import DataRefManager, DataRefSpec
 from XPPython3 import xp
 from XPPython3.xp_typing import XPLMFlightLoopID
 
@@ -651,11 +651,11 @@ class XPBridgeServer:
 
         # Determine array size
         t = info.type
-        if t == int(DRefType.FLOAT_ARRAY):
+        if t == xp.Type_FloatArray:
             array_size = xp.getDatavf(handle, None, 0, 0)
-        elif t == int(DRefType.INT_ARRAY):
+        elif t == xp.Type_IntArray:
             array_size = xp.getDatavi(handle, None, 0, 0)
-        elif t == int(DRefType.BYTE_ARRAY):
+        elif t == xp.Type_Data:
             array_size = xp.getDatab(handle, None, 0, 0)
         else:
             array_size = 0
@@ -786,7 +786,7 @@ class BridgeData:
     """
     type: BridgeDataType
     path: Optional[str]  # None for errors
-    dtype: Optional[DRefType]  # Only for META
+    dtype: Optional[int]  # Only for META
     writable: Optional[bool]  # Only for META
     array_size: Optional[int]  # Only for META
     value: Any  # Only for UPDATE
@@ -1003,7 +1003,7 @@ class XPBridgeClient:
                     BridgeData(
                         type=BridgeDataType.META,
                         path=path,
-                        dtype=DRefType(v.type),
+                        dtype=v.type,
                         writable=v.writable,
                         array_size=v.array_size,
                         value=None,

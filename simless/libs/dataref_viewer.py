@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Pattern, TYPE_CHECKING
 
 from simless.libs.dataref import DataRefManager
-from simless.libs.fake_xp_types import DRefType, FakeDataRef
+from simless.libs.fake_xp_types import FakeDataRef
 from XPPython3.xp_typing import XPWidgetID, XPWidgetMessage
 
 if TYPE_CHECKING:
@@ -292,25 +292,36 @@ class FakeXPDataRefViewerClient:
             self.viewer._dirty = True
 
     def _read_value(self, ref: FakeDataRef) -> Any:
+        """
+        Read the current value of a FakeDataRef using its xp.Type_* dtype.
+        """
+        fxp = self.fake_xp
         t = ref.type
 
-        if t & DRefType.FLOAT:
-            return self.fake_xp.getDataf(ref)
-        if t & DRefType.INT:
-            return self.fake_xp.getDatai(ref)
-        if t & DRefType.DOUBLE:
-            return self.fake_xp.getDatad(ref)
-        if t & DRefType.FLOAT_ARRAY:
+        # --- Scalars ---
+        if t & fxp.Type_Float:
+            return fxp.getDataf(ref)
+
+        if t & fxp.Type_Int:
+            return fxp.getDatai(ref)
+
+        if t & fxp.Type_Double:
+            return fxp.getDatad(ref)
+
+        # --- Arrays ---
+        if t & fxp.Type_FloatArray:
             buf = [0.0] * ref.size
-            self.fake_xp.getDatavf(ref, buf, 0, ref.size)
+            fxp.getDatavf(ref, buf, 0, ref.size)
             return buf
-        if t & DRefType.INT_ARRAY:
+
+        if t & fxp.Type_IntArray:
             buf = [0] * ref.size
-            self.fake_xp.getDatavi(ref, buf, 0, ref.size)
+            fxp.getDatavi(ref, buf, 0, ref.size)
             return buf
-        if t & DRefType.BYTE_ARRAY:
+
+        if t & fxp.Type_Data:
             buf = bytearray(ref.size)
-            self.fake_xp.getDatab(ref, buf, 0, ref.size)
+            fxp.getDatab(ref, buf, 0, ref.size)
             return buf
 
         return None
