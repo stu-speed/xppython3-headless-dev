@@ -46,6 +46,7 @@ import traceback
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional, TYPE_CHECKING
 
+from simless.libs.dataref import DataRefManager
 from simless.libs.dataref_viewer import FakeXPDataRefViewerClient
 from simless.libs.fake_xp_types import XPShutdown
 from simless.libs.plugin_loader import LoadedPlugin
@@ -140,6 +141,10 @@ class SimlessRunner:
         self._current_plugin_id: int | None = None
 
     @property
+    def dm(self) -> DataRefManager:
+        return self.fake_xp.dataref_manager
+
+    @property
     def sim_time(self) -> float:
         return self._sim_time
 
@@ -176,7 +181,7 @@ class SimlessRunner:
         The DataRef subsystem emits discovery events; the runner decides
         whether and how those paths are synchronized externally.
         """
-        self.fake_xp.attach_handle_callback(self._on_dataref_handle_created)
+        self.dm.attach_handle_callback(self._on_dataref_handle_created)
 
     def _on_dataref_handle_created(self, ref: Any) -> None:
         """Called synchronously when FakeXPDataRef creates a handle."""
@@ -201,7 +206,7 @@ class SimlessRunner:
         """
         if self._bridge_client is None:
             return
-        all_handle_paths = self.fake_xp.all_handle_paths()
+        all_handle_paths = self.dm.all_handle_paths()
 
         try:
             self._bridge_client.add(all_handle_paths)
@@ -244,18 +249,18 @@ class SimlessRunner:
 
         for ev in events:
             if ev.type is self._bridge_mod.BridgeDataType.META:
-                ref = self.fake_xp.get_handle(ev.path)
+                ref = self.dm.get_handle(ev.path)
                 assert ref is not None
 
                 # Promote TYPE authority only
-                self.fake_xp.promote_type(
+                self.dm.promote_type(
                     ref=ref,
                     dtype=ev.dtype,
                     writable=bool(ev.writable),
                 )
 
             elif ev.type is self._bridge_mod.BridgeDataType.UPDATE:
-                ref = self.fake_xp.get_handle(ev.path)
+                ref = self.dm.get_handle(ev.path)
                 assert ref is not None, f"Unknown handle: {ev.path}"
                 value = ev.value
 
@@ -268,7 +273,7 @@ class SimlessRunner:
                     or ref.is_array != is_array
                     or ref.size != size
                 ):
-                    self.fake_xp.promote_shape_from_value(
+                    self.dm.promote_shape_from_value(
                         ref=ref,
                         value=value,
                     )
@@ -301,74 +306,94 @@ class SimlessRunner:
     def _run_one_frame(self) -> None:
         xp = self.fake_xp
 
-        # 1. Advance sim time
+        # ------------------------------------------------------------
+        # 1) Advance sim time
+        # ------------------------------------------------------------
         dt = 1.0 / 60.0
         self.sim_time += dt
         xp._sim_time = self.sim_time
         now = self.sim_time
 
-        # Advance cycles
+        # Advance cycle counter
         self._cycles += 1
         cycle = self._cycles
 
-        # 2. Bridge sync
+        # ------------------------------------------------------------
+        # 2) Bridge sync (if any)
+        # ------------------------------------------------------------
         if self._bridge_client is not None:
             self._manage_bridged_datarefs()
 
-        # 3. Flightloops
-        for fl in self.fake_xp.all_flightloop():
+        # ------------------------------------------------------------
+        # 3) Run flightloops (under plugin context)
+        # ------------------------------------------------------------
+        for fl in xp.all_flightloop():
             try:
-                # IMPORTANT: run callback under plugin context
-                with self._plugin_context(fl.plugin_id):
+                # noinspection PyArgumentList
+                with self.plugin_context(fl.plugin_id):
                     fl.check_and_run(now, cycle)
             except Exception:
                 tb = traceback.format_exc()
-
                 plugin = self.loader.get_plugin(fl.plugin_id)
                 name = plugin.name if plugin else "<unknown plugin>"
-
                 xp.log(f"[FlightLoop:{name}] callback exception:\n{tb}")
-
                 fl.schedule(0.0, True, now, cycle)
                 continue
 
-        # 4. Dataref viewer
+        # ------------------------------------------------------------
+        # 4) Input processing (XP-authentic)
+        # ------------------------------------------------------------
+        for event in xp.input_manager.drain_input_events():
+            xp.input_manager.process_event_info(event)
+
+        # 5. Dataref viewer
         if self._dataref_viewer:
             self._dataref_viewer.update()
 
-        # 5. Graphics frame
+        # ------------------------------------------------------------
+        # 6) Graphics frame (draw callbacks, XP→DPG sync, DPG flush, render)
+        # ------------------------------------------------------------
         if xp.enable_gui:
-            xp.draw_frame()
+            xp.graphics_manager.draw_frame()
 
-    # ----------------------------------------------------------------------
-    # Full lifecycle (plugins = list of plugin names)
-    # ----------------------------------------------------------------------
     def run_plugin_lifecycle(
         self,
         plugin_names: List[str],
         enable_dataref_viewer: bool = False,
         run_time: float = -1,
     ) -> None:
+        """
+        Full X‑Plane‑style plugin lifecycle runner.
+
+        Phases:
+          1. Optional GUI initialization
+          2. XPluginStart (via loader)
+          3. XPluginEnable
+          4. Main loop (flightloop + XP→DPG sync + draw dispatch)
+          5. XPluginDisable
+          6. XPluginStop
+          7. Optional GUI teardown
+        """
+
         xp = self.fake_xp
 
         if not plugin_names:
             xp.log("[Runner] No plugins to run")
             return
 
-        # Optional FakeXP DataRef viewer (observer only)
-        if enable_dataref_viewer:
-            self._dataref_viewer = FakeXPDataRefViewerClient(xp)
-            self._dataref_viewer.attach()
-
         # ------------------------------------------------------------
-        # 1. Initialize graphics BEFORE plugin load/start/enable
+        # 1. GUI Initialization (optional)
         # ------------------------------------------------------------
         if xp.enable_gui:
-            xp.init_graphics_root()
+            xp.graphics_manager.init_graphics_root()
             xp.log("[Runner] GUI enabled (FakeXPGraphics manages DearPyGui)")
 
+            if enable_dataref_viewer:
+                self._dataref_viewer = FakeXPDataRefViewerClient(xp)
+                self._dataref_viewer.attach()
+
         # ------------------------------------------------------------
-        # 2. XPluginStart (done by loader)
+        # 2. XPluginStart (loader handles this)
         # ------------------------------------------------------------
         plugins: List[LoadedPlugin] = self.loader.load_plugins(plugin_names)
 
@@ -379,6 +404,7 @@ class SimlessRunner:
 
         for p in plugins:
             try:
+                # noinspection PyArgumentList
                 with self.plugin_context(p.plugin_id):
                     result = p.instance.XPluginEnable()
                 xp.log(f"[Runner] → XPluginEnable: {p.name} ret={result}")
@@ -394,13 +420,7 @@ class SimlessRunner:
         xp.log("[Runner] === XPluginEnable END ===")
 
         # ------------------------------------------------------------
-        # 4. Initialize XP widget → DPG window mapping
-        # ------------------------------------------------------------
-        if xp.enable_gui:
-            xp.map_widgets_to_dpg()
-
-        # ------------------------------------------------------------
-        # 5. Main loop
+        # 4. Main loop
         # ------------------------------------------------------------
         xp.log("[Runner] === Main loop BEGIN ===")
         self._running = True
@@ -411,6 +431,7 @@ class SimlessRunner:
             frame_start = time.monotonic()
 
             try:
+                # Flightloop + XPWidgets sync + draw dispatch
                 self._run_one_frame()
             except XPShutdown:
                 xp.log("[Runner] Main loop exit: shutdown")
@@ -420,10 +441,12 @@ class SimlessRunner:
                 xp.log(f"[Runner] graphics/frame error: {exc!r}\n{tb}")
                 break
 
+            # Optional timed exit
             if 0 <= run_time <= (time.time() - start):
                 xp.log("[Runner] Main loop exit: run_time reached")
                 break
 
+            # Maintain ~60 FPS
             elapsed = time.monotonic() - frame_start
             remaining = target_dt - elapsed
             if remaining > 0:
@@ -432,12 +455,13 @@ class SimlessRunner:
         xp.log("[Runner] === Main loop END ===")
 
         # ------------------------------------------------------------
-        # 6. XPluginDisable
+        # 5. XPluginDisable
         # ------------------------------------------------------------
         xp.log("[Runner] === XPluginDisable BEGIN ===")
         for p in plugins:
             try:
                 xp.log(f"[Runner] → XPluginDisable: {p.name}")
+                # noinspection PyArgumentList
                 with self.plugin_context(p.plugin_id):
                     p.instance.XPluginDisable()
                 p.enabled = False
@@ -448,7 +472,7 @@ class SimlessRunner:
         xp.log("[Runner] === XPluginDisable END ===")
 
         # ------------------------------------------------------------
-        # 7. XPluginStop
+        # 6. XPluginStop
         # ------------------------------------------------------------
         xp.log("[Runner] === XPluginStop BEGIN ===")
         for p in plugins:
@@ -461,7 +485,9 @@ class SimlessRunner:
                 )
         xp.log("[Runner] === XPluginStop END ===")
 
-        # Tear down viewer
+        # ------------------------------------------------------------
+        # 7. GUI teardown
+        # ------------------------------------------------------------
         if self._dataref_viewer:
             self._dataref_viewer.detach()
             self._dataref_viewer = None

@@ -156,7 +156,7 @@ def test_headless_shared_datarefs(inline_plugin):
 # ===========================================================================
 
 def test_example_gui(inline_plugin):
-    xp = FakeXP(debug=True, enable_gui=False)
+    xp = FakeXP(debug=True, enable_gui=True)
     XPPython3.xp = xp
 
     class DevOTAGUIPlugin:

@@ -174,8 +174,8 @@ def test_set_value_not_writable():
     # Ensure underlying xp handle is marked not writable so xp.set* raises
     spec = mgr.get_spec("sim/test/ro")
     # spec.handle is the real xp handle after promotion
-    with xp._handles_lock:
-        xp._handles[spec.name].writable = False
+    with xp.dataref_manager._handles_lock:
+        xp.dataref_manager._handles[spec.name].writable = False
 
     with pytest.raises(PermissionError):
         mgr.set_value("sim/test/ro", 10.0)

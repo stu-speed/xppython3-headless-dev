@@ -40,9 +40,11 @@
 
 from __future__ import annotations
 
-from typing import Any, cast, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, List, Optional, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import EventInfo, EventKind, WindowExInfo
+import dearpygui.dearpygui as dpg
+
+from simless.libs.fake_xp_types import EventInfo, EventKind
 from XPPython3.xp_typing import (
     XPLMCursorStatus,
     XPLMMouseStatus,
@@ -53,13 +55,8 @@ if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
 
 
-class FakeXPInput:
+class InputManager:
     """Input routing subsystem mixin for FakeXP."""
-
-    # ------------------------------------------------------------------
-    # WindowEx authoritative storage (owned by graphics subsystem)
-    # ------------------------------------------------------------------
-    _windows_ex: Dict[XPLMWindowID, WindowExInfo]
 
     # ------------------------------------------------------------------
     # Input state
@@ -69,19 +66,13 @@ class FakeXPInput:
     _mouse_capture_window: Optional[XPLMWindowID]
     _mouse_button_down: bool
 
-    @property
-    def fake_xp(self) -> FakeXP:
-        return cast("FakeXP", cast(object, self))
-
-    # ------------------------------------------------------------------
-    # INITIALIZATION
-    # ------------------------------------------------------------------
-    def _init_input(self) -> None:
+    def __init__(self, fake_xp: FakeXP) -> None:
         """Initialize internal input state. Called by FakeXP during construction."""
         self._keyboard_focus_window = None
         self._input_events = []
         self._mouse_capture_window = None
         self._mouse_button_down = False
+        self.fake_xp = fake_xp
 
     # ------------------------------------------------------------------
     # INPUT QUEUE (engine-owned)
@@ -103,123 +94,84 @@ class FakeXPInput:
         return events
 
     # ------------------------------------------------------------------
-    # GEOMETRY HELPERS
+    # FOCUS CONTROL
     # ------------------------------------------------------------------
-    @staticmethod
-    def _point_in_rect(x: int, y: int, rect: tuple[int, int, int, int]) -> bool:
-        left, top, right, bottom = rect
-        return (left <= x < right) and (bottom <= y < top)
+    def clear_keyboard_focus(self) -> None:
+        """Explicitly clear keyboard focus."""
+        self._keyboard_focus_window = None
 
-    # ------------------------------------------------------------------
-    # WINDOWEX ORDERING / PICKING
-    # ------------------------------------------------------------------
-    def _iter_window_ex_top_to_bottom(self):
-        """
-        Topmost-first ordering.
-        Since wid is stable identity (not Z-order), we rely on registry order.
-        Highest layer first, then insertion order within that layer.
-        """
-        # Group by layer, preserve insertion order within each layer
-        layers = sorted(
-            set(info.layer for info in self._windows_ex.values()),
-            reverse=True,
-        )
-
-        for layer in layers:
-            # Yield windows in this layer in insertion order (topmost last)
-            for info in reversed(
-                [
-                    w for w in self._windows_ex.values()
-                    if w.layer == layer
-                ]
-            ):
-                yield info
-
-    def _pick_window_ex_at(self, xp_x: int, xp_y: int) -> Optional[WindowExInfo]:
-        """
-        Hit-test from topmost to bottommost.
-        Uses info.frame_contains() helper if available,
-        otherwise uses info.left/right/top/bottom.
-        """
-        for info in self._iter_window_ex_top_to_bottom():
-            if not info.visible:
-                continue
-            if info.frame_contains(xp_x, xp_y):  # preferred helper
-                return info
-        return None
-
-    # ------------------------------------------------------------------
-    # DISPATCH HELPERS (engine-invoked only)
-    # ------------------------------------------------------------------
-    def _dispatch_window_click(
-        self,
-        windowID: XPLMWindowID,
-        xp_x: int,
-        xp_y: int,
-        mouseStatus: XPLMMouseStatus,
-        right: bool = False,
-    ) -> int:
-        info = self._windows_ex.get(windowID)
-        if info is None:
-            return 0
-
-        if not info.client_contains(xp_x, xp_y):
-            return 0
-
-        cb = info.right_click_cb if right else info.click_cb
-        if cb is None:
-            return 0
-
-        return int(cb(windowID, xp_x, xp_y, mouseStatus, info.refcon))
-
-    def _dispatch_window_key(
-        self,
-        windowID: XPLMWindowID,
-        key: int,
-        flags: int,
-        vKey: int,
-        losingFocus: int,
-    ) -> int:
-        info = self._windows_ex.get(windowID)
-        if info is None or info.key_cb is None:
-            return 0
-
-        return int(
-            info.key_cb(
-                windowID,
-                key,
-                flags,
-                vKey,
-                info.refcon,
-                losingFocus,
+    def install_dpg_input_callbacks(self) -> None:
+        with dpg.handler_registry():
+            dpg.add_mouse_down_handler(
+                callback=lambda sender, app_data: (
+                    self.queue_input_event(
+                        EventInfo.from_dpg(
+                            kind=EventKind.MOUSE_BUTTON,
+                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
+                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
+                            dpg_vp_height=dpg.get_viewport_client_height(),
+                            state="down",
+                            button=int(app_data) if isinstance(app_data, int) else 0,
+                        )
+                    )
+                )
             )
-        )
 
-    def _dispatch_window_wheel(
-        self,
-        windowID: XPLMWindowID,
-        xp_x: int,
-        xp_y: int,
-        wheel: int,
-        clicks: int,
-    ) -> int:
-        info = self._windows_ex.get(windowID)
-        if info is None or info.wheel_cb is None:
-            return 0
+            dpg.add_mouse_release_handler(
+                callback=lambda sender, app_data: (
+                    self.queue_input_event(
+                        EventInfo.from_dpg(
+                            kind=EventKind.MOUSE_BUTTON,
+                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
+                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
+                            dpg_vp_height=dpg.get_viewport_client_height(),
+                            state="up",
+                            button=int(app_data) if isinstance(app_data, int) else 0,
+                        )
+                    )
+                )
+            )
 
-        return int(info.wheel_cb(windowID, xp_x, xp_y, wheel, clicks, info.refcon))
+            dpg.add_mouse_move_handler(
+                callback=lambda sender, app_data: (
+                    self.queue_input_event(
+                        EventInfo.from_dpg(
+                            kind=EventKind.CURSOR,
+                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
+                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
+                            dpg_vp_height=dpg.get_viewport_client_height(),
+                        )
+                    )
+                )
+            )
 
-    def _dispatch_window_cursor(
-        self,
-        windowID: XPLMWindowID,
-        xp_x: int,
-        xp_y: int,
-    ) -> XPLMCursorStatus:
-        info = self._windows_ex.get(windowID)
-        if info is None or info.cursor_cb is None:
-            return self.fake_xp.CursorDefault
+            dpg.add_mouse_wheel_handler(
+                callback=lambda sender, app_data: (
+                    self.queue_input_event(
+                        EventInfo.from_dpg(
+                            kind=EventKind.MOUSE_WHEEL,
+                            dpg_x=int(dpg.get_mouse_pos(local=False)[0]),
+                            dpg_y=int(dpg.get_mouse_pos(local=False)[1]),
+                            dpg_vp_height=dpg.get_viewport_client_height(),
+                            wheel=int(app_data),
+                            clicks=int(app_data),
+                        )
+                    )
+                )
+            )
 
-        return info.cursor_cb(windowID, xp_x, xp_y, info.refcon)
+            dpg.add_key_press_handler(
+                callback=lambda sender, app_data: (
+                    self.queue_input_event(
+                        EventInfo.from_xp(
+                            kind=EventKind.KEY,
+                            key=int(app_data),
+                            flags=0,
+                            vKey=int(app_data),
+                        )
+                    )
+                )
+            )
 
     # ------------------------------------------------------------------
     # SINGLE RUNNER ENTRY POINT (typed)
@@ -267,13 +219,86 @@ class FakeXPInput:
         raise ValueError(f"Unhandled EventKind: {event.kind}")
 
     # ------------------------------------------------------------------
+    # DISPATCH HELPERS (engine-invoked only)
+    # ------------------------------------------------------------------
+    def _dispatch_window_click(
+        self,
+        windowID: XPLMWindowID,
+        xp_x: int,
+        xp_y: int,
+        mouseStatus: XPLMMouseStatus,
+        right: bool = False,
+    ) -> int:
+        info = self.fake_xp.window_manager.require_info(windowID)
+        if info is None:
+            return 0
+
+        if not info.client.contains(xp_x, xp_y):
+            return 0
+
+        cb = info.right_click_cb if right else info.click_cb
+        if cb is None:
+            return 0
+
+        return int(cb(windowID, xp_x, xp_y, mouseStatus, info.refcon))
+
+    def _dispatch_window_key(
+        self,
+        windowID: XPLMWindowID,
+        key: int,
+        flags: int,
+        vKey: int,
+        losingFocus: int,
+    ) -> int:
+        info = self.fake_xp.window_manager.require_info(windowID)
+        if info.key_cb is None:
+            return 0
+
+        return int(
+            info.key_cb(
+                windowID,
+                key,
+                flags,
+                vKey,
+                info.refcon,
+                losingFocus,
+            )
+        )
+
+    def _dispatch_window_wheel(
+        self,
+        windowID: XPLMWindowID,
+        xp_x: int,
+        xp_y: int,
+        wheel: int,
+        clicks: int,
+    ) -> int:
+        info = self.fake_xp.window_manager.require_info(windowID)
+        if info.wheel_cb is None:
+            return 0
+
+        return int(info.wheel_cb(windowID, xp_x, xp_y, wheel, clicks, info.refcon))
+
+    def _dispatch_window_cursor(
+        self,
+        windowID: XPLMWindowID,
+        xp_x: int,
+        xp_y: int,
+    ) -> XPLMCursorStatus:
+        info = self.fake_xp.window_manager.require_info(windowID)
+        if info.cursor_cb is None:
+            return self.fake_xp.CursorDefault
+
+        return info.cursor_cb(windowID, xp_x, xp_y, info.refcon)
+
+    # ------------------------------------------------------------------
     # ROUTERS
     # ------------------------------------------------------------------
     def _handle_cursor_query(self, xp_x: int, xp_y: int) -> XPLMCursorStatus:
         if self._mouse_capture_window is not None:
-            info = self._windows_ex.get(self._mouse_capture_window)
+            info = self.fake_xp.window_manager.get_info(self._mouse_capture_window)
         else:
-            info = self._pick_window_ex_at(xp_x, xp_y)
+            info = self.fake_xp.window_manager.hit_test(xp_x, xp_y)
 
         if info is None:
             return self.fake_xp.CursorDefault
@@ -304,9 +329,9 @@ class FakeXPInput:
         #    Capture bypasses hit-testing entirely
         # ------------------------------------------------------------
         if self._mouse_capture_window is not None:
-            info = self._windows_ex.get(self._mouse_capture_window)
+            info = self.fake_xp.window_manager.get_info(self._mouse_capture_window)
         else:
-            info = self._pick_window_ex_at(xp_x, xp_y)
+            info = self.fake_xp.window_manager.hit_test(xp_x, xp_y)
 
         if info is None:
             return 0
@@ -317,8 +342,8 @@ class FakeXPInput:
         #    Happens BEFORE dispatch, regardless of consumption.
         # ------------------------------------------------------------
         if mouseStatus == self.fake_xp.MouseDown:
-            if info.frame_contains(xp_x, xp_y):
-                self.fake_xp.bring_window_to_front(info)
+            if info.frame.contains(xp_x, xp_y):
+                self.fake_xp.window_manager.bring_to_front(info)
 
         # ------------------------------------------------------------
         # 4) Dispatch click callback
@@ -354,7 +379,7 @@ class FakeXPInput:
         wheel: int,
         clicks: int,
     ) -> int:
-        info = self._pick_window_ex_at(xp_x, xp_y)
+        info = self.fake_xp.window_manager.hit_test(xp_x, xp_y)
         if info is None:
             return 0
 
@@ -377,10 +402,3 @@ class FakeXPInput:
             vKey=vKey,
             losingFocus=0,
         )
-
-    # ------------------------------------------------------------------
-    # FOCUS CONTROL
-    # ------------------------------------------------------------------
-    def clear_keyboard_focus(self) -> None:
-        """Explicitly clear keyboard focus."""
-        self._keyboard_focus_window = None

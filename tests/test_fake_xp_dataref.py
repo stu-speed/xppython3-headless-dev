@@ -78,7 +78,7 @@ def test_can_write_and_is_good(xp: FakeXP):
     assert xp.canWriteDataRef(ref) is True
     assert xp.isDataRefGood(ref) is True
 
-    xp.promote_shape_from_value(ref=ref, value=1.23)
+    xp.dataref_manager.promote_shape_from_value(ref=ref, value=1.23)
     assert ref.value == pytest.approx(1.23)
     assert ref.shape_known is True
     assert ref.is_array is False
@@ -153,8 +153,8 @@ def test_array_accessors_and_semantics(xp: FakeXP):
 def test_byte_array_and_string_helpers_on_internal_buffer(xp: FakeXP):
     ref = xp.findDataRef("sim/test/bytes_internal")
 
-    xp.promote_type(ref=ref, dtype=DRefType.BYTE_ARRAY, writable=True)
-    xp.promote_shape_from_value(ref=ref, value=bytearray(b"Hello\x00" + b"\x00" * 10))
+    xp.dataref_manager.promote_type(ref=ref, dtype=DRefType.BYTE_ARRAY, writable=True)
+    xp.dataref_manager.promote_shape_from_value(ref=ref, value=bytearray(b"Hello\x00" + b"\x00" * 10))
 
     assert xp.getDataRefTypes(ref) & Type_Data
 
@@ -170,11 +170,11 @@ def test_byte_array_and_string_helpers_on_internal_buffer(xp: FakeXP):
 def test_promote_type_validates_value_on_type_change(xp: FakeXP):
     ref = xp.findDataRef("sim/test/type_change")
 
-    xp.promote_shape_from_value(ref=ref, value=1.5)
+    xp.dataref_manager.promote_shape_from_value(ref=ref, value=1.5)
     assert ref.shape_known is True
     assert ref.is_array is False
 
-    xp.promote_type(ref=ref, dtype=DRefType.INT, writable=True)
+    xp.dataref_manager.promote_type(ref=ref, dtype=DRefType.INT, writable=True)
     assert ref.type == DRefType.INT
     assert isinstance(ref.value, int)
 
@@ -182,17 +182,17 @@ def test_promote_type_validates_value_on_type_change(xp: FakeXP):
 def test_promote_shape_from_value_does_not_change_known_shape(xp: FakeXP):
     ref = xp.findDataRef("sim/test/shape_replace")
 
-    xp.promote_shape_from_value(ref=ref, value=0.5)
+    xp.dataref_manager.promote_shape_from_value(ref=ref, value=0.5)
     assert ref.shape_known is True
     assert ref.is_array is False
     assert ref.value == pytest.approx(0.5)
 
-    xp.promote_type(ref=ref, dtype=DRefType.FLOAT_ARRAY, writable=True)
+    xp.dataref_manager.promote_type(ref=ref, dtype=DRefType.FLOAT_ARRAY, writable=True)
     assert ref.type == DRefType.FLOAT_ARRAY
     assert ref.shape_known is True
     assert ref.is_array is True
 
-    xp.promote_shape_from_value(ref=ref, value=[1.0, 2.0, 3.0, 4.0])
+    xp.dataref_manager.promote_shape_from_value(ref=ref, value=[1.0, 2.0, 3.0, 4.0])
     assert ref.shape_known is True
     assert ref.is_array is True
     assert ref.size == 1
@@ -223,11 +223,11 @@ def test_update_dummy_ref_validation(xp: FakeXP, update_dataref):
 
 def test_setDatavf_establishes_shape_then_enforces_bounds(xp: FakeXP):
     ref = xp.findDataRef("sim/test/shape_from_write")
-    xp.promote_type(ref=ref, dtype=DRefType.FLOAT_ARRAY, writable=True)
+    xp.dataref_manager.promote_type(ref=ref, dtype=DRefType.FLOAT_ARRAY, writable=True)
 
     xp.setDatavf(ref, [9.0, 8.0, 7.0], offset=0, count=3)
     assert ref.type_known is True
-    xp.promote_shape_from_value(ref, [9.0, 8.0, 7.0])
+    xp.dataref_manager.promote_shape_from_value(ref, [9.0, 8.0, 7.0])
     assert ref.shape_known is True
 
     with pytest.raises(RuntimeError):
@@ -283,8 +283,8 @@ def test_getDatavf_offset_and_count_write_into_buffer(xp: FakeXP):
 
 def test_setDatab_internal_buffer_and_real_bounds(xp: FakeXP):
     ref = xp.findDataRef("sim/test/bytes_internal2")
-    xp.promote_type(ref=ref, dtype=DRefType.BYTE_ARRAY, writable=True)
-    xp.promote_shape_from_value(ref=ref, value=bytearray(b"ABCD"))
+    xp.dataref_manager.promote_type(ref=ref, dtype=DRefType.BYTE_ARRAY, writable=True)
+    xp.dataref_manager.promote_shape_from_value(ref=ref, value=bytearray(b"ABCD"))
 
     xp.setDatab(
         ref,
