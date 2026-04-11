@@ -32,6 +32,9 @@ This anchors the model’s context and prevents drift.
 
 Regenerate the README periodically as the design evolves so the model’s context stays aligned.
 
+**Do not let AI get ahead of you**- Do not allow AI generate large chuncks of code without review.  
+It needs to be understood and often re-organized for human readablity.  Otherwise it becomes an unsupportable black box.
+
 ---
 
 ## 2. Keep files focused and include explicit requirements
@@ -107,6 +110,9 @@ After implementing a feature, immediately ask the AI to generate:
 
 The model’s short‑term memory contains the most detail right after coding, so test generation is most accurate at this moment.
 
+AI will forget the original purpose of parts of code and throw it out in later changes.  Unit tests are needed to catch this
+in addition to code review.
+
 ---
 
 ## 7. Use AI for debugging, but with guardrails
@@ -121,8 +127,8 @@ AI can interpret:
 
 It can often identify obvious issues.  However, for deeper bugs:
 
-- AI may confidently suggest incorrect or destructive changes  
-- AI may misinterpret the root cause  
+- AI will confidently suggest incorrect or destructive changes over and over.  
+- If you are uncertain of the proposed fix, ask AI to verify with debug logging.  
 
 Do these things to make AI debugging much more effective:
 - ask AI to add debug logging to relevant methods
