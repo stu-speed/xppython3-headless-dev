@@ -23,11 +23,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, cast, List, MutableSequence, Optional, Sequence, Tuple, TYPE_CHECKING
 
-from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 from simless.libs.dataref import DataRefManager
-from simless.libs.fake_xp_types import (
-    FakeDataRef, Type_Data, Type_Double, Type_Float, Type_FloatArray, Type_Int, Type_IntArray, Type_Unknown
-)
+from simless.libs.fake_xp_types import FakeDataRef
 from XPPython3.xp_typing import XPLMDataRefInfo_t
 
 if TYPE_CHECKING:
@@ -58,15 +55,15 @@ class FakeXPDataRef:
         if existing is not None:
             return existing
 
+        # Dummy refs use FLOAT scalar as provisional type
         ref = FakeDataRef(
             path=name,
-            type=DRefType.FLOAT,
+            type=self.fake_xp.Type_Float,
             writable=True,
             size=1,
             value=0.0,
         )
         self.dm.add_handle(name, ref)
-
         self.dm.notify_handle_created(ref)
         return ref
 
@@ -76,14 +73,14 @@ class FakeXPDataRef:
     def getDataRefTypes(self, dataRef: FakeDataRef) -> int:
         ref = self._resolve_ref(dataRef)
         is_array = ref.is_array if getattr(ref, "shape_known", False) else None
-        return self.dm.dreftype_to_bitmask(ref.type, is_array)
+        return self.dm.dtype_to_bitmask(ref.type, is_array)
 
     def getDataRefInfo(self, dataRef: FakeDataRef) -> XPLMDataRefInfo_t:
         ref = self._resolve_ref(dataRef)
         is_array = ref.is_array if getattr(ref, "shape_known", False) else None
         info = XPLMDataRefInfo_t(
             name=ref.path,
-            type=self.dm.dreftype_to_bitmask(ref.type, is_array),
+            type=self.dm.dtype_to_bitmask(ref.type, is_array),
             writable=bool(ref.writable),
             owner=0,
         )
@@ -243,7 +240,7 @@ class FakeXPDataRef:
     # ------------------------------------------------------------------
     def getDatavf(self, dataRef, values=None, offset=0, count=-1) -> int:
         ref = self._resolve_ref(dataRef)
-        if ref.type != DRefType.FLOAT_ARRAY:
+        if ref.type != self.fake_xp.Type_FloatArray:
             raise TypeError("getDatavf on non-float-array")
         meta = self.dm._accessors.get(ref.path)
         return self._array_get_common(
@@ -257,7 +254,7 @@ class FakeXPDataRef:
 
     def getDatavi(self, dataRef, values=None, offset=0, count=-1) -> int:
         ref = self._resolve_ref(dataRef)
-        if ref.type != DRefType.INT_ARRAY:
+        if ref.type != self.fake_xp.Type_IntArray:
             raise TypeError("getDatavi on non-int-array")
         meta = self.dm._accessors.get(ref.path)
         return self._array_get_common(
@@ -271,7 +268,7 @@ class FakeXPDataRef:
 
     def getDatab(self, dataRef, values=None, offset=0, count=-1) -> int:
         ref = self._resolve_ref(dataRef)
-        if ref.type != DRefType.BYTE_ARRAY:
+        if ref.type != self.fake_xp.Type_Data:
             raise TypeError("getDatab on non-byte-array")
         meta = self.dm._accessors.get(ref.path)
         return self._array_get_common(
@@ -285,6 +282,8 @@ class FakeXPDataRef:
 
     def setDatavf(self, dataRef, values, offset=0, count=-1) -> int:
         ref = self._resolve_ref(dataRef)
+        fxp = self.fake_xp
+
         if not ref.writable:
             raise PermissionError("DataRef not writable")
 
@@ -292,7 +291,7 @@ class FakeXPDataRef:
         if ref.is_dummy:
             self.dm.conform_dummy_to_value(ref, values, offset, count)
 
-        if ref.type != DRefType.FLOAT_ARRAY:
+        if ref.type != fxp.Type_FloatArray:
             raise TypeError("setDatavf on non-float-array")
 
         if count < 0:
@@ -320,13 +319,15 @@ class FakeXPDataRef:
 
     def setDatavi(self, dataRef, values, offset=0, count=-1) -> int:
         ref = self._resolve_ref(dataRef)
+        fxp = self.fake_xp
+
         if not ref.writable:
             raise PermissionError("DataRef not writable")
 
         if ref.is_dummy:
             self.dm.conform_dummy_to_value(ref, values, offset, count)
 
-        if ref.type != DRefType.INT_ARRAY:
+        if ref.type != fxp.Type_IntArray:
             raise TypeError("setDatavi on non-int-array")
 
         if count < 0:
@@ -354,13 +355,15 @@ class FakeXPDataRef:
 
     def setDatab(self, dataRef, values, offset=0, count=-1) -> int:
         ref = self._resolve_ref(dataRef)
+        fxp = self.fake_xp
+
         if not ref.writable:
             raise PermissionError("DataRef not writable")
 
         if ref.is_dummy:
             self.dm.conform_dummy_to_value(ref, values, offset, count)
 
-        if ref.type != DRefType.BYTE_ARRAY:
+        if ref.type != fxp.Type_Data:
             raise TypeError("setDatab on non-byte-array")
 
         if count < 0:
@@ -391,28 +394,40 @@ class FakeXPDataRef:
     # ------------------------------------------------------------------
     def getDatas(self, dataRef, offset=0, count=-1) -> str:
         ref = self._resolve_ref(dataRef)
-        if ref.type != DRefType.BYTE_ARRAY:
+        fxp = self.fake_xp
+
+        if ref.type != fxp.Type_Data:
             raise TypeError("getDatas on non-byte-array")
+
         self.dm.require_array(ref, "getDatas")
         arr = ref.value
+
         if count < 0:
             count = len(arr) - offset
+
         raw = bytes(arr[offset: offset + count]).split(b"\x00", 1)[0]
         return raw.decode("utf-8", errors="ignore")
 
     def setDatas(self, dataRef, value: str, offset=0, count=-1) -> None:
         ref = self._resolve_ref(dataRef)
+        fxp = self.fake_xp
+
         if not ref.writable:
             raise PermissionError("DataRef not writable")
-        if ref.type != DRefType.BYTE_ARRAY:
+
+        if ref.type != fxp.Type_Data:
             raise TypeError("setDatas on non-byte-array")
+
         self.dm.require_array(ref, "setDatas")
         arr = ref.value
         b = value.encode("utf-8")
+
         if count < 0:
             count = len(b)
+
         if offset + count > len(arr):
             raise RuntimeError("write past end")
+
         for i in range(count):
             arr[offset + i] = b[i] if i < len(b) else 0
 
@@ -465,21 +480,24 @@ class FakeXPDataRef:
         Register callbacks and return a dataref handle. Signature mirrors XPLMRegisterDataAccessor.
         If dataType == 0 or writable == -1, compute from provided callbacks.
         """
-        inferred_mask = Type_Unknown
+        fxp = self.fake_xp
+
+        inferred_mask = fxp.Type_Unknown
         if readInt or writeInt:
-            inferred_mask |= Type_Int
+            inferred_mask |= fxp.Type_Int
         if readFloat or writeFloat:
-            inferred_mask |= Type_Float
+            inferred_mask |= fxp.Type_Float
         if readDouble or writeDouble:
-            inferred_mask |= Type_Double
+            inferred_mask |= fxp.Type_Double
         if readFloatArray or writeFloatArray:
-            inferred_mask |= Type_FloatArray
+            inferred_mask |= fxp.Type_FloatArray
         if readIntArray or writeIntArray:
-            inferred_mask |= Type_IntArray
+            inferred_mask |= fxp.Type_IntArray
         if readData or writeData:
-            inferred_mask |= Type_Data
+            inferred_mask |= fxp.Type_Data
 
         mask = dataType if dataType != 0 else inferred_mask
+
         if writable != -1:
             writable_flag = bool(writable)
         else:
@@ -551,38 +569,28 @@ class FakeXPDataRef:
     # Helpers for registerDataAccessor
     # -------------------------
     def _bitmask_is_array(self, mask: int) -> bool:
-        return bool(mask & (Type_FloatArray | Type_IntArray | Type_Data))
+        fxp = self.fake_xp
+        return bool(mask & (fxp.Type_FloatArray | fxp.Type_IntArray | fxp.Type_Data))
 
-    def _bitmask_to_dreftype(self, mask: int) -> DRefType:
-        if mask & Type_FloatArray:
-            return DRefType.FLOAT_ARRAY
-        if mask & Type_IntArray:
-            return DRefType.INT_ARRAY
-        if mask & Type_Data:
-            return DRefType.BYTE_ARRAY
-        if mask & Type_Double:
-            return DRefType.DOUBLE
-        if mask & Type_Float:
-            return DRefType.FLOAT
-        if mask & Type_Int:
-            return DRefType.INT
-        return DRefType.FLOAT
-
-    def _choose_dtype_from_mask(self, mask: int) -> Tuple[DRefType, bool, int]:
+    def _choose_dtype_from_mask(self, mask: int) -> Tuple[int, bool, int]:
         """
-        Choose a DRefType, is_array, and default size from a bitmask.
+        Choose an xp.Type_* dtype, is_array, and default size from a bitmask.
         Default array size is 1 for scalars, 8 for common arrays (arbitrary).
         """
-        if mask & Type_FloatArray:
-            return DRefType.FLOAT_ARRAY, True, 8
-        if mask & Type_IntArray:
-            return DRefType.INT_ARRAY, True, 8
-        if mask & Type_Data:
-            return DRefType.BYTE_ARRAY, True, 256
-        if mask & Type_Double:
-            return DRefType.DOUBLE, False, 1
-        if mask & Type_Float:
-            return DRefType.FLOAT, False, 1
-        if mask & Type_Int:
-            return DRefType.INT, False, 1
-        return DRefType.FLOAT, False, 1
+        fxp = self.fake_xp
+
+        if mask & fxp.Type_FloatArray:
+            return fxp.Type_FloatArray, True, 8
+        if mask & fxp.Type_IntArray:
+            return fxp.Type_IntArray, True, 8
+        if mask & fxp.Type_Data:
+            return fxp.Type_Data, True, 256
+        if mask & fxp.Type_Double:
+            return fxp.Type_Double, False, 1
+        if mask & fxp.Type_Float:
+            return fxp.Type_Float, False, 1
+        if mask & fxp.Type_Int:
+            return fxp.Type_Int, False, 1
+
+        # Fallback: float scalar
+        return fxp.Type_Float, False, 1
