@@ -623,7 +623,16 @@ class WidgetManager:
                 kwargs=dict(label=text),
             )
 
-        # Unhandled widget class
+        # Classes that do NOT support descriptors
+        elif wclass in (
+            self.fake_xp.WidgetClass_MainWindow,
+            self.fake_xp.WidgetClass_SubWindow,
+            self.fake_xp.WidgetClass_GeneralGraphics,
+            self.fake_xp.WidgetClass_ScrollBar
+        ):
+            # Real X‑Plane ignores these silently
+            return
+
         else:
             self.fake_xp.log(f"unhandled setdescriptor class: {wclass}")
 

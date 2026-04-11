@@ -72,15 +72,13 @@ class FakeXPDataRef:
     # ------------------------------------------------------------------
     def getDataRefTypes(self, dataRef: FakeDataRef) -> int:
         ref = self._resolve_ref(dataRef)
-        is_array = ref.is_array if getattr(ref, "shape_known", False) else None
-        return self.dm.dtype_to_bitmask(ref.type, is_array)
+        return self.dm.dtype_to_bitmask(ref.type)
 
     def getDataRefInfo(self, dataRef: FakeDataRef) -> XPLMDataRefInfo_t:
         ref = self._resolve_ref(dataRef)
-        is_array = ref.is_array if getattr(ref, "shape_known", False) else None
         info = XPLMDataRefInfo_t(
             name=ref.path,
-            type=self.dm.dtype_to_bitmask(ref.type, is_array),
+            type=self.dm.dtype_to_bitmask(ref.type),
             writable=bool(ref.writable),
             owner=0,
         )
