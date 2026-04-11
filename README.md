@@ -38,6 +38,7 @@ Follow these steps to set up a fully functional sim‑less XPPython3 development
    xppython3-headless-dev/plugins/PythonPlugins/XPPython3/
 
    This provides xp.pyi, xp_types.pyi, and all official API signatures for IDE autocompletion.
+   
    This provides plugins access to package modules (utils)
 
 4. Develop plugins inside the headless-dev plugins directory  
