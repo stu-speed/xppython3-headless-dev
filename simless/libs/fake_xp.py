@@ -46,18 +46,19 @@ from __future__ import annotations
 
 from typing import Optional
 
+from simless.libs.dataref import DataRefManager
 from simless.libs.fake_xp_command import FakeXPCommand
 from simless.libs.fake_xp_constants import bind_xp_constants
 from simless.libs.fake_xp_dataref import FakeXPDataRef
 from simless.libs.fake_xp_flightloop import FakeXPFlightLoop
 from simless.libs.fake_xp_graphics import FakeXPGraphics
-from simless.libs.input import InputManager
 from simless.libs.fake_xp_utilities import FakeXPUtilities
 from simless.libs.fake_xp_widget import FakeXPWidget
-from simless.libs.plugin_runner import SimlessRunner
-from simless.libs.window import WindowManager
 from simless.libs.graphics import GraphicsManager
+from simless.libs.input import InputManager
+from simless.libs.plugin_runner import SimlessRunner
 from simless.libs.widget import WidgetManager
+from simless.libs.window import WindowManager
 
 
 class FakeXP(
@@ -88,6 +89,7 @@ class FakeXP(
     graphics_manager: GraphicsManager
     input_manager: InputManager
     widget_manager: WidgetManager
+    dataref_manager: DataRefManager
 
     _debug: bool
     _sim_time: float
@@ -139,7 +141,6 @@ class FakeXP(
         # ------------------------------------------------------------------
         # Initialize subsystems
         # ------------------------------------------------------------------
-        self._init_dataref()
         self._init_flightloop()
         self._init_utilities()
         self._init_command()
@@ -152,11 +153,13 @@ class FakeXP(
         # ------------------------------------------------------------------
         # Bind Modules
         # ------------------------------------------------------------------
-        self.simless_runner = SimlessRunner(self, enable_dataref_bridge, bridge_host, bridge_port)
-        self.window_manager = WindowManager(self)
+        self.dataref_manager = DataRefManager(self)
         self.graphics_manager = GraphicsManager(self)
         self.input_manager = InputManager(self)
+        self.window_manager = WindowManager(self)
         self.widget_manager = WidgetManager(self)
+
+        self.simless_runner = SimlessRunner(self, enable_dataref_bridge, bridge_host, bridge_port)
 
     # ----------------------------------------------------------------------
     # Helpers

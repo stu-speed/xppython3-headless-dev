@@ -30,9 +30,10 @@ class WidgetManager:
     """
 
     def __init__(self, fake_xp: FakeXP) -> None:
+        self.fake_xp = fake_xp
+
         self._widgets: Dict[XPWidgetID, WidgetInfo] = {}
         self._next_widget_id: int = 1
-        self.fake_xp = fake_xp
         self.gm = fake_xp.graphics_manager
 
     def allocate_widget_id(self) -> XPWidgetID:

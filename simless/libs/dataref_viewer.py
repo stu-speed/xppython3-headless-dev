@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Pattern, TYPE_CHECKING
 
+from simless.libs.dataref import DataRefManager
 from simless.libs.fake_xp_types import DRefType, FakeDataRef
 from XPPython3.xp_typing import XPWidgetID, XPWidgetMessage
 
@@ -222,15 +223,19 @@ class FakeXPDataRefViewerClient:
         self.viewer = DataRefViewer(xp)
         self._attached = False
 
+    @property
+    def dm(self) -> DataRefManager:
+        return self.fake_xp.dataref_manager
+
     def attach(self) -> None:
         if self._attached:
             return
         self._attached = True
 
-        for ref in self.fake_xp.all_handles():
+        for ref in self.dm.all_handles():
             self._add_ref(ref)
 
-        self.fake_xp.attach_handle_callback(self._on_new_handle)
+        self.dm.attach_handle_callback(self._on_new_handle)
         self.viewer.open()
 
     def detach(self) -> None:
@@ -238,7 +243,7 @@ class FakeXPDataRefViewerClient:
             return
         self._attached = False
 
-        self.fake_xp.detach_handle_callback()
+        self.dm.detach_handle_callback()
         self.viewer.close()
 
     def update(self) -> None:
@@ -274,7 +279,7 @@ class FakeXPDataRefViewerClient:
         self.viewer._dirty = True
 
     def _update_value(self, state: RefState) -> None:
-        ref = self.fake_xp.get_handle(state.meta.name)
+        ref = self.dm.get_handle(state.meta.name)
         if ref is None:
             return
 
