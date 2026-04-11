@@ -30,15 +30,6 @@ from __future__ import annotations
 
 
 def bind_xp_constants(xp) -> None:
-    # Data type bitmask
-    xp.Type_Int = 1 << 0  # 1
-    xp.Type_Float = 1 << 1  # 2
-    xp.Type_Double = 1 << 2  # 4
-    xp.Type_FloatArray = 1 << 3  # 8
-    xp.Type_IntArray = 1 << 4  # 16
-    xp.Type_Data = 1 << 5  # 32
-    xp.Type_Unknown = 0
-
     # ----------------------------------------------------------------------
     # AUDIO (1000–1999)
     # ----------------------------------------------------------------------
@@ -474,6 +465,17 @@ def bind_xp_constants(xp) -> None:
     xp.WindowLayerModal = 11203
 
     xp.WindowCloseBox = 11300
+
+    # ----------------------------------------------------------------------
+    # DATA TYPES (12000–12099)
+    # ----------------------------------------------------------------------
+    xp.Type_Int = 12000
+    xp.Type_Float = 12001
+    xp.Type_Double = 12002
+    xp.Type_FloatArray = 12003
+    xp.Type_IntArray = 12004
+    xp.Type_Data = 12005
+    xp.Type_Unknown = 12006
 
     # ----------------------------------------------------------------------
     # WEATHER / ATMOSPHERE LAYERS (12100–12199)
