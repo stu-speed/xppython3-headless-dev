@@ -6,10 +6,20 @@ from dataclasses import dataclass, field
 from enum import auto, StrEnum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 from XPPython3.xp_typing import (
     XPLMCursorStatus, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer,
     XPWidgetClass, XPWidgetID, XPWidgetPropertyID
 )
+
+# XPLM data type bitmask constants
+Type_Unknown = 0
+Type_Int = 1
+Type_Float = 2
+Type_Double = 4
+Type_FloatArray = 8
+Type_IntArray = 16
+Type_Data = 32
 
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
 
@@ -80,7 +90,7 @@ class FakeDataRef:
         size are unknown and must not be inferred.
     """
     path: str
-    type: int
+    type: DRefType
     writable: bool
     size: int
     value: Any
