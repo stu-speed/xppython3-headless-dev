@@ -38,20 +38,21 @@ Follow these steps to set up a fully functional sim‑less XPPython3 development
    xppython3-headless-dev/plugins/PythonPlugins/XPPython3/
 
    This provides xp.pyi, xp_types.pyi, and all official API signatures for IDE autocompletion.
+   This provides plugins access to package modules (utils)
 
-3. Develop plugins inside the headless-dev plugins directory  
+4. Develop plugins inside the headless-dev plugins directory  
    All plugin modules must be placed in:
    xppython3-headless-dev/plugins/PythonPlugins
 
    The simless runner loads plugins directly from this directory and executes their full lifecycle.
 
-4. (Optional) Install Poetry for dependency management  
+5. (Optional) Install Poetry for dependency management  
    If you want a reproducible environment:
    pip install --user poetry
    poetry install
    poetry shell
 
-5. Run a sim‑less runner  
+6. Run a sim‑less runner  
    Example:
    python simless/run_standalone_oat.py
    or
