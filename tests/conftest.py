@@ -20,6 +20,7 @@ import dearpygui.dearpygui as dpg
 import pytest
 
 import XPPython3
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 from simless.libs.fake_xp import FakeXP
 from simless.libs.xppython3_runtime import wire_xppython3_runtime
 
@@ -88,7 +89,7 @@ def inline_plugin():
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def update_dataref():
-    def _update(ref, *, dtype: int, size=None, value=None):
+    def _update(ref, *, dtype: DRefType, size=None, value=None):
         if not ref.is_dummy:
             raise RuntimeError("update_dataref only valid for dummy refs")
 

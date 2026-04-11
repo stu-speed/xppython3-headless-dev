@@ -7,6 +7,7 @@
 import XPPython3
 
 from PythonPlugins.sshd_extensions.bridge_protocol import BridgeData, BridgeDataType
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 from simless.libs.fake_xp import FakeXP
 
 
@@ -267,7 +268,7 @@ def test_headless_bridge_enabled(inline_plugin, monkeypatch):
     meta_event = BridgeData(
         type=BridgeDataType.META,
         path="sim/test/bridge_value",
-        dtype=xp.Type_Float,
+        dtype=DRefType.FLOAT,
         writable=True,
         array_size=0,
         value=None,
@@ -277,7 +278,7 @@ def test_headless_bridge_enabled(inline_plugin, monkeypatch):
     update_event = BridgeData(
         type=BridgeDataType.UPDATE,
         path="sim/test/bridge_value",
-        dtype=xp.Type_Float,
+        dtype=DRefType.FLOAT,
         writable=True,
         array_size=0,
         value=123.45,
