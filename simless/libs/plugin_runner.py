@@ -46,6 +46,7 @@ import traceback
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional, TYPE_CHECKING
 
+from simless.libs.dataref import DataRefManager
 from simless.libs.dataref_viewer import FakeXPDataRefViewerClient
 from simless.libs.fake_xp_types import XPShutdown
 from simless.libs.plugin_loader import LoadedPlugin
@@ -140,6 +141,10 @@ class SimlessRunner:
         self._current_plugin_id: int | None = None
 
     @property
+    def dm(self) -> DataRefManager:
+        return self.fake_xp.dataref_manager
+
+    @property
     def sim_time(self) -> float:
         return self._sim_time
 
@@ -176,7 +181,7 @@ class SimlessRunner:
         The DataRef subsystem emits discovery events; the runner decides
         whether and how those paths are synchronized externally.
         """
-        self.fake_xp.attach_handle_callback(self._on_dataref_handle_created)
+        self.dm.attach_handle_callback(self._on_dataref_handle_created)
 
     def _on_dataref_handle_created(self, ref: Any) -> None:
         """Called synchronously when FakeXPDataRef creates a handle."""
@@ -201,7 +206,7 @@ class SimlessRunner:
         """
         if self._bridge_client is None:
             return
-        all_handle_paths = self.fake_xp.all_handle_paths()
+        all_handle_paths = self.dm.all_handle_paths()
 
         try:
             self._bridge_client.add(all_handle_paths)
@@ -244,18 +249,18 @@ class SimlessRunner:
 
         for ev in events:
             if ev.type is self._bridge_mod.BridgeDataType.META:
-                ref = self.fake_xp.get_handle(ev.path)
+                ref = self.dm.get_handle(ev.path)
                 assert ref is not None
 
                 # Promote TYPE authority only
-                self.fake_xp.promote_type(
+                self.dm.promote_type(
                     ref=ref,
                     dtype=ev.dtype,
                     writable=bool(ev.writable),
                 )
 
             elif ev.type is self._bridge_mod.BridgeDataType.UPDATE:
-                ref = self.fake_xp.get_handle(ev.path)
+                ref = self.dm.get_handle(ev.path)
                 assert ref is not None, f"Unknown handle: {ev.path}"
                 value = ev.value
 
@@ -268,7 +273,7 @@ class SimlessRunner:
                     or ref.is_array != is_array
                     or ref.size != size
                 ):
-                    self.fake_xp.promote_shape_from_value(
+                    self.dm.promote_shape_from_value(
                         ref=ref,
                         value=value,
                     )
@@ -324,6 +329,7 @@ class SimlessRunner:
         # ------------------------------------------------------------
         for fl in xp.all_flightloop():
             try:
+                # noinspection PyArgumentList
                 with self.plugin_context(fl.plugin_id):
                     fl.check_and_run(now, cycle)
             except Exception:
@@ -398,6 +404,7 @@ class SimlessRunner:
 
         for p in plugins:
             try:
+                # noinspection PyArgumentList
                 with self.plugin_context(p.plugin_id):
                     result = p.instance.XPluginEnable()
                 xp.log(f"[Runner] → XPluginEnable: {p.name} ret={result}")
@@ -454,6 +461,7 @@ class SimlessRunner:
         for p in plugins:
             try:
                 xp.log(f"[Runner] → XPluginDisable: {p.name}")
+                # noinspection PyArgumentList
                 with self.plugin_context(p.plugin_id):
                     p.instance.XPluginDisable()
                 p.enabled = False
