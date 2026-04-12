@@ -285,41 +285,23 @@ class WidgetManager:
         container_id = f"xp_widget_container_{wid}"
 
         # ============================================================
-        # ROOT WIDGETS → create top-level DPG window
+        # MAIN WINDOW → bind to existing createWindowEx DPG window
         # ============================================================
-        if wclass in (
-                self.fake_xp.WidgetClass_MainWindow,
-                self.fake_xp.WidgetClass_SubWindow,
-        ):
+        if wclass == self.fake_xp.WidgetClass_MainWindow:
             win = info.window  # WindowExInfo
 
-            # Create the DPG window only once, keyed off the widget's dpg_id
-            if info.dpg_id is None:
-                win._dpg_window_id = dpg_id  # bind window to this tag
-
-                self.gm.enqueue_dpg(
-                    op=DPGOp.ADD_WINDOW,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        label=desc or "Window",
-                        width=max(1, info.geometry.width),
-                        height=max(1, info.geometry.height),
-                        no_scrollbar=True,
-                        no_collapse=True,
-                        no_resize=False,
-                        no_move=False,
-                    ),
-                )
-
-                info.dpg_id = dpg_id
-                info.container_id = dpg_id
-                info.geom_applied = False
-                info.container_geom_applied = None
-
+            # createWindowEx already enqueued ADD_WINDOW + ADD_DRAWLIST
+            info.dpg_id = win.dpg_tag
+            info.container_id = win.dpg_tag
+            info.geom_applied = False
+            info.container_geom_applied = None
             return
 
         # ============================================================
-        # NON-ROOT WIDGETS → child_window + control
+        # ALL NON-ROOT WIDGETS
+        # XP widgets need absolute positioning + clipping.
+        # Only mvChildWindow supports that in DPG.
+        # Therefore every widget (including SubWindow) gets a child_window container.
         # ============================================================
         parent_wid = info.parent
         if parent_wid is None:
@@ -357,109 +339,104 @@ class WidgetManager:
         # ------------------------------------------------------------
         # Create actual control
         # ------------------------------------------------------------
-        if info.dpg_id is None:
-            if wclass == self.fake_xp.WidgetClass_Caption:
-                self.gm.enqueue_dpg(
-                    op=DPGOp.ADD_TEXT,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        default_value=desc.strip(),
-                        parent=info.container_id,
-                    ),
+        # Short‑circuit: if already created, stop immediately
+        if info.dpg_id is not None:
+            return
+
+        # Assign deterministic ID before the type checks
+        info.dpg_id = dpg_id
+
+        # Now create the control for this widget class
+        if wclass == self.fake_xp.WidgetClass_Caption:
+            self.gm.enqueue_dpg(
+                op=DPGOp.ADD_TEXT,
+                kwargs=dict(
+                    tag=dpg_id,
+                    default_value=desc.strip(),
+                    parent=info.container_id,
+                ),
+            )
+
+        elif wclass == self.fake_xp.WidgetClass_TextField:
+            def _on_text(sender, app_data, user_data):
+                widget_id = XPWidgetID(user_data)
+                w = self.require_info(widget_id)
+                w.edit_buffer = app_data
+                self.fake_xp.sendMessageToWidget(
+                    widget_id,
+                    self.fake_xp.Msg_TextFieldChanged,
+                    widget_id,
+                    app_data,
                 )
 
-            elif wclass == self.fake_xp.WidgetClass_TextField:
-                def _on_text(sender, app_data, user_data):
-                    widget_id = XPWidgetID(user_data)
-                    w = self.require_info(widget_id)
-                    w.edit_buffer = app_data
-                    self.fake_xp.sendMessageToWidget(
-                        widget_id,
-                        self.fake_xp.Msg_TextFieldChanged,
-                        widget_id,
-                        app_data,
-                    )
+            self.gm.enqueue_dpg(
+                op=DPGOp.ADD_INPUT_TEXT,
+                kwargs=dict(
+                    tag=dpg_id,
+                    default_value=desc.strip(),
+                    parent=info.container_id,
+                    callback=_on_text,
+                    user_data=wid,
+                    no_spaces=True,
+                ),
+            )
 
-                self.gm.enqueue_dpg(
-                    op=DPGOp.ADD_INPUT_TEXT,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        default_value=desc.strip(),
-                        parent=info.container_id,
-                        callback=_on_text,
-                        user_data=wid,
-                        no_spaces=True,
-                    ),
+        elif wclass == self.fake_xp.WidgetClass_ScrollBar:
+            min_v = info.properties.get(self.fake_xp.Property_ScrollBarMin, 0)
+            max_v = info.properties.get(self.fake_xp.Property_ScrollBarMax, 100)
+            cur_v = info.properties.get(
+                self.fake_xp.Property_ScrollBarSliderPosition, min_v
+            )
+
+            def _on_scroll(sender, app_data, user_data):
+                widget_id = XPWidgetID(user_data)
+                new_pos = int(app_data)
+                self.fake_xp.setWidgetProperty(
+                    widget_id,
+                    self.fake_xp.Property_ScrollBarSliderPosition,
+                    new_pos,
+                )
+                self.fake_xp.sendMessageToWidget(
+                    widget_id,
+                    self.fake_xp.Msg_ScrollBarSliderPositionChanged,
+                    widget_id,
+                    new_pos,
                 )
 
-            elif wclass == self.fake_xp.WidgetClass_ScrollBar:
-                min_v = info.properties.get(self.fake_xp.Property_ScrollBarMin, 0)
-                max_v = info.properties.get(self.fake_xp.Property_ScrollBarMax, 100)
-                cur_v = info.properties.get(
-                    self.fake_xp.Property_ScrollBarSliderPosition, min_v
+            self.gm.enqueue_dpg(
+                op=DPGOp.ADD_SLIDER_INT,
+                kwargs=dict(
+                    tag=dpg_id,
+                    label=desc or "Slider",
+                    parent=info.container_id,
+                    min_value=min_v,
+                    max_value=max_v,
+                    default_value=cur_v,
+                    callback=_on_scroll,
+                    user_data=wid,
+                ),
+            )
+
+        elif wclass == self.fake_xp.WidgetClass_Button:
+            def _on_button(sender, app_data, user_data):
+                widget_id = XPWidgetID(user_data)
+                self.fake_xp.sendMessageToWidget(
+                    widget_id,
+                    self.fake_xp.Msg_PushButtonPressed,
+                    widget_id,
+                    None,
                 )
 
-                def _on_scroll(sender, app_data, user_data):
-                    widget_id = XPWidgetID(user_data)
-                    new_pos = int(app_data)
-                    self.fake_xp.setWidgetProperty(
-                        widget_id,
-                        self.fake_xp.Property_ScrollBarSliderPosition,
-                        new_pos,
-                    )
-                    self.fake_xp.sendMessageToWidget(
-                        widget_id,
-                        self.fake_xp.Msg_ScrollBarSliderPositionChanged,
-                        widget_id,
-                        new_pos,
-                    )
-
-                self.gm.enqueue_dpg(
-                    op=DPGOp.ADD_SLIDER_INT,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        label=desc or "Slider",
-                        parent=info.container_id,
-                        min_value=min_v,
-                        max_value=max_v,
-                        default_value=cur_v,
-                        callback=_on_scroll,
-                        user_data=wid,
-                    ),
-                )
-
-            elif wclass == self.fake_xp.WidgetClass_Button:
-                def _on_button(sender, app_data, user_data):
-                    widget_id = XPWidgetID(user_data)
-                    self.fake_xp.sendMessageToWidget(
-                        widget_id,
-                        self.fake_xp.Msg_PushButtonPressed,
-                        widget_id,
-                        None,
-                    )
-
-                self.gm.enqueue_dpg(
-                    op=DPGOp.ADD_BUTTON,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        label=desc,
-                        parent=info.container_id,
-                        callback=_on_button,
-                        user_data=wid,
-                    ),
-                )
-
-            else:
-                self.gm.enqueue_dpg(
-                    op=DPGOp.ADD_TEXT,
-                    kwargs=dict(
-                        tag=dpg_id,
-                        default_value=desc or f"Widget {wid}",
-                        parent=info.container_id,
-                    ),
-                )
-
-            info.dpg_id = dpg_id
+            self.gm.enqueue_dpg(
+                op=DPGOp.ADD_BUTTON,
+                kwargs=dict(
+                    tag=dpg_id,
+                    label=desc,
+                    parent=info.container_id,
+                    callback=_on_button,
+                    user_data=wid,
+                ),
+            )
 
     def _apply_geometry_if_needed(self, wid: XPWidgetID) -> None:
         """

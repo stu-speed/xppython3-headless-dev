@@ -84,13 +84,17 @@ class DataRefManager:
     # ----------------------------------------------------------------------
     # Convert dtype + shape → real XPLM bitmask
     # ----------------------------------------------------------------------
-    def dtype_to_bitmask(self, dtype: int) -> int:
+    def dtype_to_bitmask(self, ref: FakeDataRef) -> int:
         """
         Map a single concrete dtype to the XPLM type bitmask.
         This mirrors X-Plane: the DataRef has one true type,
         and the mask expresses API capabilities.
         """
         fxp = self.fake_xp
+        dtype = ref.type
+
+        if not ref.type_known:
+            return fxp.Type_Unknown
 
         # Scalar numeric types
         if dtype == fxp.Type_Int:
@@ -109,27 +113,6 @@ class DataRefManager:
             return fxp.Type_Data
 
         return fxp.Type_Unknown
-
-    def is_array_type(self, dtype: int) -> bool:
-        fxp = self.fake_xp
-        return dtype in (
-            fxp.Type_FloatArray,
-            fxp.Type_IntArray,
-            fxp.Type_Data,
-        )
-
-    def is_array_shape(self, ref: FakeDataRef) -> bool:
-        """
-        True if the DataRef is currently behaving as an array.
-        For dummy refs, this reflects provisional behavior.
-        For real refs, this reflects authoritative shape.
-        """
-        if ref.is_dummy:
-            # Provisional behavior only
-            return bool(ref.is_array)
-
-        # Authoritative shape
-        return ref.shape_known and ref.is_array is True
 
     # ----------------------------------------------------------------------
     # Callback notification

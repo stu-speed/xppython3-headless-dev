@@ -420,7 +420,7 @@ class WindowExInfo:
     # Dirty flags
     _dirty_xp_to_dpg: bool = True      # XP window state changed
     _dirty_dpg_to_xp: bool = False     # DPG window state changed
-    _dirty_widgets: bool = True        # Widget tree changed (requires _render_widgets)
+    _dirty_widgets: bool = False       # Widget tree changed (requires _render_widgets)
 
     # Widget tree root
     _widget_root: Optional[XPWidgetID] = None
