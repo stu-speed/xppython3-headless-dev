@@ -84,7 +84,7 @@ class FakeDataRef:
     writable: bool
     size: int
     value: Any
-    is_array: bool | None = None
+    is_array: bool = False
     type_known: bool = False
     shape_known: bool = False
 

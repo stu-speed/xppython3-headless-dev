@@ -93,9 +93,6 @@ class DataRefManager:
         fxp = self.fake_xp
         dtype = ref.type
 
-        if not ref.type_known:
-            return fxp.Type_Unknown
-
         # Scalar numeric types
         if dtype == fxp.Type_Int:
             return fxp.Type_Int

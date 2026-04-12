@@ -55,7 +55,7 @@ def test_find_and_dummy_creation(xp: FakeXP):
     assert ref.type == xp.Type_Float
     assert ref.type_known is False
     assert ref.shape_known is False
-    assert ref.is_array is None
+    assert ref.is_array is False
     assert ref.size == 1
     assert ref.value == 0.0
 
@@ -63,12 +63,12 @@ def test_find_and_dummy_creation(xp: FakeXP):
 def test_get_dataref_types_and_info_unknown_shape(xp: FakeXP):
     ref = xp.findDataRef("sim/test/float_scalar2")
     tmask = xp.getDataRefTypes(ref)
-    assert tmask == xp.Type_Unknown
+    assert tmask == xp.Type_Float # default
 
     info = xp.getDataRefInfo(ref)
     assert info.name == ref.path
-    assert info.type == xp.Type_Unknown
-    assert info.is_array is None
+    assert info.type == xp.Type_Float
+    assert info.is_array is False
     assert info.size == 0
 
 
