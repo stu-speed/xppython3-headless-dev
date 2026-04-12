@@ -28,7 +28,11 @@ import threading
 from threading import RLock
 from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import FakeDataRef
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
+from simless.libs.fake_xp_types import (
+    FakeDataRef, Type_Data, Type_Double, Type_Float, Type_FloatArray, Type_Int,
+    Type_IntArray, Type_Unknown
+)
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
@@ -47,146 +51,135 @@ class DataRefManager:
 
     _handle_callback: Optional[Callable[[FakeDataRef], None]]
     _handles: Dict[str, FakeDataRef]
+    # accessor metadata for registered accessors (name -> metadata)
     _accessors: Dict[str, Dict[str, Any]]
+    # single global lock protecting _handles and all handle state
     _handles_lock: RLock
+    # simple owner id counter for registered accessors
     _next_owner_id: int
 
     def __init__(self, fake_xp: FakeXP) -> None:
         self.fake_xp = fake_xp
 
-        self._handles = {}
-        self._accessors = {}
+        self._handles: Dict[str, FakeDataRef] = {}
+        self._accessors: Dict[str, Dict[str, Any]] = {}
         self._handle_callback = None
         self._handles_lock = threading.RLock()
         self._next_owner_id = 1
 
-    # ----------------------------------------------------------------------
-    # Default values for real xp.Type_* flags
-    # ----------------------------------------------------------------------
-    def default_value_for(self, dtype: int, size: int):
-        """
-        Return a default value appropriate for the given xp.Type_* dtype.
-        """
-        fxp = self.fake_xp
-
-        if dtype == fxp.Type_FloatArray:
+    @staticmethod
+    def default_value_for(dtype: DRefType, size: int):
+        if dtype == DRefType.FLOAT_ARRAY:
             return [0.0] * size
-        if dtype == fxp.Type_IntArray:
+        if dtype == DRefType.INT_ARRAY:
             return [0] * size
-        if dtype == fxp.Type_Data:
+        if dtype == DRefType.BYTE_ARRAY:
             return bytearray(size)
-        if dtype in (fxp.Type_Float, fxp.Type_Double):
+        if dtype in (DRefType.FLOAT, DRefType.DOUBLE):
             return 0.0
-        if dtype == fxp.Type_Int:
+        if dtype == DRefType.INT:
             return 0
-        raise TypeError(f"Unsupported xp.Type_* dtype: {dtype}")
+        raise TypeError(f"Unsupported DRefType: {dtype}")
 
-    # ----------------------------------------------------------------------
-    # Convert dtype + shape → real XPLM bitmask
-    # ----------------------------------------------------------------------
-    def dtype_to_bitmask(self, ref: FakeDataRef) -> int:
+    @staticmethod
+    def dreftype_to_bitmask(dtype: DRefType, is_array: Optional[bool]) -> int:
         """
-        Map a single concrete dtype to the XPLM type bitmask.
-        This mirrors X-Plane: the DataRef has one true type,
-        and the mask expresses API capabilities.
+        Map internal DRefType + observed shape to XPLM bitmask.
+
+        If shape is unknown (is_array is None), return Type_Unknown.
         """
-        fxp = self.fake_xp
-        dtype = ref.type
+        if is_array is None:
+            return Type_Unknown
 
-        if not ref.type_known:
-            return fxp.Type_Unknown
+        if is_array:
+            if dtype == DRefType.FLOAT_ARRAY:
+                return Type_FloatArray
+            if dtype == DRefType.INT_ARRAY:
+                return Type_IntArray
+            if dtype == DRefType.BYTE_ARRAY:
+                return Type_Data
+            return Type_Unknown
+        else:
+            if dtype == DRefType.FLOAT:
+                return Type_Float
+            if dtype == DRefType.DOUBLE:
+                return Type_Double
+            if dtype == DRefType.INT:
+                return Type_Int
+            return Type_Unknown
 
-        # Scalar numeric types
-        if dtype == fxp.Type_Int:
-            return fxp.Type_Int
-        if dtype == fxp.Type_Float:
-            return fxp.Type_Float
-        if dtype == fxp.Type_Double:
-            return fxp.Type_Double
-
-        # Array types
-        if dtype == fxp.Type_IntArray:
-            return fxp.Type_IntArray
-        if dtype == fxp.Type_FloatArray:
-            return fxp.Type_FloatArray
-        if dtype == fxp.Type_Data:
-            return fxp.Type_Data
-
-        return fxp.Type_Unknown
-
-    # ----------------------------------------------------------------------
-    # Callback notification
-    # ----------------------------------------------------------------------
     def notify_handle_created(self, ref: FakeDataRef) -> None:
-        """
-        Notify the registered callback (if any) that a new handle was created.
-        """
+        # read callback under lock, but invoke it outside to avoid deadlocks
         with self._handles_lock:
             cb = self._handle_callback
-        if cb:
-            try:
-                # noinspection PyCallingNonCallable
-                cb(ref)
-            except Exception:
-                self.fake_xp.log(f"[FakeXP] handle callback raised for {ref.path}")
+        if cb is None:
+            return
+        try:
+            # noinspection PyCallingNonCallable
+            cb(ref)
+        except Exception:
+            self.fake_xp.log(f"[FakeXP] handle callback raised for {ref.path}")
 
-    # ----------------------------------------------------------------------
-    # Shape enforcement
-    # ----------------------------------------------------------------------
     def require_array(self, ref: FakeDataRef, api: str) -> None:
-        """
-        Enforce that array semantics are currently valid.
-        """
+        # Dummy refs have no authoritative shape — allow provisional arrays
         if ref.is_dummy:
             if not ref.is_array:
                 raise RuntimeError(f"{api} requires array-shaped dataRef")
             return
 
+        # Real refs must have authoritative shape
         if not ref.shape_known or not ref.is_array:
-            raise RuntimeError(f"{api} requires array-shaped dataRef")
+            raise RuntimeError(
+                f"{api} requires array-shaped dataRef (shape not known or scalar)"
+            )
 
     def require_scalar(self, ref: FakeDataRef, api: str) -> None:
         """
         Enforce that scalar semantics are currently valid.
         """
+
+        # Dummy refs: allow provisional scalar behavior
         if ref.is_dummy:
             if getattr(ref, "is_array", False):
                 raise RuntimeError(f"{api} requires scalar-shaped dataRef")
             return
 
+        # Real refs: require authoritative scalar shape
         if getattr(ref, "shape_known", False) and getattr(ref, "is_array", None) is True:
-            raise RuntimeError(f"{api} requires scalar-shaped dataRef")
+            raise RuntimeError(
+                f"{api} requires scalar-shaped dataRef (currently array)"
+            )
 
-    # ----------------------------------------------------------------------
+    # -------------------------
     # Callback management
-    # ----------------------------------------------------------------------
+    # -------------------------
     def attach_handle_callback(self, cb: Optional[Callable[[FakeDataRef], None]]) -> None:
-        """Register a synchronous callback invoked when a handle is created."""
+        """Register a single synchronous callback invoked when a handle is created. Passing None clears it."""
         with self._handles_lock:
             self._handle_callback = cb
 
     def detach_handle_callback(self) -> None:
-        """Remove the handle-created callback."""
         with self._handles_lock:
             self._handle_callback = None
 
-    # ----------------------------------------------------------------------
-    # Handle management
-    # ----------------------------------------------------------------------
+    # -------------------------
+    # Dummy update and promotion helpers
+    # -------------------------
+
     def get_handle(self, name: str) -> Optional[FakeDataRef]:
-        """Return the FakeDataRef for the given path, or None."""
+        name_str = str(name)
         with self._handles_lock:
-            return self._handles.get(str(name))
+            return self._handles.get(name_str)
 
     def add_handle(self, name: str, ref: FakeDataRef) -> None:
-        """Register a new FakeDataRef handle."""
         with self._handles_lock:
-            self._handles[str(name)] = ref
+            name_str = str(name)
+            self._handles[name_str] = ref
 
     def del_handle(self, name) -> None:
-        """Delete a FakeDataRef handle."""
         with self._handles_lock:
-            del self._handles[str(name)]
+            name_str = str(name)
+            del self._handles[name_str]
 
     def all_handle_paths(self) -> list[str]:
         """Return a snapshot of all known DataRef handle paths."""
@@ -198,23 +191,36 @@ class DataRefManager:
         with self._handles_lock:
             return list(self._handles.values())
 
-    # ----------------------------------------------------------------------
-    # Type promotion (pure xp.Type_* flags)
-    # ----------------------------------------------------------------------
-    def promote_type(self, ref: FakeDataRef, dtype: int, writable: bool) -> None:
+    def promote_type(
+        self,
+        ref: FakeDataRef,
+        dtype: DRefType,
+        writable: bool,
+    ) -> None:
         """
         Promote type authority for an existing handle.
 
+        This method is called when authoritative metadata (META) is received.
+        It establishes numeric type and writability, and coerces the stored
+        value to match the promoted type.
+
         Semantics:
-          • Promotion is in-place.
-          • Scalar ↔ array transitions are allowed.
-          • Values are cast appropriately.
-          • Idempotent.
+          • Promotion is in-place; the FakeDataRef object is preserved.
+          • Scalar ↔ array transitions are allowed:
+                – Scalar → array wraps the scalar into a length‑1 array and casts.
+                – Array → scalar takes the first element and casts.
+          • Array → array and scalar → scalar transitions cast elements or the scalar.
+          • Array attributes (is_array, array_size) are updated to match the coerced value.
+          • No shape inference is performed; scalar → array always produces size 1.
+          • Incompatible or uncastable values fall back to a default value.
+          • Idempotent: safe to call multiple times with the same dtype.
+
+        Raises:
+          • TypeError if ref is invalid
         """
+
         if ref is None:
             raise TypeError("invalid dataRef")
-
-        fxp = self.fake_xp
 
         with self._handles_lock:
             ref.type = dtype
@@ -224,18 +230,20 @@ class DataRefManager:
                 v = ref.value
 
                 # --- ARRAY TARGET TYPES ---
-                if dtype in (fxp.Type_FloatArray, fxp.Type_IntArray, fxp.Type_Data):
+                if dtype in (DRefType.FLOAT_ARRAY, DRefType.INT_ARRAY, DRefType.BYTE_ARRAY):
                     if isinstance(v, (list, bytearray)):
-                        if dtype == fxp.Type_FloatArray:
+                        # Array → array: cast elements
+                        if dtype == DRefType.FLOAT_ARRAY:
                             newv = [float(x) for x in v]
-                        elif dtype == fxp.Type_IntArray:
+                        elif dtype == DRefType.INT_ARRAY:
                             newv = [int(x) for x in v]
                         else:
                             newv = bytearray(v)
                     else:
-                        if dtype == fxp.Type_FloatArray:
+                        # Scalar → array: wrap scalar into length‑1 array
+                        if dtype == DRefType.FLOAT_ARRAY:
                             newv = [float(v)]
-                        elif dtype == fxp.Type_IntArray:
+                        elif dtype == DRefType.INT_ARRAY:
                             newv = [int(v)]
                         else:
                             newv = bytearray([int(v) & 0xFF])
@@ -247,17 +255,19 @@ class DataRefManager:
                 # --- SCALAR TARGET TYPES ---
                 else:
                     if isinstance(v, (list, bytearray)):
+                        # Array → scalar: take first element and cast
                         first = v[0] if len(v) else 0
-                        if dtype in (fxp.Type_Float, fxp.Type_Double):
+                        if dtype in (DRefType.FLOAT, DRefType.DOUBLE):
                             newv = float(first)
-                        elif dtype == fxp.Type_Int:
+                        elif dtype == DRefType.INT:
                             newv = int(first)
                         else:
                             newv = self.default_value_for(dtype, 1)
                     else:
-                        if dtype in (fxp.Type_Float, fxp.Type_Double):
+                        # Scalar → scalar: cast normally
+                        if dtype in (DRefType.FLOAT, DRefType.DOUBLE):
                             newv = float(v)
-                        elif dtype == fxp.Type_Int:
+                        elif dtype == DRefType.INT:
                             newv = int(v)
                         else:
                             newv = self.default_value_for(dtype, 1)
@@ -267,6 +277,7 @@ class DataRefManager:
                     ref.size = 1
 
             except (TypeError, ValueError):
+                # Fallback: default scalar or array of size 1
                 dv = self.default_value_for(dtype, 1)
                 ref.value = dv
                 ref.is_array = isinstance(dv, (list, bytearray))
@@ -274,61 +285,74 @@ class DataRefManager:
 
             ref.type_known = True
 
-    # ----------------------------------------------------------------------
-    # Shape promotion
-    # ----------------------------------------------------------------------
-    def promote_shape_from_value(self, ref: FakeDataRef, value: Any) -> None:
+    def promote_shape_from_value(
+        self,
+        ref: FakeDataRef,
+        value: Any,
+    ) -> None:
         """
         Promote shape authority for an existing handle using an authoritative value.
+
+        This method is called on the first real provider UPDATE.
+        The provided value is authoritative for both shape and storage.
+
+        Semantics:
+          • Promotion is in-place; the FakeDataRef object is preserved.
+          • Shape (scalar vs array) and size are inferred from the value.
+          • Existing dummy values are discarded unconditionally.
+          • Storage is allocated to exactly match the value shape.
+          • Idempotent: safe to call multiple times.
+
+        Raises:
+          • TypeError if ref is invalid
         """
         if ref is None:
             raise TypeError("invalid dataRef")
         if ref.shape_known:
             return
 
-        fxp = self.fake_xp
-
         with self._handles_lock:
             if isinstance(value, (list, tuple, bytearray)):
                 ref.is_array = True
                 ref.size = len(value)
 
-                if ref.type == fxp.Type_Data:
+                if ref.type == DRefType.BYTE_ARRAY:
                     ref.value = bytearray(value)
-                elif ref.type == fxp.Type_FloatArray:
+                elif ref.type == DRefType.FLOAT_ARRAY:
                     ref.value = [float(x) for x in value]
-                elif ref.type == fxp.Type_IntArray:
+                elif ref.type == DRefType.INT_ARRAY:
                     ref.value = [int(x) for x in value]
                 else:
                     raise TypeError("array value incompatible with scalar type")
-
             else:
                 ref.is_array = False
                 ref.size = 1
 
-                if ref.type in (fxp.Type_Float, fxp.Type_Double):
+                if ref.type in (DRefType.FLOAT, DRefType.DOUBLE):
                     ref.value = float(value)
-                elif ref.type == fxp.Type_Int:
+                elif ref.type == DRefType.INT:
                     ref.value = int(value)
                 else:
                     ref.value = self.default_value_for(ref.type, 1)
 
             ref.shape_known = True
 
-    # ----------------------------------------------------------------------
-    # Dummy → real conformance
-    # ----------------------------------------------------------------------
-    def conform_dummy_to_value(self, ref: FakeDataRef, value, offset: int = 0, count: int | None = None) -> None:
-        """
-        Conform a dummy FakeDataRef to the shape and type implied by a write.
-        """
+    def conform_dummy_to_value(
+        self,
+        ref: FakeDataRef,
+        value,
+        offset: int = 0,
+        count: int | None = None,
+    ) -> None:
         if ref is None:
             raise TypeError("invalid dataRef")
+
         if not ref.is_dummy:
             return
 
-        fxp = self.fake_xp
-
+        # ------------------------------------------------------------
+        # Normalize array intent
+        # ------------------------------------------------------------
         is_array_write = offset != 0 or isinstance(value, (list, tuple, bytearray))
 
         if isinstance(value, (list, tuple, bytearray)):
@@ -339,32 +363,38 @@ class DataRefManager:
             count = 1
             sample = value
 
-        # Determine provisional dtype
+        # ------------------------------------------------------------
+        # Determine provisional type
+        # ------------------------------------------------------------
         if isinstance(sample, float):
-            dtype = fxp.Type_FloatArray if is_array_write else fxp.Type_Float
+            dtype = DRefType.FLOAT_ARRAY if is_array_write else DRefType.FLOAT
         elif isinstance(sample, int):
-            dtype = fxp.Type_IntArray if is_array_write else fxp.Type_Int
+            dtype = DRefType.INT_ARRAY if is_array_write else DRefType.INT
         elif isinstance(sample, (bytes, bytearray)):
-            dtype = fxp.Type_Data
+            dtype = DRefType.BYTE_ARRAY
             is_array_write = True
         else:
             raise TypeError(f"unsupported DataRef value type: {type(sample)}")
 
         ref.type = dtype
 
+        # ------------------------------------------------------------
         # Scalar write
+        # ------------------------------------------------------------
         if not is_array_write:
             ref.is_array = False
             ref.size = 1
-            ref.value = float(value) if dtype == fxp.Type_Float else int(value)
+            ref.value = float(value) if dtype == DRefType.FLOAT else int(value)
             return
 
+        # ------------------------------------------------------------
         # Array write
+        # ------------------------------------------------------------
         needed = offset + count
         ref.is_array = True
         ref.size = max(ref.size or 0, needed)
 
-        if dtype == fxp.Type_FloatArray:
+        if dtype == DRefType.FLOAT_ARRAY:
             if not isinstance(ref.value, list):
                 ref.value = [0.0] * needed
             elif len(ref.value) < needed:
@@ -372,7 +402,7 @@ class DataRefManager:
             for i in range(count):
                 ref.value[offset + i] = float(value[i])
 
-        elif dtype == fxp.Type_IntArray:
+        elif dtype == DRefType.INT_ARRAY:
             if not isinstance(ref.value, list):
                 ref.value = [0] * needed
             elif len(ref.value) < needed:
@@ -380,7 +410,7 @@ class DataRefManager:
             for i in range(count):
                 ref.value[offset + i] = int(value[i])
 
-        elif dtype == fxp.Type_Data:
+        elif dtype == DRefType.BYTE_ARRAY:
             if not isinstance(ref.value, bytearray):
                 ref.value = bytearray(needed)
             elif len(ref.value) < needed:

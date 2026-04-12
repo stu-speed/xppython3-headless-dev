@@ -6,7 +6,8 @@ import pytest
 
 import XPPython3
 from simless.libs.fake_xp import FakeXP
-from simless.libs.fake_xp_types import FakeDataRef
+from simless.libs.fake_xp_types import FakeDataRef, Type_Data, Type_Int, Type_Unknown
+from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 
 
 @pytest.fixture
@@ -52,7 +53,7 @@ def test_find_and_dummy_creation(xp: FakeXP):
     ref = xp.findDataRef("sim/test/float_scalar")
     assert isinstance(ref, FakeDataRef)
     assert ref.path == "sim/test/float_scalar"
-    assert ref.type == xp.Type_Float
+    assert ref.type == DRefType.FLOAT
     assert ref.type_known is False
     assert ref.shape_known is False
     assert ref.is_array is None
@@ -63,11 +64,11 @@ def test_find_and_dummy_creation(xp: FakeXP):
 def test_get_dataref_types_and_info_unknown_shape(xp: FakeXP):
     ref = xp.findDataRef("sim/test/float_scalar2")
     tmask = xp.getDataRefTypes(ref)
-    assert tmask == xp.Type_Unknown
+    assert tmask == Type_Unknown
 
     info = xp.getDataRefInfo(ref)
     assert info.name == ref.path
-    assert info.type == xp.Type_Unknown
+    assert info.type == Type_Unknown
     assert info.is_array is None
     assert info.size == 0
 
@@ -105,7 +106,7 @@ def test_register_and_unregister_accessor_scalar(xp: FakeXP):
         readInt=my_read_int,
         writeInt=my_write_int,
     )
-    assert xp.getDataRefTypes(ref) & xp.Type_Int
+    assert xp.getDataRefTypes(ref) & Type_Int
     assert xp.getDatai(ref) == 42
     xp.setDatai(ref, 99)
     assert written["v"] == 99
@@ -152,10 +153,10 @@ def test_array_accessors_and_semantics(xp: FakeXP):
 def test_byte_array_and_string_helpers_on_internal_buffer(xp: FakeXP):
     ref = xp.findDataRef("sim/test/bytes_internal")
 
-    xp.dataref_manager.promote_type(ref=ref, dtype=xp.Type_Data, writable=True)
+    xp.dataref_manager.promote_type(ref=ref, dtype=DRefType.BYTE_ARRAY, writable=True)
     xp.dataref_manager.promote_shape_from_value(ref=ref, value=bytearray(b"Hello\x00" + b"\x00" * 10))
 
-    assert xp.getDataRefTypes(ref) & xp.Type_Data
+    assert xp.getDataRefTypes(ref) & Type_Data
 
     s = xp.getDatas(ref)
     assert s.startswith("Hello")
@@ -173,8 +174,8 @@ def test_promote_type_validates_value_on_type_change(xp: FakeXP):
     assert ref.shape_known is True
     assert ref.is_array is False
 
-    xp.dataref_manager.promote_type(ref=ref, dtype=xp.Type_Int, writable=True)
-    assert ref.type == xp.Type_Int
+    xp.dataref_manager.promote_type(ref=ref, dtype=DRefType.INT, writable=True)
+    assert ref.type == DRefType.INT
     assert isinstance(ref.value, int)
 
 
@@ -186,8 +187,8 @@ def test_promote_shape_from_value_does_not_change_known_shape(xp: FakeXP):
     assert ref.is_array is False
     assert ref.value == pytest.approx(0.5)
 
-    xp.dataref_manager.promote_type(ref=ref, dtype=xp.Type_FloatArray, writable=True)
-    assert ref.type == xp.Type_FloatArray
+    xp.dataref_manager.promote_type(ref=ref, dtype=DRefType.FLOAT_ARRAY, writable=True)
+    assert ref.type == DRefType.FLOAT_ARRAY
     assert ref.shape_known is True
     assert ref.is_array is True
 
@@ -212,17 +213,17 @@ def test_update_dummy_ref_validation(xp: FakeXP, update_dataref):
 
     update_dataref(
         reg,
-        dtype=xp.Type_FloatArray,
+        dtype=DRefType.FLOAT_ARRAY,
         size=4,
         value=[1, 2, 3, 4],
     )
-    assert reg.type == xp.Type_FloatArray
+    assert reg.type == DRefType.FLOAT_ARRAY
     assert reg.size == 4
 
 
 def test_setDatavf_establishes_shape_then_enforces_bounds(xp: FakeXP):
     ref = xp.findDataRef("sim/test/shape_from_write")
-    xp.dataref_manager.promote_type(ref=ref, dtype=xp.Type_FloatArray, writable=True)
+    xp.dataref_manager.promote_type(ref=ref, dtype=DRefType.FLOAT_ARRAY, writable=True)
 
     xp.setDatavf(ref, [9.0, 8.0, 7.0], offset=0, count=3)
     assert ref.type_known is True
@@ -282,7 +283,7 @@ def test_getDatavf_offset_and_count_write_into_buffer(xp: FakeXP):
 
 def test_setDatab_internal_buffer_and_real_bounds(xp: FakeXP):
     ref = xp.findDataRef("sim/test/bytes_internal2")
-    xp.dataref_manager.promote_type(ref=ref, dtype=xp.Type_Data, writable=True)
+    xp.dataref_manager.promote_type(ref=ref, dtype=DRefType.BYTE_ARRAY, writable=True)
     xp.dataref_manager.promote_shape_from_value(ref=ref, value=bytearray(b"ABCD"))
 
     xp.setDatab(
