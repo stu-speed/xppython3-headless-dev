@@ -94,18 +94,28 @@ class FakeXPWidget:
             if parent != 0:
                 raise ValueError(f"Root widget must have parent=0 (got parent={parent})")
 
-            # Register the window with authoritative geometry + visibility
-            window_info = self.fake_xp.window_manager.register_windowex(
+            # 1) Create the XPLM-style window via the public API
+            win_id = self.fake_xp.createWindowEx(
                 left=left,
                 top=top,
                 right=right,
                 bottom=bottom,
-                visible=visible_bool,
+                visible=visible,
+                draw=None,
+                click=None,
+                key=None,
+                cursor=None,
+                wheel=None,
+                refCon=None,
                 decoration=self.fake_xp.WindowDecorationRoundRectangle,
                 layer=self.fake_xp.WindowLayerFloatingWindows,
+                rightClick=None,
             )
 
-            # Use helper
+            # 2) Look up the WindowExInfo we just registered
+            window_info = self.fake_xp.window_manager.require_info(win_id)
+
+            # 3) Create the root widget bound to this window
             info = self.wm.create_widget(
                 widget_class=widget_class,
                 window=window_info,
@@ -119,6 +129,9 @@ class FakeXPWidget:
             if widget_class == self.fake_xp.WidgetClass_TextField:
                 info.edit_buffer = descriptor
 
+            # Optionally: bind the widget root back onto the window
+            window_info.set_widget_root(info.wid)
+
             return info.wid
 
         # ---------------------------------------------------------
@@ -131,7 +144,6 @@ class FakeXPWidget:
         parent_info = self.wm.require_info(parent_wid)
         window_info = parent_info.window
 
-        # Use helper
         info = self.wm.create_widget(
             widget_class=widget_class,
             window=window_info,
@@ -141,7 +153,6 @@ class FakeXPWidget:
             visible=visible_bool,
         )
 
-        # TextField edit buffer
         if widget_class == self.fake_xp.WidgetClass_TextField:
             info.edit_buffer = descriptor
 

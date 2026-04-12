@@ -6,20 +6,10 @@ from dataclasses import dataclass, field
 from enum import auto, StrEnum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from PythonPlugins.sshd_extensions.dataref_manager import DRefType
 from XPPython3.xp_typing import (
     XPLMCursorStatus, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer,
     XPWidgetClass, XPWidgetID, XPWidgetPropertyID
 )
-
-# XPLM data type bitmask constants
-Type_Unknown = 0
-Type_Int = 1
-Type_Float = 2
-Type_Double = 4
-Type_FloatArray = 8
-Type_IntArray = 16
-Type_Data = 32
 
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
 
@@ -90,11 +80,11 @@ class FakeDataRef:
         size are unknown and must not be inferred.
     """
     path: str
-    type: DRefType
+    type: int
     writable: bool
     size: int
     value: Any
-    is_array: bool | None = None
+    is_array: bool = False
     type_known: bool = False
     shape_known: bool = False
 
@@ -430,7 +420,7 @@ class WindowExInfo:
     # Dirty flags
     _dirty_xp_to_dpg: bool = True      # XP window state changed
     _dirty_dpg_to_xp: bool = False     # DPG window state changed
-    _dirty_widgets: bool = True        # Widget tree changed (requires _render_widgets)
+    _dirty_widgets: bool = False       # Widget tree changed (requires _render_widgets)
 
     # Widget tree root
     _widget_root: Optional[XPWidgetID] = None
