@@ -145,7 +145,7 @@ class DataRefViewer:
     ) -> int:
         # TextField commits are event-driven
         if msg == self.fake_xp.Msg_TextFieldChanged and widget == self.filter_field:
-            self._filter_text = str(p1)
+            self._filter_text = str(p2)
             return 1
 
         # Button presses are delivered to the parent window
