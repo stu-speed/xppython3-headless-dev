@@ -115,19 +115,6 @@ class PythonInterface:
             xp.WidgetClass_MainWindow,
         )
 
-        xp.setWidgetProperty(self.win, xp.Property_MainWindowHasCloseBoxes, 1)
-
-        # Close box handler
-        def window_handler(msg, widget, p1, p2):
-            if msg == xp.Message_CloseButtonPushed:
-                xp.hideWidget(self.win)
-                self._window_visible = False
-                xp.setMenuItemName(self.menu_id, self.menu_item_index, "Show Window")
-                return 1
-            return 0
-
-        xp.addWidgetCallback(self.win, window_handler)
-
     def _create_oat_controls(self):
         xp.createWidget(
             60, 670,

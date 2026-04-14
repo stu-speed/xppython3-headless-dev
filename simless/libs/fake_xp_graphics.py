@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 class FakeXPGraphics:
     @property
     def fake_xp(self) -> FakeXP:
-        return cast("FakeXP", cast(object, self))
+        return cast(FakeXP, cast(object, self))
 
     @property
     def gm(self) -> GraphicsManager:
@@ -91,6 +91,7 @@ class FakeXPGraphics:
         rightClick: Optional[
             Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
         ] = None,
+        _descriptor: Optional[str] = None,
     ) -> XPLMWindowID:
         if decoration is None:
             decoration = self.fake_xp.WindowDecorationRoundRectangle
@@ -125,7 +126,7 @@ class FakeXPGraphics:
             args=(),
             kwargs=dict(
                 tag=info.dpg_tag,
-                label=f"XPLMWindowEx {info.wid}",
+                label="" if _descriptor is None else _descriptor,
                 pos=(dpg_geom.x, dpg_geom.y),
                 width=dpg_geom.width,
                 height=dpg_geom.height,
@@ -628,3 +629,22 @@ class FakeXPGraphics:
             args=(tag,),
             kwargs={},
         )
+
+    def destroyMenu(self, menu_id: XPLMMenuID) -> None:
+        menu = self.gm.get_menu(menu_id)
+        if menu is None:
+            return
+
+        # 1. Remove all menu items from DPG
+        for item in menu["items"]:
+            dpg_tag = item.get("dpg_tag")
+            if dpg_tag:
+                self.gm.enqueue_dpg(DPGOp.DELETE_ITEM, kwargs=dict(tag=dpg_tag))
+
+        # 2. Remove the menu container itself
+        dpg_tag = menu.get("dpg_tag")
+        if dpg_tag:
+            self.gm.enqueue_dpg(DPGOp.DELETE_ITEM, kwargs=dict(tag=dpg_tag))
+
+        # 3. Remove from authoritative model
+        self.gm.destroy_menu_model(menu_id)

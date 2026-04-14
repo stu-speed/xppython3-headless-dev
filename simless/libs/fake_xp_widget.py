@@ -52,7 +52,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast, Optional, TYPE_CHECKING
+from typing import Any, cast, Literal, Optional, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import WGeom, XPWidgetCallback
 from simless.libs.widget import WidgetManager
@@ -79,9 +79,9 @@ class FakeXPWidget:
         bottom: int,
         visible: int,
         descriptor: str,
-        is_root: int,
-        parent: int,
-        widget_class: XPWidgetClass,
+        isRoot: int,
+        container: XPWidgetID | Literal[0],
+        widgetClass: XPWidgetClass,
     ) -> XPWidgetID:
 
         geom = WGeom(left, top, right, bottom)
@@ -90,9 +90,9 @@ class FakeXPWidget:
         # ---------------------------------------------------------
         # ROOT WIDGET
         # ---------------------------------------------------------
-        if is_root:
-            if parent != 0:
-                raise ValueError(f"Root widget must have parent=0 (got parent={parent})")
+        if isRoot:
+            if container != 0:
+                raise ValueError(f"Root widget must have container=0 (got {container})")
 
             # 1) Create the XPLM-style window via the public API
             win_id = self.fake_xp.createWindowEx(
@@ -110,6 +110,7 @@ class FakeXPWidget:
                 decoration=self.fake_xp.WindowDecorationRoundRectangle,
                 layer=self.fake_xp.WindowLayerFloatingWindows,
                 rightClick=None,
+                _descriptor=descriptor,
             )
 
             # 2) Look up the WindowExInfo we just registered
@@ -117,7 +118,7 @@ class FakeXPWidget:
 
             # 3) Create the root widget bound to this window
             info = self.wm.create_widget(
-                widget_class=widget_class,
+                widget_class=widgetClass,
                 window=window_info,
                 geometry=geom,
                 parent=None,
@@ -126,10 +127,10 @@ class FakeXPWidget:
             )
 
             # TextField edit buffer
-            if widget_class == self.fake_xp.WidgetClass_TextField:
+            if widgetClass == self.fake_xp.WidgetClass_TextField:
                 info.edit_buffer = descriptor
 
-            # Optionally: bind the widget root back onto the window
+            # Bind widget root to window
             window_info.set_widget_root(info.wid)
 
             return info.wid
@@ -137,15 +138,15 @@ class FakeXPWidget:
         # ---------------------------------------------------------
         # NON-ROOT WIDGET
         # ---------------------------------------------------------
-        if parent == 0:
-            raise ValueError("Non-root widget cannot have parent=0")
+        if container == 0:
+            raise ValueError("Non-root widget cannot have container=0")
 
-        parent_wid = XPWidgetID(parent)
+        parent_wid = XPWidgetID(container)
         parent_info = self.wm.require_info(parent_wid)
         window_info = parent_info.window
 
         info = self.wm.create_widget(
-            widget_class=widget_class,
+            widget_class=widgetClass,
             window=window_info,
             geometry=geom,
             parent=parent_wid,
@@ -153,7 +154,7 @@ class FakeXPWidget:
             visible=visible_bool,
         )
 
-        if widget_class == self.fake_xp.WidgetClass_TextField:
+        if widgetClass == self.fake_xp.WidgetClass_TextField:
             info.edit_buffer = descriptor
 
         return info.wid
@@ -264,27 +265,10 @@ class FakeXPWidget:
         param2: Any,
     ) -> None:
         """
-        XPWidgets API: send a message to a widget, bubbling up the parent chain
-        until a callback returns non-zero or the root is reached.
+        XPWidgets API: send a message to a widget.
+        Dispatching is handled entirely by the widget manager.
         """
-
-        info = self.wm.require_info(wid)
-
-        # 1. Deliver to this widget
-        for cb in info.callbacks:
-            try:
-                result = cb(msg, wid, param1, param2)
-            except Exception:
-                result = 0
-
-            if result:
-                return None
-
-        # 2. Bubble to parent
-        if info.parent is not None:
-            return self.sendMessageToWidget(info.parent, msg, param1, param2)
-
-        return None
+        self.wm.dispatch_message(wid, msg, param1, param2)
 
     def broadcastMessageToWidget(
         self,
@@ -294,35 +278,24 @@ class FakeXPWidget:
         param2: Any,
     ) -> None:
         """
-        XPWidgets API: broadcast a message to a widget and its descendants.
-        Propagation stops when a callback returns non-zero.
+        XPWidgets API: broadcast a message to a widget and all descendants.
+        Each widget receives a full dispatch cycle (plugin → parent.plugin → default).
         """
+
         visited: set[XPWidgetID] = set()
 
-        def _broadcast(current: XPWidgetID) -> bool:
+        def _broadcast(current: XPWidgetID):
             if current in visited:
-                return False
+                return
             visited.add(current)
 
+            # Dispatch to this widget
+            self.wm.dispatch_message(current, msg, param1, param2)
+
+            # Recurse into children
             info = self.wm.require_info(current)
-
-            # Deliver to this widget first
-            for cb in info.callbacks:
-                try:
-                    result = cb(current, msg, param1, param2)
-                except Exception:
-                    result = 0
-
-                if result:
-                    info.window._dirty_xp_to_dpg = True
-                    return True
-
-            # Then deliver to children
             for child in info.children:
-                if _broadcast(child):
-                    return True
-
-            return False
+                _broadcast(child)
 
         _broadcast(wid)
 

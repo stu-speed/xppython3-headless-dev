@@ -143,10 +143,6 @@ class DataRefViewer:
         p1: Any,
         p2: Any,
     ) -> int:
-        if msg == self.fake_xp.Message_CloseButtonPushed and widget == self.win:
-            self.fake_xp.hideWidget(self.win)
-            return 1
-
         # TextField commits are event-driven
         if msg == self.fake_xp.Msg_TextFieldChanged and widget == self.filter_field:
             self._filter_text = str(p1)

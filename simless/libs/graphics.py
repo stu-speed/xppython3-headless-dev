@@ -290,6 +290,23 @@ class GraphicsManager(GraphicsDpg):
     def get_menu_handler(self, menu_id: XPLMMenuID) -> Optional[Callable]:
         return self._menu_callbacks.get(menu_id)
 
+    def destroy_menu_model(self, menu_id: XPLMMenuID) -> None:
+        """
+        Remove a menu from the authoritative model.
+        XP semantics:
+          • Destroying a non-existent menu is a no-op.
+          • All items and callbacks must be removed.
+        """
+        # XP: destroying an unknown menu is allowed (no-op)
+        if menu_id not in self._menus:
+            return
+
+        # Remove menu entry
+        del self._menus[menu_id]
+
+        # Remove handler if present
+        self._menu_callbacks.pop(menu_id, None)
+
     # ----------------------------------------------------------------------
     # DPG INITIALIZATION
     # ----------------------------------------------------------------------
