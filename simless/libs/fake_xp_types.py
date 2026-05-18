@@ -7,8 +7,14 @@ from enum import auto, StrEnum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from XPPython3.xp_typing import (
-    XPLMCursorStatus, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer,
-    XPWidgetClass, XPWidgetID, XPWidgetPropertyID
+    XPLMCursorStatus,
+    XPLMMouseStatus,
+    XPLMWindowDecoration,
+    XPLMWindowID,
+    XPLMWindowLayer,
+    XPWidgetClass,
+    XPWidgetID,
+    XPWidgetPropertyID,
 )
 
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
@@ -16,6 +22,7 @@ XPWidgetCallback = Callable[[int, int, Any, Any], int]
 
 class XPShutdown(Exception):
     """Raised when DearPyGui is no longer running (viewport closed)."""
+
     pass
 
 
@@ -79,6 +86,7 @@ class FakeDataRef:
         from a real provider value (UPDATE). When False, scalar vs array and
         size are unknown and must not be inferred.
     """
+
     path: str
     type: int
     writable: bool
@@ -90,42 +98,27 @@ class FakeDataRef:
 
     @property
     def is_dummy(self) -> bool:
+        """Return True if this DataRef does not yet have authoritative type and shape."""
         return not self.type_known or not self.shape_known
 
 
+# ---------------------------------------------------------------------------
+# Strongly-typed coordinate spaces
+# ---------------------------------------------------------------------------
+
 @dataclass(slots=True)
-class WGeom:
+class XPPoint:
     """
-    XPWidget geometry in window-local coordinates.
+    XP-global point in XPGraphics coordinate space.
 
     Coordinate system:
-        • Origin: (0, 0) at the top-left of the window's client area
+        • Origin: bottom-left of the X-Plane screen
         • X increases to the right
-        • Y increases downward
-        • Geometry is stored as (left, top, right, bottom)
-
-    Width  = right  - left
-    Height = bottom - top
+        • Y increases upward
     """
 
-    left: int
-    top: int
-    right: int
-    bottom: int
-
-    @property
-    def width(self) -> int:
-        return max(0, self.right - self.left)
-
-    @property
-    def height(self) -> int:
-        return max(0, self.bottom - self.top)
-
-    def as_tuple(self) -> tuple[int, int, int, int]:
-        return self.left, self.top, self.right, self.bottom
-
-    def contains(self, x: int, y: int) -> bool:
-        return (self.left <= x <= self.right) and (self.top <= y <= self.bottom)
+    x: int
+    y: int
 
 
 @dataclass(slots=True)
@@ -140,7 +133,7 @@ class WidgetInfo:
     window: "WindowExInfo"
 
     # Authoritative XP geometry
-    _geometry: WGeom
+    _geometry: XPGeom
 
     # Hierarchy
     parent: Optional[XPWidgetID] = None
@@ -148,7 +141,7 @@ class WidgetInfo:
 
     # XPWidget state
     _descriptor: str = ""
-    _last_descriptor: str = "<<NONE>>"   # updated only by DPG sync
+    _last_descriptor: str = "<<NONE>>"  # updated only by DPG sync
     _visible: bool = True
 
     # Backend handles
@@ -157,10 +150,10 @@ class WidgetInfo:
 
     # DPG geometry state
     geom_applied: bool = False
-    container_geom_applied: Optional[DPGGeom] = None
+    container_geom_applied: Optional["DPGGeom"] = None
 
     # XPWidget properties and callbacks
-    _properties: Dict[XPWidgetPropertyID|int, Any] = field(default_factory=dict)
+    _properties: Dict[XPWidgetPropertyID | int, Any] = field(default_factory=dict)
     _callbacks: List[XPWidgetCallback] = field(default_factory=list)
 
     # Interaction state
@@ -171,11 +164,13 @@ class WidgetInfo:
     # ------------------------------------------------------------
 
     @property
-    def geometry(self) -> WGeom:
+    def geometry(self) -> XPGeom:
+        """Return the authoritative widget geometry."""
         return self._geometry
 
     @geometry.setter
-    def geometry(self, value: WGeom):
+    def geometry(self, value: XPGeom) -> None:
+        """Set widget geometry and mark the owning window as dirty."""
         self._geometry = value
         self.geom_applied = False
         self.container_geom_applied = None
@@ -183,47 +178,59 @@ class WidgetInfo:
 
     @property
     def descriptor(self) -> str:
+        """Return the current widget descriptor string."""
         return self._descriptor
 
-    def set_descriptor(self, value: str):
+    def set_descriptor(self, value: str) -> None:
+        """Set the widget descriptor and mark the owning window as dirty."""
         self._descriptor = value
         self.window._dirty_widgets = True
 
     @property
     def visible(self) -> bool:
+        """Return True if the widget is visible."""
         return self._visible
 
-    def set_visible(self, value: bool):
+    def set_visible(self, value: bool) -> None:
+        """Set widget visibility and mark the owning window as dirty."""
         self._visible = value
         self.window._dirty_widgets = True
 
     @property
-    def properties(self) -> Dict[XPWidgetPropertyID|int, Any]:
+    def properties(self) -> Dict[XPWidgetPropertyID | int, Any]:
+        """Return the widget property dictionary."""
         return self._properties
 
-    def set_property(self, prop: XPWidgetPropertyID, value: Any):
+    def set_property(self, prop: XPWidgetPropertyID, value: Any) -> None:
+        """Set a widget property and mark the owning window as dirty."""
         self._properties[prop] = value
         self.window._dirty_widgets = True
 
     @property
     def callbacks(self) -> List[XPWidgetCallback]:
+        """Return the list of registered widget callbacks."""
         return self._callbacks
 
-    def add_callback(self, cb: XPWidgetCallback):
+    def add_callback(self, cb: XPWidgetCallback) -> None:
+        """Register a new widget callback."""
         self._callbacks.append(cb)
 
-    def remove_callback(self, cb: XPWidgetCallback):
+    def remove_callback(self, cb: XPWidgetCallback) -> None:
+        """Unregister an existing widget callback."""
         self._callbacks.remove(cb)
 
     @property
     def children(self) -> List[XPWidgetID]:
+        """Return the list of child widget IDs."""
         return self._children
 
-    def add_child(self, child_id: XPWidgetID):
+    def add_child(self, child_id: XPWidgetID) -> None:
+        """Add a child widget and mark the owning window as dirty."""
         self._children.append(child_id)
         self.window._dirty_widgets = True
 
-    def remove_child(self, child_id: XPWidgetID):
+    def remove_child(self, child_id: XPWidgetID) -> None:
+        """Remove a child widget and mark the owning window as dirty."""
         if child_id in self._children:
             self._children.remove(child_id)
             self.window._dirty_widgets = True
@@ -234,27 +241,49 @@ class WidgetInfo:
 
     @property
     def left(self) -> int:
+        """Return the left edge of the widget geometry."""
         return self._geometry.left
 
     @property
     def top(self) -> int:
+        """Return the top edge of the widget geometry."""
         return self._geometry.top
 
     @property
     def right(self) -> int:
+        """Return the right edge of the widget geometry."""
         return self._geometry.right
 
     @property
     def bottom(self) -> int:
+        """Return the bottom edge of the widget geometry."""
         return self._geometry.bottom
 
     @property
     def width(self) -> int:
+        """Return the non-negative width of the widget."""
         return max(0, self.right - self.left)
 
     @property
     def height(self) -> int:
+        """Return the non-negative height of the widget."""
         return max(0, self.bottom - self.top)
+
+    # ------------------------------------------------------------
+    # HIT‑TEST HELPERS (strongly typed)
+    # ------------------------------------------------------------
+
+    def contains(self, xp_pt: XPPoint) -> bool:
+        """
+        Hit-test this widget using XP-global coordinates.
+
+        Performs the full transform:
+            XPPoint → WindowPoint → ClientPoint → widget-local
+
+        Returns:
+            True if the XP-global point lies inside this widget.
+        """
+        return self._geometry.contains(xp_pt)
 
 
 @dataclass(slots=True)
@@ -290,36 +319,69 @@ class XPGeom:
 
     @property
     def width(self) -> int:
+        """Return the width of the XP rectangle."""
         return self.right - self.left
 
     @property
     def height(self) -> int:
+        """Return the height of the XP rectangle."""
         return self.top - self.bottom
 
+    def __repr__(self):
+        return (
+            f"XPGeom("
+            f"L={self.left}, T={self.top}, "
+            f"R={self.right}, B={self.bottom}, "
+            f"W={self.width}, H={self.height})"
+        )
+
     def as_tuple(self) -> tuple[int, int, int, int]:
+        """Return geometry as (left, top, right, bottom)."""
         return self.left, self.top, self.right, self.bottom
 
     # ------------------------------------------------------------
     # XP → DPG transform (XPGraphics → DPG client-space)
     # ------------------------------------------------------------
     def to_dpg(self, screen_h: int) -> "DPGGeom":
+        """
+        Convert XPGraphics coordinates to DearPyGui client-space.
+
+        Args:
+            screen_h: Height of the DPG client area in pixels.
+
+        Returns:
+            DPGGeom representing the same rectangle in DPG coordinates.
+        """
         dpg_x = self.left
-        dpg_y = screen_h - self.top   # top-aligned transform
+        dpg_y = screen_h - self.top  # top-aligned transform
         return DPGGeom(dpg_x, dpg_y, self.width, self.height)
 
     # ------------------------------------------------------------
     # DPG → XP transform (DPG client-space → XPGraphics)
     # ------------------------------------------------------------
     @classmethod
-    def from_dpg(cls, dpg: "DPGGeom", screen_h: int) -> "XPGeom":
+    def from_dpg(cls, dpg: DPGGeom, screen_h: int) -> XPGeom:
+        """
+        Convert DearPyGui client-space geometry to XPGraphics coordinates.
+
+        Args:
+            dpg:      DPGGeom rectangle.
+            screen_h: Height of the DPG client area in pixels.
+
+        Returns:
+            XPGeom representing the same rectangle in XPGraphics coordinates.
+        """
         left = dpg.x
         top = screen_h - dpg.y
         right = left + dpg.width
         bottom = top - dpg.height
         return cls(left, top, right, bottom)
 
-    def contains(self, xp_x: int, xp_y: int) -> bool:
-        return (self.left <= xp_x <= self.right) and (self.bottom <= xp_y <= self.top)
+    def contains(self, pt: XPPoint) -> bool:
+        """
+        Test whether an XP-global point lies inside this XP rectangle.
+        """
+        return (self.left <= pt.x <= self.right) and (self.bottom <= pt.y <= self.top)
 
 
 @dataclass(slots=True)
@@ -357,13 +419,30 @@ class DPGGeom:
     width: int
     height: int
 
+    def __repr__(self):
+        return (
+            f"DPGGeom("
+            f"({self.x},{self.y}), "
+            f"W={self.width}, H={self.height})"
+        )
+
     def as_tuple(self) -> tuple[int, int, int, int]:
+        """Return geometry as (x, y, width, height)."""
         return self.x, self.y, self.width, self.height
 
     # ------------------------------------------------------------
     # DPG → XP transform (DPG client-space → XPGraphics)
     # ------------------------------------------------------------
     def to_xp(self, screen_h: int) -> XPGeom:
+        """
+        Convert DearPyGui client-space geometry to XPGraphics coordinates.
+
+        Args:
+            screen_h: Height of the DPG client area in pixels.
+
+        Returns:
+            XPGeom representing the same rectangle in XPGraphics coordinates.
+        """
         left = self.x
         top = screen_h - self.y
         right = left + self.width
@@ -375,12 +454,28 @@ class DPGGeom:
     # ------------------------------------------------------------
     @classmethod
     def from_xp(cls, xp: XPGeom, screen_h: int) -> "DPGGeom":
+        """
+        Convert XPGraphics geometry to DearPyGui client-space.
+
+        Args:
+            xp:       XPGeom rectangle.
+            screen_h: Height of the DPG client area in pixels.
+
+        Returns:
+            DPGGeom representing the same rectangle in DPG coordinates.
+        """
         return xp.to_dpg(screen_h)
 
 
 @dataclass(slots=True)
 class WindowExInfo:
     """Authoritative XP-side model of a WindowEx window."""
+
+    TITLE_BAR_HEIGHT = 22
+    BORDER_LEFT = 4
+    BORDER_RIGHT = 4
+    BORDER_BOTTOM = 4
+    CLOSE_BOX_SIZE = 14
 
     # XP identity
     wid: XPLMWindowID | int
@@ -402,15 +497,9 @@ class WindowExInfo:
     right_click_cb: Optional[
         Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
     ]
-    key_cb: Optional[
-        Callable[[XPLMWindowID, int, int, int, Any, int], int]
-    ]
-    cursor_cb: Optional[
-        Callable[[XPLMWindowID, int, int, Any], XPLMCursorStatus]
-    ]
-    wheel_cb: Optional[
-        Callable[[XPLMWindowID, int, int, int, int, Any], int]
-    ]
+    key_cb: Optional[Callable[[XPLMWindowID, int, int, int, Any, int], int]]
+    cursor_cb: Optional[Callable[[XPLMWindowID, int, int, Any], XPLMCursorStatus]]
+    wheel_cb: Optional[Callable[[XPLMWindowID, int, int, int, int, Any], int]]
     refcon: Any
 
     # Backend (DPG) — created lazily
@@ -418,9 +507,9 @@ class WindowExInfo:
     _drawlist_id: Optional[str] = None
 
     # Dirty flags
-    _dirty_xp_to_dpg: bool = True      # XP window state changed
-    _dirty_dpg_to_xp: bool = False     # DPG window state changed
-    _dirty_widgets: bool = False       # Widget tree changed (requires _render_widgets)
+    _dirty_xp_to_dpg: bool = True  # XP window state changed
+    _dirty_dpg_to_xp: bool = False  # DPG window state changed
+    _dirty_widgets: bool = False  # Widget tree changed (requires _render_widgets)
 
     # Widget tree root
     _widget_root: Optional[XPWidgetID] = None
@@ -429,24 +518,31 @@ class WindowExInfo:
     _z_order: list[XPWidgetID] = field(default_factory=list)
     _focused_widget: Optional[XPWidgetID] = None
 
+    # Optional back-reference to a window manager providing decoration metrics
+    window_manager: Any = None
+
     # ------------------------------------------------------------
     # PUBLIC READ-ONLY GEOMETRY
     # ------------------------------------------------------------
 
     @property
     def frame(self) -> XPGeom:
+        """Return the authoritative XP-global frame rectangle."""
         return self._frame
 
     @property
     def client(self) -> XPGeom:
+        """Return the authoritative XP-global client rectangle."""
         return self._client
 
     @property
     def dpg_tag(self) -> Optional[str]:
+        """Return the DearPyGui window tag, if created."""
         return self._dpg_window_id
 
     @property
     def drawlist_tag(self) -> Optional[str]:
+        """Return the DearPyGui drawlist tag, if created."""
         return self._drawlist_id
 
     # ------------------------------------------------------------
@@ -454,10 +550,12 @@ class WindowExInfo:
     # ------------------------------------------------------------
 
     def set_frame_from_xp(self, geom: XPGeom) -> None:
+        """Set the frame rectangle from XPGraphics coordinates."""
         self._frame = geom
         self._dirty_xp_to_dpg = True
 
     def set_client_from_xp(self, geom: XPGeom) -> None:
+        """Set the client rectangle from XPGraphics coordinates."""
         self._client = geom
         self._dirty_xp_to_dpg = True
 
@@ -466,10 +564,12 @@ class WindowExInfo:
     # ------------------------------------------------------------
 
     def set_frame_from_dpg(self, geom: DPGGeom, client_h: int) -> None:
+        """Set the frame rectangle from DearPyGui client-space geometry."""
         self._frame = geom.to_xp(client_h)
         self._dirty_dpg_to_xp = True
 
     def set_client_from_dpg(self, geom: DPGGeom, client_h: int) -> None:
+        """Set the client rectangle from DearPyGui client-space geometry."""
         self._client = geom.to_xp(client_h)
         self._dirty_dpg_to_xp = True
 
@@ -479,28 +579,34 @@ class WindowExInfo:
 
     @property
     def visible(self) -> bool:
+        """Return True if the window is visible."""
         return self._visible
 
     @visible.setter
-    def visible(self, value: bool):
+    def visible(self, value: bool) -> None:
+        """Set window visibility and mark geometry as dirty."""
         self._visible = value
         self._dirty_xp_to_dpg = True
 
     @property
     def decoration(self) -> XPLMWindowDecoration:
+        """Return the current window decoration."""
         return self._decoration
 
     @decoration.setter
-    def decoration(self, value: XPLMWindowDecoration):
+    def decoration(self, value: XPLMWindowDecoration) -> None:
+        """Set window decoration and mark geometry as dirty."""
         self._decoration = value
         self._dirty_xp_to_dpg = True
 
     @property
     def layer(self) -> XPLMWindowLayer | int:
+        """Return the current window layer."""
         return self._layer
 
     @layer.setter
-    def layer(self, value: XPLMWindowLayer | int):
+    def layer(self, value: XPLMWindowLayer | int) -> None:
+        """Set window layer and mark geometry as dirty."""
         self._layer = value
         self._dirty_xp_to_dpg = True
 
@@ -510,9 +616,11 @@ class WindowExInfo:
 
     @property
     def widget_root(self) -> Optional[XPWidgetID]:
+        """Return the root widget ID for this window, if any."""
         return self._widget_root
 
     def set_widget_root(self, wid: Optional[XPWidgetID]) -> None:
+        """Set the root widget ID and mark widgets as dirty."""
         self._widget_root = wid
         self._dirty_widgets = True
 
@@ -521,14 +629,17 @@ class WindowExInfo:
     # ------------------------------------------------------------
 
     @property
-    def z_order(self) -> list[XPWidgetID]:
+    def widget_z_order(self) -> list[XPWidgetID]:
+        """Return the z-order list of widgets for this window."""
         return self._z_order
 
-    def add_to_z_order(self, wid: XPWidgetID) -> None:
+    def add_to_widget_z_order(self, wid: XPWidgetID) -> None:
+        """Append a widget to the z-order and mark widgets as dirty."""
         self._z_order.append(wid)
         self._dirty_widgets = True
 
-    def remove_from_z_order(self, wid: XPWidgetID) -> None:
+    def remove_from_widget_z_order(self, wid: XPWidgetID) -> None:
+        """Remove a widget from the z-order and clear focus if needed."""
         if wid in self._z_order:
             self._z_order.remove(wid)
             self._dirty_widgets = True
@@ -537,12 +648,14 @@ class WindowExInfo:
             self._focused_widget = None
 
     def raise_widget(self, wid: XPWidgetID) -> None:
+        """Bring a widget to the front of the z-order."""
         if wid in self._z_order:
             self._z_order.remove(wid)
             self._z_order.append(wid)
             self._dirty_widgets = True
 
     def lower_widget(self, wid: XPWidgetID) -> None:
+        """Send a widget to the back of the z-order."""
         if wid in self._z_order:
             self._z_order.remove(wid)
             self._z_order.insert(0, wid)
@@ -554,13 +667,16 @@ class WindowExInfo:
 
     @property
     def focused_widget(self) -> Optional[XPWidgetID]:
+        """Return the currently focused widget ID, if any."""
         return self._focused_widget
 
     def set_focused_widget(self, wid: Optional[XPWidgetID]) -> None:
+        """Set the focused widget ID and mark widgets as dirty."""
         self._focused_widget = wid
         self._dirty_widgets = True
 
     def clear_widget_focus(self) -> None:
+        """Clear widget focus and mark widgets as dirty."""
         self._focused_widget = None
         self._dirty_widgets = True
 
@@ -587,12 +703,8 @@ class EventInfo:
 
     # ------------------------------------------------------------------
     # XP screen-space coordinates (authoritative)
-    #
-    # Origin: bottom-left
-    # Y increases upward
     # ------------------------------------------------------------------
-    xp_x: Optional[int] = None
-    xp_y: Optional[int] = None
+    xp_pt: Optional[XPPoint] = None
 
     # ------------------------------------------------------------------
     # Mouse button
@@ -627,12 +739,11 @@ class EventInfo:
         cls,
         *,
         kind: EventKind,
-        xp_x: Optional[int] = None,
-        xp_y: Optional[int] = None,
-        **kwargs,
+        xp_pt: Optional[XPPoint] = None,
+        **kwargs: Any,
     ) -> "EventInfo":
         """Create an EventInfo with explicit XP coordinates."""
-        return cls(kind=kind, xp_x=xp_x, xp_y=xp_y, **kwargs)
+        return cls(kind=kind, xp_pt=xp_pt, **kwargs)
 
     @classmethod
     def from_dpg(
@@ -642,7 +753,7 @@ class EventInfo:
         dpg_x: int,
         dpg_y: int,
         dpg_vp_height: int,
-        **kwargs,
+        **kwargs: Any,
     ) -> "EventInfo":
         """Create an EventInfo from DearPyGui coordinates.
 
@@ -650,8 +761,7 @@ class EventInfo:
         """
         return cls(
             kind=kind,
-            xp_x=int(dpg_x),
-            xp_y=int(dpg_vp_height - dpg_y),
+            xp_pt=XPPoint(int(dpg_x),int(dpg_vp_height - dpg_y)),
             **kwargs,
         )
 

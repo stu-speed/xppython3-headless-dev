@@ -291,7 +291,8 @@ class WidgetRender:
 
     def _apply_geometry_if_needed(self, wid: XPWidgetID) -> None:
         """
-        Apply XP → DPG geometry for this widget if needed.
+        Apply XP → DPG geometry for this widget if needed.  Child widgets are not anchored to
+        the root so must be repositioned if root moves.
 
         Preconditions:
           - Widget must already be structurally realized (container_id or dpg_id exists)
@@ -304,57 +305,22 @@ class WidgetRender:
         if info.container_id is None and info.dpg_id is None:
             return
 
-        # XP geometry (WGeom object, top-origin)
-        g = info.geometry
-        left = g.left
-        top = g.top
-        right = g.right
-        bottom = g.bottom
-
-        width = right - left
-        height = top - bottom
-
-        # ============================================================
-        # ROOT WIDGETS → configure the DPG window
-        # ============================================================
+        # Window manager handles root widget windows
         if info.window.widget_root == wid:
-
-            if info.dpg_id is None:
-                raise RuntimeError(
-                    f"_apply_geometry_if_needed: root widget wid={wid} has no dpg_id"
-                )
-
-            # Convert XP top-origin → DPG bottom-origin
-            dpg_x = left
-            dpg_y = top - height
-
-            desired = DPGGeom(dpg_x, dpg_y, width, height)
-
-            if info.container_geom_applied != desired:
-                self.mgr.gm.enqueue_dpg(
-                    op=DPGOp.CONFIGURE_ITEM,
-                    args=(info.dpg_id,),
-                    kwargs=dict(
-                        pos=(dpg_x, dpg_y),
-                        width=width,
-                        height=height,
-                    ),
-                )
-                info.container_geom_applied = desired
-
             return
 
         # ============================================================
         # CONTROLS → configure their child_window container
         # ============================================================
-        parent_info = self.mgr.require_info(info.parent)
-        pg = parent_info.geometry
+        geom = info.geometry
+        p_info = self.mgr.require_info(info.parent)
+        p_geom = p_info.geometry
 
-        # XP local coordinates (parent-relative)
-        lx = left - pg.left
-        ly = pg.top - top
+        # XP local coordinates (within parent drawlist)
+        lx = geom.left - p_geom.left
+        ly = p_geom.top - geom.top
 
-        desired = DPGGeom(lx, ly, width, height)
+        desired = DPGGeom(lx, ly, geom.width, geom.height)
 
         if info.container_geom_applied != desired:
             self.mgr.gm.enqueue_dpg(
@@ -362,8 +328,8 @@ class WidgetRender:
                 args=(info.container_id,),
                 kwargs=dict(
                     pos=(lx, ly),
-                    width=width,
-                    height=height,
+                    width=geom.width,
+                    height=geom.height,
                 ),
             )
             info.container_geom_applied = desired

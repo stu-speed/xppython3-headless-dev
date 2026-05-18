@@ -4,6 +4,7 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 
 import dearpygui.dearpygui as dpg
 
+from simless.libs.fake_xp_types import XPGeom
 from simless.libs.fake_xp_types import (
     DPGCommand, DPGGeom, DPGOp, WindowExInfo
 )
@@ -88,6 +89,76 @@ class GraphicsDpg:
                 kwargs=kwargs,
             )
         )
+
+    def compute_window_decorations(self, dpg_window_id: str) -> dict[str, Any]:
+        """
+        Compute XPWidget-style decoration metrics from a DPG window
+        using only APIs available in this version of DearPyGui.
+
+        Returns:
+            {
+                "title_bar": int,
+                "border_left": int,
+                "border_right": int,
+                "border_bottom": int,
+                "client_rect": XPGeom,
+                "frame_rect": XPGeom,
+            }
+        """
+
+        screen_h = self.dpg_get_viewport_client_height()
+
+        # ------------------------------------------------------------
+        # 1. FRAME RECT (outer window)
+        # ------------------------------------------------------------
+        fmin_x, fmin_y = dpg.get_item_rect_min(dpg_window_id)
+        fmax_x, fmax_y = dpg.get_item_rect_max(dpg_window_id)
+
+        frame = XPGeom(
+            left=fmin_x,
+            top=screen_h - fmin_y,
+            right=fmax_x,
+            bottom=screen_h - fmax_y,
+        )
+
+        # ------------------------------------------------------------
+        # 2. CLIENT RECT (inner drawlist)
+        #
+        # In your architecture, every WindowEx has:
+        #   - a DPG window (frame)
+        #   - a DPG drawlist inside it (client)
+        #
+        # The drawlist tag is stored in WindowExInfo.drawlist_tag.
+        # ------------------------------------------------------------
+        win_info = self.fake_xp.window_manager.require_info_by_dpg_id(dpg_window_id)
+        dl_id = win_info.drawlist_tag
+
+        dl_min_x, dl_min_y = dpg.get_item_rect_min(dl_id)
+        dl_max_x, dl_max_y = dpg.get_item_rect_max(dl_id)
+
+        client = XPGeom(
+            left=dl_min_x,
+            top=screen_h - dl_min_y,
+            right=dl_max_x,
+            bottom=screen_h - dl_max_y,
+        )
+
+        # ------------------------------------------------------------
+        # 3. DECORATION METRICS
+        # ------------------------------------------------------------
+        border_left = client.left - frame.left
+        border_right = frame.right - client.right
+        border_bottom = client.bottom - frame.bottom
+        title_bar = frame.top - client.top
+
+        return {
+            "title_bar": title_bar,
+            "border_left": border_left,
+            "border_right": border_right,
+            "border_bottom": border_bottom,
+            "client_rect": client,
+            "frame_rect": frame,
+        }
 
     # ----------------------------------------------------------------------
     # INTERNAL HELPERS

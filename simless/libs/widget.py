@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, Optional, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import DPGGeom, DPGOp, WGeom, WidgetInfo, WindowExInfo
+from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo, XPPoint, XPGeom
 from simless.libs.widget_render import WidgetRender
 from XPPython3.xp_typing import XPWidgetClass, XPWidgetID
 
@@ -57,7 +57,7 @@ class WidgetManager(WidgetRender):
         *,
         widget_class: XPWidgetClass,
         window: WindowExInfo,
-        geometry: WGeom,
+        geometry: XPGeom,
         parent: Optional[XPWidgetID] = None,
         descriptor: str = "",
         visible: bool = True,
@@ -87,7 +87,7 @@ class WidgetManager(WidgetRender):
             window.set_widget_root(wid)
 
         # Add to z-order (dirties window internally)
-        window.add_to_z_order(wid)
+        window.add_to_widget_z_order(wid)
 
         return info
 
@@ -126,7 +126,7 @@ class WidgetManager(WidgetRender):
             window.set_widget_root(None)
 
         # Remove from z-order (dirties window internally)
-        window.remove_from_z_order(wid)
+        window.remove_from_widget_z_order(wid)
 
         # Clear focus if needed (dirties window internally)
         if window.focused_widget == wid:
@@ -169,13 +169,13 @@ class WidgetManager(WidgetRender):
     def get_focused_widget(self, window: WindowExInfo) -> Optional[XPWidgetID]:
         return window.focused_widget
 
-    def hit_test(self, window: WindowExInfo, x: int, y: int) -> Optional[XPWidgetID]:
+    def hit_test(self, window: WindowExInfo, xp_pt: XPPoint) -> Optional[XPWidgetID]:
         """
         Return the topmost widget at (x, y) in window coordinates.
         """
-        for wid in reversed(window.z_order):
+        for wid in reversed(window.widget_z_order):
             info = self.get_widget(wid)
-            if info and info.geometry.contains(x, y):
+            if info and info.contains(xp_pt):
                 return wid
         return None
 
@@ -198,7 +198,9 @@ class WidgetManager(WidgetRender):
     def dispatch_message(self, wid, msg, p1, p2):
         info = self.require_info(wid)
 
-        # 1. Plugin handlers (child first)
+        # ---------------------------------------------------------
+        # 1. Plugin handlers (bubble up)
+        # ---------------------------------------------------------
         for cb in info.callbacks:
             try:
                 handled = cb(msg, wid, p1, p2)
@@ -208,27 +210,45 @@ class WidgetManager(WidgetRender):
             if handled:
                 return 1
 
+        # ---------------------------------------------------------
         # 2. Bubble to parent plugin handlers
+        # ---------------------------------------------------------
         if info.parent is not None:
             handled = self.dispatch_message(info.parent, msg, p1, p2)
             if handled:
                 return 1
 
-        # 3. Default handler LAST
+        # ---------------------------------------------------------
+        # 3. Default handler LAST (does NOT bubble)
+        # ---------------------------------------------------------
         if self._default_widget_handler(msg, wid, p1, p2):
             return 1
 
         return 0
 
-    def _default_widget_handler(self, msg, wid, p1, p2) -> int:
+    def _default_widget_handler(self, msg, wid, p1, p2):
         info = self.require_info(wid)
+        cls = info.widget_class
+        xp = self.fake_xp
 
-        # Close box
-        if msg == self.fake_xp.Message_CloseButtonPushed:
-            # XP behavior: hide the root window
-            self.fake_xp.hideWidget(wid)
-            return 1
+        # ------------------------------------------------------------
+        # Close box (window widgets)
+        # ------------------------------------------------------------
+        if msg == xp.Message_CloseButtonPushed:
+            if cls == xp.WidgetClass_MainWindow:
+                info.set_visible(False)
+                return 1
+            return 0
 
-        # (You can add more default behaviors here later)
+        # ------------------------------------------------------------
+        # Buttons consume mouse down
+        # ------------------------------------------------------------
+        if msg == xp.Msg_MouseDown:
+            if cls == xp.WidgetClass_Button:
+                return 1
+            if cls == xp.WidgetClass_TextField:
+                self._focus_widget = wid
+                return 1
+            return 0
 
         return 0

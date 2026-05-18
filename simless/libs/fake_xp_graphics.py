@@ -91,7 +91,6 @@ class FakeXPGraphics:
         rightClick: Optional[
             Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
         ] = None,
-        _descriptor: Optional[str] = None,
     ) -> XPLMWindowID:
         if decoration is None:
             decoration = self.fake_xp.WindowDecorationRoundRectangle
@@ -101,7 +100,7 @@ class FakeXPGraphics:
         # --------------------------------------------------------------
         # Register FIRST — this creates the info object
         # --------------------------------------------------------------
-        info = self.fake_xp.window_manager.register_windowex(
+        info = self.fake_xp.window_manager.create_window(
             left=left,
             top=top,
             right=right,
@@ -116,38 +115,6 @@ class FakeXPGraphics:
             cursor_cb=cursor,
             wheel_cb=wheel,
             refcon=refCon,
-        )
-
-        # 2. Backend creation (DPG)
-        dpg_geom = info.frame.to_dpg(self.gm.dpg_get_viewport_client_height())
-
-        self.gm.enqueue_dpg(
-            DPGOp.ADD_WINDOW,
-            args=(),
-            kwargs=dict(
-                tag=info.dpg_tag,
-                label="" if _descriptor is None else _descriptor,
-                pos=(dpg_geom.x, dpg_geom.y),
-                width=dpg_geom.width,
-                height=dpg_geom.height,
-                no_title_bar=False,
-                no_resize=False,
-                no_move=False,
-                no_scrollbar=True,
-                no_collapse=True,
-                show=info.visible,
-            ),
-        )
-
-        self.gm.enqueue_dpg(
-            DPGOp.ADD_DRAWLIST,
-            args=(),
-            kwargs=dict(
-                tag=info.drawlist_tag,
-                width=dpg_geom.width,
-                height=dpg_geom.height,
-                parent=info.dpg_tag,
-            ),
         )
 
         return info.wid
