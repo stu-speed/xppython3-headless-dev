@@ -273,10 +273,6 @@ def bind_xp_constants(xp) -> None:
     xp.Language_Ukrainian = 6030
     xp.Language_Unknown = 6031
 
-    xp.MouseDown = 6040
-    xp.MouseDrag = 6041
-    xp.MouseUp = 6042
-
     # ----------------------------------------------------------------------
     # MAP / WEATHER / PROBE / FILE TYPES (7000–7499)
     # ----------------------------------------------------------------------

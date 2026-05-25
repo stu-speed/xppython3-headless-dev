@@ -58,6 +58,12 @@ class GraphicsDpg:
     def dpg_get_viewport_client_height(self) -> int:
         return dpg.get_viewport_client_height()
 
+    def dpg_get_value(self, item: int | str) -> Any:
+        return dpg.get_value(item)
+
+    def dpg_set_value(self, item: int | str, value: Any) -> Any:
+        return dpg.set_value(item, value)
+
     def dpg_is_item_shown(self, item: int | str) -> bool:
         return dpg.is_item_shown(item)
 

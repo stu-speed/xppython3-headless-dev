@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, Optional, TYPE_CHECKING
+from typing import Any, Dict, Iterable, Optional, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo, XPPoint, XPGeom
+from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo, XPGeom
 from simless.libs.widget_render import WidgetRender
-from XPPython3.xp_typing import XPWidgetClass, XPWidgetID
+from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
@@ -35,6 +35,7 @@ class WidgetManager(WidgetRender):
 
         self._widgets: Dict[XPWidgetID, WidgetInfo] = {}
         self._next_widget_id: int = 1
+        self._msg_queue = []
         self.gm = fake_xp.graphics_manager
         self.wm = fake_xp.window_manager
 
@@ -130,22 +131,10 @@ class WidgetManager(WidgetRender):
 
         # Clear focus if needed (dirties window internally)
         if window.focused_widget == wid:
-            window.clear_widget_focus()
+            window.set_focused_widget(None)
 
         # Remove from registry
         self._widgets.pop(wid, None)
-
-    def kill_all_widgets_in_window(self, window: WindowExInfo) -> None:
-        root = window.widget_root
-        if root is None:
-            return
-
-        self.destroy_widget(root)
-
-        # Root already cleared by destroy_widget if needed
-        window.clear_widget_focus()  # dirties window internally
-        window._z_order.clear()  # direct clear is fine
-        window._dirty_xp_to_dpg = True  # ensure sync after mass deletion
 
     def raise_widget(self, wid: XPWidgetID) -> None:
         info = self.require_info(wid)
@@ -155,29 +144,21 @@ class WidgetManager(WidgetRender):
         info = self.require_info(wid)
         info.window.lower_widget(wid)  # dirties window internally
 
-    def set_focus(self, wid: Optional[XPWidgetID]) -> None:
-        if wid is None:
-            return
-        info = self.require_info(wid)
-        info.window.set_focused_widget(wid)
-        info.window._dirty_xp_to_dpg = True
+    def set_focus(self, wid: XPWidgetID) -> None:
+        self.queue_msg(
+            wid,
+            self.fake_xp.Msg_KeyTakeFocus,
+            None,
+            None,
+        )
 
-    def clear_focus(self, window: WindowExInfo) -> None:
-        window.clear_widget_focus()
-        window._dirty_xp_to_dpg = True
-
-    def get_focused_widget(self, window: WindowExInfo) -> Optional[XPWidgetID]:
-        return window.focused_widget
-
-    def hit_test(self, window: WindowExInfo, xp_pt: XPPoint) -> Optional[XPWidgetID]:
-        """
-        Return the topmost widget at (x, y) in window coordinates.
-        """
-        for wid in reversed(window.widget_z_order):
-            info = self.get_widget(wid)
-            if info and info.contains(xp_pt):
-                return wid
-        return None
+    def clear_focus(self, wid: XPWidgetID) -> None:
+        self.queue_msg(
+            wid,
+            self.fake_xp.Msg_KeyLoseFocus,
+            None,
+            None,
+        )
 
     def iter_subtree(self, root: XPWidgetID) -> Iterable[WidgetInfo]:
         stack = [root]
@@ -195,60 +176,215 @@ class WidgetManager(WidgetRender):
             return ()
         return self.iter_subtree(root)
 
-    def dispatch_message(self, wid, msg, p1, p2):
-        info = self.require_info(wid)
+    def queue_msg(
+        self,
+        wid: XPWidgetID,
+        msg: XPWidgetMessage | int,
+        p1: Any = None,
+        p2: Any = None,
+    ) -> None:
+        self._msg_queue.append((wid, msg, p1, p2))
+
+    def drain_msg_queue(self) -> None:
+        while self._msg_queue:
+            wid, msg, p1, p2 = self._msg_queue.pop(0)
+            if msg in (self.fake_xp.Msg_MouseDown, self.fake_xp.Msg_MouseUp):
+                # Mouse events → full routing
+                self._route_widget_message(wid, msg, p1, p2)
+            else:
+                # API messages → direct dispatch
+                self._dispatch_message(wid, msg, p1, p2)
+
+    # ------------------------------------------------------------------
+    # DISPATCH PIPELINE (XP-authentic)
+    # ------------------------------------------------------------------
+    def _route_widget_message(self, root_id, msg, p1, p2):
+        """
+        XP-authentic routing:
+          1) root first
+          2) children in reverse z-order (hit-test)
+          3) root last chance
+        """
+        xp = self.fake_xp
+        root_info = self.require_info(root_id)
+
+        # 1) Root receives event first
+        if self._dispatch_message(root_id, msg, p1, p2):
+            return 1
+
+        # 2) Children in reverse z-order
+        for wid in reversed(root_info.window.widget_z_order):
+            if wid == root_id:
+                continue
+
+            winfo = xp.widget_manager.get_widget(wid)
+            if not winfo:
+                continue
+
+            # Hit-test child
+            if winfo.geometry.contains(p1):
+                if self._dispatch_message(wid, msg, p1, p2):
+                    return 1
+
+        # 3) Root gets a second chance
+        return self._dispatch_message(root_id, msg, p1, p2)
+
+    def _dispatch_message(
+        self,
+        wid: XPWidgetID,
+        msg: XPWidgetMessage | int,
+        p1: Any,
+        p2: Any,
+    ) -> int:
+
+        info: WidgetInfo = self.require_info(wid)
+        xp = self.fake_xp
 
         # ---------------------------------------------------------
-        # 1. Plugin handlers (bubble up)
+        # 0. Focus messages: deliver to widget FIRST
+        # ---------------------------------------------------------
+        if msg in (xp.Msg_KeyTakeFocus, xp.Msg_KeyLoseFocus):
+
+            # 0a. Deliver to widget/plugin handlers
+            for cb in info.callbacks:
+                if cb(msg, wid, p1, p2):
+                    return 1
+
+            # 0b. Widget did NOT consume → apply focus change
+            if msg == xp.Msg_KeyTakeFocus:
+                self._apply_focus_take(wid)
+            else:
+                self._apply_focus_lose(wid)
+
+            return 1  # focus messages never bubble
+
+        # ---------------------------------------------------------
+        # 1. Plugin handlers
         # ---------------------------------------------------------
         for cb in info.callbacks:
-            try:
-                handled = cb(msg, wid, p1, p2)
-            except Exception:
-                handled = 0
-
-            if handled:
+            if cb(msg, wid, p1, p2):
                 return 1
 
         # ---------------------------------------------------------
-        # 2. Bubble to parent plugin handlers
+        # 2. Bubble to parent
         # ---------------------------------------------------------
         if info.parent is not None:
-            handled = self.dispatch_message(info.parent, msg, p1, p2)
-            if handled:
+            if self._dispatch_message(info.parent, msg, p1, p2):
                 return 1
 
         # ---------------------------------------------------------
-        # 3. Default handler LAST (does NOT bubble)
+        # 3. Additional class behavior (non-blocking)
         # ---------------------------------------------------------
-        if self._default_widget_handler(msg, wid, p1, p2):
+        self._class_behavior_additional(info, msg, p1, p2)
+
+        # ---------------------------------------------------------
+        # 4. Default-if-unhandled class behavior
+        # ---------------------------------------------------------
+        if self._class_behavior_default(info, msg, p1, p2):
             return 1
 
         return 0
 
-    def _default_widget_handler(self, msg, wid, p1, p2):
-        info = self.require_info(wid)
-        cls = info.widget_class
+    # ------------------------------------------------------------------
+    # ADDITIONAL CLASS BEHAVIOR (NON-BLOCKING)
+    # ------------------------------------------------------------------
+    def _class_behavior_additional(
+        self,
+        info: WidgetInfo,
+        msg: XPWidgetMessage | int,
+        p1: Any,
+        p2: Any,
+    ) -> None:
         xp = self.fake_xp
 
-        # ------------------------------------------------------------
-        # Close box (window widgets)
-        # ------------------------------------------------------------
-        if msg == xp.Message_CloseButtonPushed:
-            if cls == xp.WidgetClass_MainWindow:
-                info.set_visible(False)
-                return 1
-            return 0
+        # ---------------------------------------------------------
+        # BUTTON: Generate PushButtonPressed on parent
+        # ---------------------------------------------------------
+        if info.widget_class == xp.WidgetClass_Button:
+            if msg == xp.Msg_MouseUp:
+                if info.parent is not None:
+                    parent_info = self.require_info(info.parent)
 
-        # ------------------------------------------------------------
-        # Buttons consume mouse down
-        # ------------------------------------------------------------
-        if msg == xp.Msg_MouseDown:
-            if cls == xp.WidgetClass_Button:
+                    # Deliver PushButtonPressed to parent
+                    for cb in parent_info.callbacks:
+                        cb(
+                            xp.Msg_PushButtonPressed,
+                            info.parent,  # inWidget = parent
+                            info.wid,  # param1 = button ID
+                            0  # param2 unused
+                        )
+                # Additional behavior NEVER returns handled
+
+    # ------------------------------------------------------------------
+    # DEFAULT-IF-UNHANDLED CLASS BEHAVIOR (FALLBACKS ONLY)
+    # ------------------------------------------------------------------
+    def _class_behavior_default(self, info, msg, p1, p2):
+        xp = self.fake_xp
+
+        # ---------------------------------------------------------
+        # BUTTON DEFAULT BEHAVIOR (no arming, no contains)
+        # ---------------------------------------------------------
+        if info.widget_class == xp.WidgetClass_Button:
+
+            # MouseDown → consume
+            if msg == xp.Msg_MouseDown:
                 return 1
-            if cls == xp.WidgetClass_TextField:
-                self._focus_widget = wid
+
+            # MouseUp → generate PushButtonPressed (or close)
+            if msg == xp.Msg_MouseUp:
+                parent = info.parent
+
+                # If this button *is* the window's close button:
+                if info.window and info.window.widget_close == info.wid:
+                    event = xp.Message_CloseButtonPushed
+                else:
+                    event = xp.Msg_PushButtonPressed
+
+                if parent:
+                    self._dispatch_message(
+                        parent,
+                        event,
+                        info.wid,  # p1 = button ID
+                        0
+                    )
                 return 1
-            return 0
+
+        # ---------------------------------------------------------
+        # CLOSE BOX FALLBACK
+        # ---------------------------------------------------------
+        if msg == xp.Message_CloseButtonPushed:
+            info.set_visible(False)
+            return 1
 
         return 0
+
+    def _apply_focus_take(self, wid: XPWidgetID) -> None:
+        """
+        Apply focus to this widget.
+        Called ONLY after xpMsg_KeyTakeFocus has been dispatched
+        and NOT consumed by the widget/plugin.
+        """
+        info = self.require_info(wid)
+        window = info.window
+        prev = window.focused_widget
+
+        if prev == wid:
+            return
+
+        if prev:
+            self._apply_focus_lose(prev)
+
+        window.set_focused_widget(wid)
+
+    def _apply_focus_lose(self, wid: XPWidgetID) -> None:
+        """
+        Remove focus from this widget.
+        Called ONLY after xpMsg_KeyLoseFocus has been dispatched
+        and NOT consumed by the widget/plugin.
+        """
+        info = self.require_info(wid)
+        window = info.window
+
+        # Only clear if this widget actually has focus
+        if window.focused_widget == wid:
+            window.set_focused_widget(None)

@@ -340,12 +340,6 @@ class SimlessRunner:
                 fl.schedule(0.0, True, now, cycle)
                 continue
 
-        # ------------------------------------------------------------
-        # 4) Input processing (XP-authentic)
-        # ------------------------------------------------------------
-        for event in xp.input_manager.drain_input_events():
-            xp.input_manager.process_event_info(event)
-
         # 5. Dataref viewer
         if self._dataref_viewer:
             self._dataref_viewer.update()

@@ -85,14 +85,10 @@ class InputManager:
         """
         self._input_events.append(event)
 
-    def drain_input_events(self) -> List[EventInfo]:
-        """
-        Return and clear all pending input events for this frame.
-        The caller must check geometry_not_ready before processing.
-        """
-        events = self._input_events
-        self._input_events = []
-        return events
+    def drain_input_events(self) -> None:
+        while self._input_events:
+            event = self._input_events.pop(0)
+            self.process_event_info(event)
 
     # ------------------------------------------------------------------
     # FOCUS CONTROL
@@ -167,12 +163,33 @@ class InputManager:
                         EventInfo.from_xp(
                             kind=EventKind.KEY,
                             key=int(app_data),
-                            flags=0,
+                            flags=self.make_xp_flags(app_data),
                             vKey=int(app_data),
                         )
                     )
                 )
             )
+
+    def make_xp_flags(self, key: int) -> int:
+        """
+        Build XPWidgets key flags from a single DPG key code.
+        No modifier state is tracked; modifier keys set their own bits.
+        """
+        XP_KEYFLAG_SHIFT = 1
+        XP_KEYFLAG_CTRL = 2
+        XP_KEYFLAG_ALT = 4
+        XP_KEYFLAG_DOWN = 8
+
+        flags = XP_KEYFLAG_DOWN
+
+        if key == dpg.mvKey_Shift:
+            flags |= XP_KEYFLAG_SHIFT
+        elif key == dpg.mvKey_Control:
+            flags |= XP_KEYFLAG_CTRL
+        elif key == dpg.mvKey_Alt:
+            flags |= XP_KEYFLAG_ALT
+
+        return flags
 
     # ------------------------------------------------------------------
     # SINGLE RUNNER ENTRY POINT (typed)
@@ -286,56 +303,65 @@ class InputManager:
     # ------------------------------------------------------------------
     # WIDGET DISPATCH HELPERS
     # ------------------------------------------------------------------
-    def _dispatch_widget_click(
-        self, widgetID, xp_pt, mouseStatus,
-        override_message=None,
-        override_param1=None
-    ):
-
-        msg = override_message or self.fake_xp.Msg_MouseDown
-        p1 = override_param1 or xp_pt
-        p2 = mouseStatus
-
-        return self.fake_xp.widget_manager.dispatch_message(widgetID, msg, p1, p2)
-
-    def _dispatch_widget_wheel(self, widgetID, wheel, clicks):
+    def _dispatch_widget_wheel(
+        self,
+        widgetID: int,
+        wheel: int,
+        clicks: int
+    ) -> int:
+        """
+        Deliver xpMsg_MouseWheel to a widget and bubble upward.
+        Wheel events use (wheel, clicks) as parameters.
+        Returns 1 if handled.
+        """
+        xp = self.fake_xp
         wid = widgetID
+
+        params = (wheel, clicks)
+
         while wid is not None:
+            handled = self.fake_xp.widget_manager._dispatch_message(
+                wid,
+                xp.Msg_MouseWheel,
+                params,
+                0
+            )
+            if handled:
+                return 1
+
             info = self.fake_xp.widget_manager.require_info(wid)
-            if info is None:
-                break
-
-            for cb in info.callbacks:
-                handled = cb(
-                    self.fake_xp.Msg_MouseWheel,
-                    wid,
-                    wheel,
-                    clicks,
-                )
-                if handled:
-                    return 1
-
             wid = info.parent
 
         return 0
 
-    def _dispatch_widget_key(self, widgetID, key, flags, vKey):
+    def _dispatch_widget_key(
+        self,
+        widgetID: int,
+        key: int,
+        flags: int,
+        vKey: int
+    ) -> int:
+        """
+        Deliver xpMsg_KeyPress to a widget and bubble upward.
+        Key events use inParam1 = (key, flags, vkey).
+        Returns 1 if handled.
+        """
+        xp = self.fake_xp
         wid = widgetID
+
+        inParam1 = (key, flags, vKey)
+
         while wid is not None:
+            handled = self.fake_xp.widget_manager._dispatch_message(
+                wid,
+                xp.Msg_KeyPress,
+                inParam1,
+                0
+            )
+            if handled:
+                return 1
+
             info = self.fake_xp.widget_manager.require_info(wid)
-            if info is None:
-                break
-
-            for cb in info.callbacks:
-                handled = cb(
-                    self.fake_xp.Msg_KeyPress,
-                    wid,
-                    key,
-                    flags,
-                )
-                if handled:
-                    return 1
-
             wid = info.parent
 
         return 0
@@ -360,15 +386,18 @@ class InputManager:
         mouseStatus: XPLMMouseStatus,
         right: bool,
     ) -> int:
+
+        xp = self.fake_xp
+
         # ------------------------------------------------------------
         # 1) Debounce MouseDown
         # ------------------------------------------------------------
-        if mouseStatus == self.fake_xp.MouseDown:
+        if mouseStatus == xp.MouseDown:
             if self._mouse_button_down:
                 return 0
             self._mouse_button_down = True
 
-        elif mouseStatus == self.fake_xp.MouseUp:
+        elif mouseStatus == xp.MouseUp:
             self._mouse_button_down = False
 
         # ------------------------------------------------------------
@@ -376,24 +405,37 @@ class InputManager:
         #    Capture bypasses hit-testing entirely
         # ------------------------------------------------------------
         if self._mouse_capture_window is not None:
-            info = self.fake_xp.window_manager.get_info(self._mouse_capture_window)
+            info = xp.window_manager.get_info(self._mouse_capture_window)
         else:
-            info = self.fake_xp.window_manager.hit_test(xp_pt)
+            info = xp.window_manager.hit_test(xp_pt)
 
         if info is None:
             return 0
 
         # ------------------------------------------------------------
         # 3) Drag-to-front (XP-authentic)
-        #    MouseDown inside frame → bring to front
         #    Happens BEFORE dispatch, regardless of consumption.
         # ------------------------------------------------------------
-        if mouseStatus == self.fake_xp.MouseDown:
+        if mouseStatus == xp.MouseDown:
             if info.frame.contains(xp_pt):
-                self.fake_xp.window_manager.bring_to_front(info)
+                xp.window_manager.bring_to_front(info)
 
         # ------------------------------------------------------------
-        # 4) Dispatch window click callback
+        # 4) Queue widget message to ROOT widget
+        #    (Dispatcher handles all widget routing)
+        # ------------------------------------------------------------
+        root_id = info.widget_root
+        if root_id:
+            xp.widget_manager.queue_msg(
+                wid=root_id,
+                msg=(xp.Msg_MouseDown if mouseStatus == xp.MouseDown else xp.Msg_MouseUp),
+                p1=xp_pt,
+                p2=right,
+            )
+
+        # ------------------------------------------------------------
+        # 5) Dispatch window click callback
+        #    (Window callbacks run BEFORE widget system)
         # ------------------------------------------------------------
         consumed = self._dispatch_window_click(
             windowID=info.wid,
@@ -403,75 +445,16 @@ class InputManager:
         )
 
         # ------------------------------------------------------------
-        # 5) Route into widget tree (SDK‑authentic)
-        # ------------------------------------------------------------
-        if not consumed:
-            root_id = info.widget_root
-
-            # 1) Root ALWAYS receives the event first
-            consumed = self._dispatch_widget_click(
-                widgetID=root_id,
-                xp_pt=xp_pt,
-                mouseStatus=mouseStatus,
-            )
-
-            child_consumed = False
-            child_id = None
-
-            # 2) If root did NOT consume, walk children in reverse z-order
-            if not consumed:
-                for wid in reversed(info.widget_z_order):
-                    if wid == root_id:
-                        continue
-
-                    winfo = self.fake_xp.widget_manager.get_widget(wid)
-
-                    # Geometry ONLY identifies which child gets the forwarded event
-                    if winfo and winfo.geometry.contains(xp_pt):
-
-                        if self._dispatch_widget_click(
-                            widgetID=wid,
-                            xp_pt=xp_pt,
-                            mouseStatus=mouseStatus,
-                        ):
-                            child_consumed = True
-                            child_id = wid
-                        break
-
-            # 3) If a child consumed AND is a button → parent emits push event
-            if child_consumed:
-                winfo = self.fake_xp.widget_manager.get_widget(child_id)
-
-                if winfo.widget_class == self.fake_xp.WidgetClass_Button:
-                    self._dispatch_widget_click(
-                        widgetID=root_id,
-                        xp_pt=xp_pt,
-                        mouseStatus=mouseStatus,
-                        override_message=self.fake_xp.Msg_PushButtonPressed,
-                        override_param1=child_id,
-                    )
-
-                consumed = True
-
-            # 4) If still not consumed → root gets a second chance
-            if not consumed:
-                consumed = self._dispatch_widget_click(
-                    widgetID=root_id,
-                    xp_pt=xp_pt,
-                    mouseStatus=mouseStatus,
-                )
-
-        # ------------------------------------------------------------
         # 6) Capture on MouseDown
         # ------------------------------------------------------------
-        if consumed and mouseStatus == self.fake_xp.MouseDown:
+        if consumed and mouseStatus == xp.MouseDown:
             self._mouse_capture_window = info.wid
             self._keyboard_focus_window = info.wid
 
         # ------------------------------------------------------------
         # 7) Release capture AFTER dispatch
         # ------------------------------------------------------------
-        if mouseStatus == self.fake_xp.MouseUp:
+        if mouseStatus == xp.MouseUp:
             if self._mouse_capture_window == info.wid:
                 self._mouse_capture_window = None
 
@@ -526,9 +509,13 @@ class InputManager:
             return 1
 
         # 2) Widget key callback (if widget focus is tracked)
-        widget_focus = getattr(self.fake_xp.widget_manager, "focus_widget", None) \
-            if self.fake_xp.widget_manager is not None else None
+        info = self.fake_xp.window_manager.require_info(self._keyboard_focus_window)
+        widget_focus = info.focused_widget
         if widget_focus is None:
+            return 0
+        widget_info = self.fake_xp.widget_manager.require_info(widget_focus)
+        if widget_info.widget_class == self.fake_xp.WidgetClass_TextField and bool(widget_info.callbacks):
+            # Let DPG handle input.  Process on focus loss.
             return 0
 
         return self._dispatch_widget_key(

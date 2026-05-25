@@ -156,9 +156,6 @@ class WidgetInfo:
     _properties: Dict[XPWidgetPropertyID | int, Any] = field(default_factory=dict)
     _callbacks: List[XPWidgetCallback] = field(default_factory=list)
 
-    # Interaction state
-    edit_buffer: Optional[str] = None
-
     # ------------------------------------------------------------
     # PROTECTED SETTERS (all mutations dirty the owning WindowEx)
     # ------------------------------------------------------------
@@ -513,6 +510,7 @@ class WindowExInfo:
 
     # Widget tree root
     _widget_root: Optional[XPWidgetID] = None
+    _widget_close: Optional[XPWidgetID] = None
 
     # XP WIDGET STATE (PER-WINDOW)
     _z_order: list[XPWidgetID] = field(default_factory=list)
@@ -624,6 +622,16 @@ class WindowExInfo:
         self._widget_root = wid
         self._dirty_widgets = True
 
+    @property
+    def widget_close(self) -> Optional[XPWidgetID]:
+        """Close button for this window, if any."""
+        return self._widget_close
+
+    def set_widget_close(self, wid: Optional[XPWidgetID]) -> None:
+        """Set the close widget ID and mark widgets as dirty."""
+        self._widget_close = wid
+        self._dirty_widgets = True
+
     # ------------------------------------------------------------
     # WIDGET Z-ORDER HELPERS
     # ------------------------------------------------------------
@@ -673,11 +681,6 @@ class WindowExInfo:
     def set_focused_widget(self, wid: Optional[XPWidgetID]) -> None:
         """Set the focused widget ID and mark widgets as dirty."""
         self._focused_widget = wid
-        self._dirty_widgets = True
-
-    def clear_widget_focus(self) -> None:
-        """Clear widget focus and mark widgets as dirty."""
-        self._focused_widget = None
         self._dirty_widgets = True
 
 

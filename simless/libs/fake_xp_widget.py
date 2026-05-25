@@ -121,7 +121,8 @@ class FakeXPWidget:
         )
 
         if widgetClass == self.fake_xp.WidgetClass_TextField:
-            info.edit_buffer = descriptor
+            info.properties[self.fake_xp.Property_EditFieldSelStart] = 0
+            info.properties[self.fake_xp.Property_EditFieldSelEnd] = 0
 
         return info.wid
 
@@ -162,7 +163,8 @@ class FakeXPWidget:
         )
 
         if widgetClass == self.fake_xp.WidgetClass_TextField:
-            root_info.edit_buffer = descriptor
+            root_info.properties[self.fake_xp.Property_EditFieldSelStart] = 0
+            root_info.properties[self.fake_xp.Property_EditFieldSelEnd] = 0
 
         win_info.set_widget_root(root_info.wid)
 
@@ -205,38 +207,11 @@ class FakeXPWidget:
             geometry=close_geom,
             parent=root_info.wid,
             descriptor="X",
-            visible=True,
+            visible=False,  # exposed with set widget property
         )
-
-        # Attach close handler directly to the button
-        self.fake_xp.addWidgetCallback(close_info.wid, self._close_button_handler)
+        win_info.set_widget_close(close_info.wid)
 
         return root_info.wid
-
-    def _close_button_handler(self, msg, wid, p1, p2):
-        """
-        Widget callback for the custom close button.
-        - Triggered when the button receives xpMsg_PushButtonPressed.
-        - Sends xpMessage_CloseButtonPushed to the root widget.
-        """
-
-        if msg == self.fake_xp.Msg_PushButtonPressed:
-            wm = self.fake_xp.widget_manager
-            info = wm.require_info(wid)
-
-            # Parent of the close button is the root widget
-            root = info.parent
-            if root is not None:
-                wm.dispatch_message(
-                    root,
-                    self.fake_xp.Message_CloseButtonPushed,
-                    wid,  # p1 = close button ID
-                    0  # p2 unused
-                )
-
-            return 1  # event handled
-
-        return 0  # not handled
 
     def destroyWidget(self, wid: XPWidgetID, destroy_children: int = 1) -> None:
         """
@@ -317,17 +292,18 @@ class FakeXPWidget:
         """
         info = self.wm.require_info(wid)
         info.properties[prop] = value
+
+        if info.widget_class == self.fake_xp.WidgetClass_MainWindow and prop == self.fake_xp.Property_MainWindowHasCloseBoxes:
+            close_info = self.wm.require_info(info.window.widget_close)
+            close_info.set_visible(bool(value))
+
         info.window._dirty_xp_to_dpg = True
 
-    def getWidgetProperty(
-        self,
-        wid: XPWidgetID,
-        prop: XPWidgetPropertyID | int,
-    ) -> Any:
+    def getWidgetProperty(self, widgetID: XPWidgetID, propertyID: XPWidgetPropertyID | int, exists: Optional[int] = None) -> Any:
         """
         XPWidgets API: get a widget property.
         """
-        return self.wm.require_info(wid).properties.get(prop)
+        return self.wm.require_info(widgetID).properties.get(propertyID)
 
     # ------------------------------------------------------------------
     # CALLBACKS + MESSAGE DISPATCH
@@ -348,7 +324,7 @@ class FakeXPWidget:
         XPWidgets API: send a message to a widget.
         Dispatching is handled entirely by the widget manager.
         """
-        self.wm.dispatch_message(wid, msg, param1, param2)
+        self.wm.queue_msg(wid, msg, param1, param2)
 
     def broadcastMessageToWidget(
         self,
@@ -370,7 +346,7 @@ class FakeXPWidget:
             visited.add(current)
 
             # Dispatch to this widget
-            self.wm.dispatch_message(current, msg, param1, param2)
+            self.wm.queue_msg(current, msg, param1, param2)
 
             # Recurse into children
             info = self.wm.require_info(current)
@@ -388,21 +364,34 @@ class FakeXPWidget:
         """
         return self.wm.require_info(wid).parent
 
-    def getWidgetForLocation(self, x: int, y: int) -> Optional[XPWidgetID]:
+    def getWidgetForLocation(
+        self,
+        wid: XPWidgetID,
+        x: int,
+        y: int,
+        recursive: int,
+    ) -> Optional[XPWidgetID]:
         """
-        XPWidgets API: hit-test all windows front-to-back and return the topmost widget
-        at (x, y) in window coordinates.
-
-        NOTE: This assumes FakeXP can enumerate WindowExInfo instances and that
-        (x, y) is already in the appropriate window's coordinate space.
+        XPWidgets API: return the topmost widget at (x, y) under the given root.
+        Coordinates are in the widget's window coordinate system.
         """
         xp_pt = XPPoint(x, y)
-        # Frontmost windows last; we want topmost, so iterate reversed if needed.
-        for win in self.fake_xp.window_manager.all_info():
-            wid = self.wm.hit_test(win, xp_pt)
-            if wid is not None:
-                return wid
-        return None
+        info = self.wm.require_info(wid)
+
+        # 1. Hit test this widget first
+        if not info.geometry.contains(xp_pt):
+            return None
+
+        # 2. If recursive, search children front-to-back
+        if recursive:
+            # children are stored back-to-front; reverse for topmost
+            for child in reversed(info.children):
+                hit = self.getWidgetForLocation(child, x, y, 1)
+                if hit is not None:
+                    return hit
+
+        # 3. No child hit → this widget is the hit
+        return wid
 
     # ------------------------------------------------------------------
     # Z‑ORDER
@@ -452,9 +441,7 @@ class FakeXPWidget:
         """
         XPWidgets API: remove keyboard focus from a widget if it currently has it.
         """
-        info = self.wm.require_info(wid)
-        if info.window.focused_widget == wid:
-            self.wm.clear_focus(info.window)
+        self.wm.clear_focus(wid)
 
     # ------------------------------------------------------------------
     # DESCRIPTOR / CLASS

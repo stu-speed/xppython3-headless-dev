@@ -51,7 +51,7 @@ from simless.libs.fake_xp_types import (
     WindowExInfo
 )
 from simless.libs.graphics_dpg import GraphicsDpg
-from XPPython3.xp_typing import XPLMMenuID, XPLMWindowID
+from XPPython3.xp_typing import XPLMMenuID
 
 
 class GraphicsManager(GraphicsDpg):
@@ -122,9 +122,6 @@ class GraphicsManager(GraphicsDpg):
         self._active_drawlist = None
         self._current_window_ex = None
 
-        # Input focus (owned by InputManager, but renderer stores the tag)
-        self._keyboard_focus_window = None
-
         # Menu bookkeeping (renderer owns DPG menus)
         self._menus = {}
         self._next_menu_id = 1
@@ -181,10 +178,6 @@ class GraphicsManager(GraphicsDpg):
     def get_current_window(self) -> Optional[WindowExInfo]:
         """Return the WindowExInfo currently being drawn."""
         return self._current_window_ex
-
-    def get_keyboard_focus_window(self) -> Optional[XPLMWindowID]:
-        """Return the window ID that currently has keyboard focus."""
-        return self._keyboard_focus_window
 
     def get_texture_ids(self) -> List[int]:
         """Return a list of allocated fake texture IDs."""
@@ -411,8 +404,10 @@ class GraphicsManager(GraphicsDpg):
         self._consume_dpg_to_xp_changes()
 
         # 9) Input processing (via InputManager)
-        for event in xp.input_manager.drain_input_events():
-            xp.input_manager.process_event_info(event)
+        xp.input_manager.drain_input_events()
+
+        # 9.5) Widget message processing
+        xp.widget_manager.drain_msg_queue()
 
         # 10) WindowEx drawing (enqueue only, in layer order)
         for info in xp.window_manager.iter_top_to_bottom():

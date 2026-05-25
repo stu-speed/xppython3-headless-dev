@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import cast, Dict, TYPE_CHECKING
+from typing import Any, cast, Dict, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import DPGGeom, DPGOp, WidgetInfo
-from XPPython3.xp_typing import XPWidgetID
+from simless.libs.fake_xp_types import DPGGeom, DPGOp, WidgetInfo, WindowExInfo
+from XPPython3.xp_typing import XPWidgetID, XPWidgetMessage
 
 if TYPE_CHECKING:
     from simless.libs.widget import WidgetManager
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 class WidgetRender:
     _widgets: Dict[XPWidgetID, WidgetInfo]
     _next_widget_id: int
+    _msg_queue: list[tuple[XPWidgetID, XPWidgetMessage, Any, Any]]
 
     @property
     def mgr(self) -> WidgetManager:
@@ -72,7 +73,7 @@ class WidgetRender:
         for cb in info.callbacks:
             cb(self.mgr.fake_xp.Msg_Draw, wid, wid, None)
 
-    def _render_widgets(self, win):
+    def _render_widgets(self, win: WindowExInfo):
         for info in self.mgr.iter_window_widgets(win):
             wid = info.wid
 
@@ -185,18 +186,40 @@ class WidgetRender:
                     parent=info.container_id,
                 ),
             )
-
         elif wclass == self.mgr.fake_xp.WidgetClass_TextField:
-            def _on_text(sender, app_data, user_data):
-                widget_id = XPWidgetID(user_data)
-                w = self.mgr.require_info(widget_id)
-                w.edit_buffer = app_data
-                self.mgr.fake_xp.sendMessageToWidget(
-                    widget_id,
-                    self.mgr.fake_xp.Msg_TextFieldChanged,
-                    widget_id,
-                    app_data,
+            is_editable = bool(info.callbacks)
+            if not is_editable:
+                # OUTPUT TEXTFIELD → DPG add_text
+                self.mgr.gm.enqueue_dpg(
+                    op=DPGOp.ADD_TEXT,
+                    kwargs=dict(
+                        tag=dpg_id,
+                        default_value=desc.strip(),
+                        parent=info.container_id,
+                    ),
                 )
+                return
+
+            # ---------------------------------------------------------
+            # EDITABLE TEXTFIELD → DPG add_input_text
+            # No per-keystroke callbacks.
+            # Only Enter commits (on_enter=True).
+            # ---------------------------------------------------------
+
+            def _on_enter(sender, app_data, user_data):
+                """
+                Called ONLY when Enter is pressed.
+                DPG has already updated the text buffer.
+                XPWidgets should now lose focus and commit.
+                """
+                xp = self.mgr.fake_xp
+                widget_id = XPWidgetID(user_data)
+
+                # Queue xpMsg_KeyLoseFocus (processed later)
+                xp.widget_manager.clear_focus(widget_id)
+
+                # XPWidgets will read the new descriptor on next frame
+                # NOAA will rebuild after focus loss
 
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.ADD_INPUT_TEXT,
@@ -204,7 +227,8 @@ class WidgetRender:
                     tag=dpg_id,
                     default_value=desc.strip(),
                     parent=info.container_id,
-                    callback=_on_text,
+                    on_enter=True,  # Only Enter commits
+                    callback=_on_enter,  # No per-keystroke updates
                     user_data=wid,
                     no_spaces=True,
                 ),
@@ -401,7 +425,7 @@ class WidgetRender:
                 kwargs=dict(default_value=text),
             )
 
-        # TextField → input text
+        # TextField → input text processed
         elif wclass == self.mgr.fake_xp.WidgetClass_TextField:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.SET_VALUE,
