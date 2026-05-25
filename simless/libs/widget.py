@@ -385,6 +385,53 @@ class WidgetManager(WidgetRender):
         info = self.require_info(wid)
         window = info.window
 
+        if info.widget_class == self.fake_xp.WidgetClass_TextField and bool(info.callbacks):
+            self._replay_dpg_input_into_xp(info)
+
         # Only clear if this widget actually has focus
         if window.focused_widget == wid:
             window.set_focused_widget(None)
+
+    def _replay_dpg_input_into_xp(self, info: WidgetInfo) -> None:
+        # ---------------------------------------------------------
+        # 1) Get current text from DPG
+        # ---------------------------------------------------------
+        dpg_text = self.fake_xp.graphics_manager.dpg_get_value(info.dpg_id)
+        if not isinstance(dpg_text, str):
+            return
+
+        # ---------------------------------------------------------
+        # 2) Clear XP widget (descriptor + cursor)
+        # ---------------------------------------------------------
+        self.fake_xp.setWidgetDescriptor(info.wid, "")
+        self.fake_xp.setWidgetProperty(info.wid, self.fake_xp.Property_EditFieldSelStart, 0)
+        self.fake_xp.setWidgetProperty(info.wid, self.fake_xp.Property_EditFieldSelEnd, 0)
+
+        cursor = 0
+
+        # ---------------------------------------------------------
+        # 3) Replay each character as xpMsg_KeyPress
+        # ---------------------------------------------------------
+        for ch in dpg_text:
+            key = ord(ch)
+
+            # Send xpMsg_KeyPress to widget
+            self._dispatch_message(
+                info.wid,
+                self.fake_xp.Msg_KeyPress,
+                (key, self.fake_xp.input_manager.make_xp_flags(key), key),
+                0
+            )
+
+            # Advance cursor locally
+            cursor += 1
+
+            # Update cursor properties
+            self.fake_xp.setWidgetProperty(info.wid, self.fake_xp.Property_EditFieldSelStart, cursor)
+            self.fake_xp.setWidgetProperty(info.wid, self.fake_xp.Property_EditFieldSelEnd, cursor)
+
+        # ---------------------------------------------------------
+        # 4) After replay, set DPG input text = XP descriptor
+        # ---------------------------------------------------------
+        final_text = self.fake_xp.getWidgetDescriptor(info.wid)
+        self.fake_xp.graphics_manager.dpg_set_value(info.dpg_id, final_text)

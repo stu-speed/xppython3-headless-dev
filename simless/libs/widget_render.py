@@ -218,8 +218,13 @@ class WidgetRender:
                 # Queue xpMsg_KeyLoseFocus (processed later)
                 xp.widget_manager.clear_focus(widget_id)
 
-                # XPWidgets will read the new descriptor on next frame
-                # NOAA will rebuild after focus loss
+                key = 13 # enter key
+                self.mgr.queue_msg(
+                    info.wid,
+                    self.mgr.fake_xp.Msg_KeyPress,
+                    (key, self.mgr.fake_xp.input_manager.make_xp_flags(key), key),
+                    0
+                )
 
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.ADD_INPUT_TEXT,
@@ -422,7 +427,16 @@ class WidgetRender:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.CONFIGURE_ITEM,
                 args=(info.dpg_id,),
-                kwargs=dict(default_value=text),
+                kwargs=dict(label=text),
+            )
+
+        # OUTPUT TEXTFIELD → DPG add_text
+        elif wclass == self.mgr.fake_xp.WidgetClass_TextField and not info.callbacks:
+            print(f"[Desc] conf item wid={wid} label={text}")
+            self.mgr.gm.enqueue_dpg(
+                op=DPGOp.CONFIGURE_ITEM,
+                args=(info.dpg_id,),
+                kwargs=dict(label=text),
             )
 
         # TextField → input text processed
@@ -440,19 +454,6 @@ class WidgetRender:
                 args=(info.dpg_id,),
                 kwargs=dict(label=text),
             )
-
-        # Classes that do NOT support descriptors
-        elif wclass in (
-                self.mgr.fake_xp.WidgetClass_MainWindow,
-                self.mgr.fake_xp.WidgetClass_SubWindow,
-                self.mgr.fake_xp.WidgetClass_GeneralGraphics,
-                self.mgr.fake_xp.WidgetClass_ScrollBar
-        ):
-            # Real X‑Plane ignores these silently
-            return
-
-        else:
-            self.mgr.fake_xp.log(f"unhandled setdescriptor class: {wclass}")
 
         # Cache applied descriptor
         info._last_descriptor = info.descriptor
