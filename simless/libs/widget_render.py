@@ -81,13 +81,13 @@ class WidgetRender:
             self._ensure_dpg_item_for_widget(wid)
 
             # 2. Geometry
-            self._apply_geometry_if_needed(wid)
+            self._apply_geometry(wid)
 
             # 3. Visibility
             self._apply_visibility(wid)
 
             # 4. Descriptor text
-            self._apply_descriptor_if_needed(wid)
+            self._apply_descriptor(wid)
 
             # 5. Widget properties (scrollbar min/max/value, etc.)
             self._apply_properties(wid)
@@ -107,10 +107,6 @@ class WidgetRender:
         wclass = info.widget_class
         desc = info.descriptor or ""
 
-        # Deterministic DPG IDs
-        dpg_id = f"xp_widget_{wid}"
-        container_id = f"xp_widget_container_{wid}"
-
         # ============================================================
         # MAIN WINDOW → bind to existing createWindowEx DPG window
         # ============================================================
@@ -119,8 +115,7 @@ class WidgetRender:
 
             # createWindowEx already enqueued ADD_WINDOW + ADD_DRAWLIST
             info.dpg_id = win.dpg_tag
-            info.container_id = win.dpg_tag
-            info.geom_applied = False
+            info.container_id = win.dpg_tag  # root has window for the container
             info.container_geom_applied = None
             return
 
@@ -148,8 +143,9 @@ class WidgetRender:
         # ------------------------------------------------------------
         # Create container (child_window)
         # ------------------------------------------------------------
+
         if info.container_id is None:
-            info.container_id = container_id
+            info.container_id = f"xp_widget_container_{wid}"
 
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.ADD_CHILD_WINDOW,
@@ -164,7 +160,7 @@ class WidgetRender:
                     autosize_y=False,
                 ),
             )
-            info.container_geom_applied = None
+            info.container_geom_applied = False
 
         # ------------------------------------------------------------
         # Create actual control
@@ -174,14 +170,14 @@ class WidgetRender:
             return
 
         # Assign deterministic ID before the type checks
-        info.dpg_id = dpg_id
+        info.dpg_id = f"xp_widget_{wid}"
 
         # Now create the control for this widget class
         if wclass == self.mgr.fake_xp.WidgetClass_Caption:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.ADD_TEXT,
                 kwargs=dict(
-                    tag=dpg_id,
+                    tag=info.dpg_id,
                     default_value=desc.strip(),
                     parent=info.container_id,
                 ),
@@ -193,7 +189,7 @@ class WidgetRender:
                 self.mgr.gm.enqueue_dpg(
                     op=DPGOp.ADD_TEXT,
                     kwargs=dict(
-                        tag=dpg_id,
+                        tag=info.dpg_id,
                         default_value=desc.strip(),
                         parent=info.container_id,
                     ),
@@ -229,7 +225,7 @@ class WidgetRender:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.ADD_INPUT_TEXT,
                 kwargs=dict(
-                    tag=dpg_id,
+                    tag=info.dpg_id,
                     default_value=desc.strip(),
                     parent=info.container_id,
                     on_enter=True,  # Only Enter commits
@@ -264,7 +260,7 @@ class WidgetRender:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.ADD_SLIDER_INT,
                 kwargs=dict(
-                    tag=dpg_id,
+                    tag=info.dpg_id,
                     label=desc or "Slider",
                     parent=info.container_id,
                     min_value=min_v,
@@ -288,7 +284,7 @@ class WidgetRender:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.ADD_BUTTON,
                 kwargs=dict(
-                    tag=dpg_id,
+                    tag=info.dpg_id,
                     label=desc,
                     parent=info.container_id,
                     callback=_on_button,
@@ -302,8 +298,8 @@ class WidgetRender:
         FakeXP must emulate this behavior.
         """
         wclass = info.widget_class
-        geom = info.geometry
-        parent_geom = parent_info.geometry
+        geom = info.abs_xpgeom
+        parent_geom = parent_info.abs_xpgeom
 
         # Width of this widget as provided by plugin
         width = geom.right - geom.left
@@ -318,65 +314,59 @@ class WidgetRender:
             if width < 100:  # threshold; XP uses "small width" heuristic
                 geom.right = parent_geom.right
 
-    def _apply_geometry_if_needed(self, wid: XPWidgetID) -> None:
+    def _apply_geometry(self, wid: XPWidgetID) -> None:
         """
-        Apply XP → DPG geometry for this widget if needed.  Child widgets are not anchored to
-        the root so must be repositioned if root moves.
+        Apply XP → DPG geometry for this widget.
 
-        Preconditions:
-          - Widget must already be structurally realized (container_id or dpg_id exists)
-          - XP geometry is authoritative and already updated
+        XP side:
+          - Widgets store only local_xpgeom (relative to window.client)
+          - abs_xpgeom is computed on demand
+          - Window movement automatically updates abs_xpgeom
+
+        DPG side:
+          - mvChildWindow does NOT auto-move when parent moves
+          - So we must push abs_xpgeom into DPG every time geometry changes
         """
 
         info = self.mgr.require_info(wid)
 
-        # Nothing to apply until DPG objects exist
-        if info.container_id is None and info.dpg_id is None:
+        # Skip until DPG container exists
+        if info.container_id is None:
             return
 
-        # Window manager handles root widget windows
+        # Root widget window geometry is handled by WindowExInfo
         if info.window.widget_root == wid:
             return
 
-        # ============================================================
-        # CONTROLS → configure their child_window container
-        # ============================================================
-        geom = info.geometry
-        p_info = self.mgr.require_info(info.parent)
-        p_geom = p_info.geometry
+        # ------------------------------------------------------------
+        # Compute DPG geometry using XPGeom helper
+        # ------------------------------------------------------------
+        abs_geom = info.abs_xpgeom  # XPGeom
+        screen_h = self.mgr.gm.dpg_get_viewport_client_height()
 
-        # XP local coordinates (within parent drawlist)
-        lx = geom.left - p_geom.left
-        ly = p_geom.top - geom.top
+        dpg_geom = abs_geom.to_dpg(screen_h)  # DPGGeom(x, y, w, h)
 
-        desired = DPGGeom(lx, ly, geom.width, geom.height)
-
-        if info.container_geom_applied != desired:
-            self.mgr.gm.enqueue_dpg(
-                op=DPGOp.CONFIGURE_ITEM,
-                args=(info.container_id,),
-                kwargs=dict(
-                    pos=(lx, ly),
-                    width=geom.width,
-                    height=geom.height,
-                ),
-            )
-            info.container_geom_applied = desired
+        # ------------------------------------------------------------
+        # Push geometry to DPG
+        # ------------------------------------------------------------
+        self.mgr.gm.enqueue_dpg(
+            op=DPGOp.CONFIGURE_ITEM,
+            args=(info.container_id,),
+            kwargs=dict(
+                pos=(dpg_geom.x, dpg_geom.y),
+                width=dpg_geom.width,
+                height=dpg_geom.height,
+            ),
+        )
 
     def _apply_visibility(self, wid: XPWidgetID) -> None:
         """
         Queue visibility updates for this widget.
 
         Visibility is write-only and does not require layout readiness.
-        If the widget has not yet been structurally realized (container_id is None),
-        this is a no-op.
         """
 
         info = self.mgr.require_info(wid)
-
-        # If not created yet, nothing to show/hide
-        if info.container_id is None:
-            return
 
         # ------------------------------------------------------------
         # XP-AUTHENTIC VISIBILITY: inherited from all ancestors
@@ -392,99 +382,127 @@ class WidgetRender:
             parent = pinfo.parent
 
         # ------------------------------------------------------------
-        # Apply visibility to the container (child_window or root window)
+        # ROOT WIDGET → apply visibility to the DPG window
         # ------------------------------------------------------------
-        self.mgr.gm.enqueue_dpg(
-            op=DPGOp.SHOW_ITEM if visible else DPGOp.HIDE_ITEM,
-            args=(info.container_id,),
-        )
+        if info.window.widget_root == wid:
+            if info.dpg_id is not None:
+                self.mgr.gm.enqueue_dpg(
+                    op=DPGOp.SHOW_ITEM if visible else DPGOp.HIDE_ITEM,
+                    args=(info.dpg_id,),
+                )
+            return
 
         # ------------------------------------------------------------
-        # Root widgets also apply visibility to the DPG window itself
+        # NON-ROOT WIDGET → apply visibility to its container
         # ------------------------------------------------------------
-        if info.window.widget_root == wid and info.dpg_id is not None:
+        if info.container_id is not None:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.SHOW_ITEM if visible else DPGOp.HIDE_ITEM,
-                args=(info.dpg_id,),
+                args=(info.container_id,),
             )
 
-    def _apply_descriptor_if_needed(self, wid: XPWidgetID) -> None:
+    def _apply_descriptor(self, wid: XPWidgetID) -> None:
         info = self.mgr.require_info(wid)
 
         # If not realized yet, nothing to apply
         if info.dpg_id is None:
             return
 
-        # Only update if descriptor changed
-        if info.descriptor == info._last_descriptor:
-            return
-
         text = info.descriptor
         wclass = info.widget_class
+        xp = self.mgr.fake_xp
 
+        # ------------------------------------------------------------
         # Caption → DPG text
-        if wclass == self.mgr.fake_xp.WidgetClass_Caption:
+        # ------------------------------------------------------------
+        if wclass == xp.WidgetClass_Caption:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.CONFIGURE_ITEM,
                 args=(info.dpg_id,),
-                kwargs=dict(label=text),
+                kwargs=dict(default_value=text),
             )
+            return
 
-        # OUTPUT TEXTFIELD → DPG add_text
-        elif wclass == self.mgr.fake_xp.WidgetClass_TextField and not info.callbacks:
-            print(f"[Desc] conf item wid={wid} label={text}")
+        # ------------------------------------------------------------
+        # TextField (output) → DPG text
+        # ------------------------------------------------------------
+        if wclass == xp.WidgetClass_TextField and not info.callbacks:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.CONFIGURE_ITEM,
                 args=(info.dpg_id,),
-                kwargs=dict(label=text),
+                kwargs=dict(default_value=text),
             )
+            return
 
-        # TextField → input text processed
-        elif wclass == self.mgr.fake_xp.WidgetClass_TextField:
+        # ------------------------------------------------------------
+        # TextField (editable) → DPG input value
+        # ------------------------------------------------------------
+        if wclass == xp.WidgetClass_TextField:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.SET_VALUE,
                 args=(info.dpg_id,),
                 kwargs=dict(value=text),
             )
+            return
 
+        # ------------------------------------------------------------
         # Button → label
-        elif wclass == self.mgr.fake_xp.WidgetClass_Button:
+        # ------------------------------------------------------------
+        if wclass == xp.WidgetClass_Button:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.CONFIGURE_ITEM,
                 args=(info.dpg_id,),
                 kwargs=dict(label=text),
             )
-
-        # Cache applied descriptor
-        info._last_descriptor = info.descriptor
+            return
 
     def _apply_properties(self, wid: XPWidgetID) -> None:
         info = self.mgr.require_info(wid)
         props = info.properties
+        xp = self.mgr.fake_xp
         wclass = info.widget_class
 
-        # ScrollBar → update DPG slider
-        if wclass == self.mgr.fake_xp.WidgetClass_ScrollBar:
+        # ------------------------------------------------------------
+        # MAIN WINDOW PROPERTIES
+        # ------------------------------------------------------------
+        if wclass == xp.WidgetClass_MainWindow:
+            # Toggle visibility of the XP-authentic close box widget
+            if xp.Property_MainWindowHasCloseBoxes in props:
+                close_wid = info.window._close_widget
+                close_info = self.mgr.require_info(close_wid)
+                close_info.set_visible(bool(props[xp.Property_MainWindowHasCloseBoxes]))
+            return
 
-            if self.mgr.fake_xp.Property_ScrollBarMin in props:
+        # ------------------------------------------------------------
+        # SCROLLBAR PROPERTIES
+        # ------------------------------------------------------------
+        if wclass == xp.WidgetClass_ScrollBar:
+            dpg_id = info.dpg_id
+            if dpg_id is None:
+                return
+
+            # Min
+            if xp.Property_ScrollBarMin in props:
                 self.mgr.gm.enqueue_dpg(
                     op=DPGOp.CONFIGURE_ITEM,
-                    args=(info.dpg_id,),
-                    kwargs=dict(min_value=int(props[self.mgr.fake_xp.Property_ScrollBarMin])),
+                    args=(dpg_id,),
+                    kwargs=dict(min_value=int(props[xp.Property_ScrollBarMin])),
                 )
 
-            if self.mgr.fake_xp.Property_ScrollBarMax in props:
+            # Max
+            if xp.Property_ScrollBarMax in props:
                 self.mgr.gm.enqueue_dpg(
                     op=DPGOp.CONFIGURE_ITEM,
-                    args=(info.dpg_id,),
-                    kwargs=dict(max_value=int(props[self.mgr.fake_xp.Property_ScrollBarMax])),
+                    args=(dpg_id,),
+                    kwargs=dict(max_value=int(props[xp.Property_ScrollBarMax])),
                 )
 
-            if self.mgr.fake_xp.Property_ScrollBarSliderPosition in props:
+            # Slider position
+            if xp.Property_ScrollBarSliderPosition in props:
                 self.mgr.gm.enqueue_dpg(
                     op=DPGOp.SET_VALUE,
-                    args=(info.dpg_id,),
-                    kwargs=dict(value=int(props[self.mgr.fake_xp.Property_ScrollBarSliderPosition])),
+                    args=(dpg_id,),
+                    kwargs=dict(value=int(props[xp.Property_ScrollBarSliderPosition])),
                 )
 
             return

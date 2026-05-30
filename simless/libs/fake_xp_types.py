@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import auto, StrEnum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from simless.libs.fake_xp_constants import lookup_constant_name
 from XPPython3.xp_typing import (
     XPLMCursorStatus,
     XPLMMouseStatus,
@@ -120,101 +121,135 @@ class XPPoint:
     x: int
     y: int
 
-
 @dataclass(slots=True)
 class WidgetInfo:
     """
-    Authoritative record for a single XPWidget.
+    Pure XP-side state capsule for a single widget.
+
+    This object stores only LOCAL XP geometry (relative to the owning
+    window's client rect) but referenced in absolute geometry by converting
+    relative to parent.
+
+    This mirrors X-Plane's widget model: widgets do not track global
+    screen coordinates, and their position is always interpreted in the
+    coordinate space of the parent window.
     """
 
-    # Identity
     wid: XPWidgetID
     widget_class: XPWidgetClass
-    window: "WindowExInfo"
-
-    # Authoritative XP geometry
-    _geometry: XPGeom
+    window: WindowExInfo
+    abs_geom_param: XPGeom   # passed in, NOT stored
 
     # Hierarchy
     parent: Optional[XPWidgetID] = None
     _children: list[XPWidgetID] = field(default_factory=list)
 
-    # XPWidget state
+    # XP state
     _descriptor: str = ""
-    _last_descriptor: str = "<<NONE>>"  # updated only by DPG sync
     _visible: bool = True
 
-    # Backend handles
+    # Backend handles (plain attributes)
     dpg_id: Optional[str] = None
-    container_id: Optional[str] = None
+    container_id: Optional[str] = None  # container constrains widget to geom
+
+    # Only local geometry is stored
+    _local_xpgeom: XPGeom = field(init=False)
 
     # DPG geometry state
-    geom_applied: bool = False
-    container_geom_applied: Optional["DPGGeom"] = None
+    container_geom_applied: Optional[bool] = None
 
-    # XPWidget properties and callbacks
+    # Properties + callbacks
     _properties: Dict[XPWidgetPropertyID | int, Any] = field(default_factory=dict)
     _callbacks: List[XPWidgetCallback] = field(default_factory=list)
 
-    # ------------------------------------------------------------
-    # PROTECTED SETTERS (all mutations dirty the owning WindowEx)
-    # ------------------------------------------------------------
+    def __post_init__(self):
+        # Convert ABSOLUTE XPGeom -> LOCAL XPGeom immediately
+        self._convert_abs_to_local(self.abs_geom_param)
+        del self.abs_geom_param   # never stored
 
+    def __repr__(self) -> str:
+        return (
+            f"<Widget {self.wid} "
+            f"class={lookup_constant_name(self.widget_class, "WidgetClass_")} "
+            f"descriptor={self._descriptor} "
+        )
+
+    # ------------------------------------------------------------
+    # GEOMETRY
+    # ------------------------------------------------------------
     @property
-    def geometry(self) -> XPGeom:
-        """Return the authoritative widget geometry."""
-        return self._geometry
+    def abs_xpgeom(self) -> XPGeom:
+        client = self.window.client
+        g = self._local_xpgeom
 
-    @geometry.setter
-    def geometry(self, value: XPGeom) -> None:
-        """Set widget geometry and mark the owning window as dirty."""
-        self._geometry = value
-        self.geom_applied = False
-        self.container_geom_applied = None
+        abs_left = client.left + g.left
+        abs_top = client.bottom + g.top
+
+        return XPGeom(
+            left=abs_left,
+            top=abs_top,
+            right=abs_left + g.width,
+            bottom=abs_top - g.height,
+        )
+
+    def set_local_geom(self, abs_geom: XPGeom) -> None:
+        """
+        Accepts ABSOLUTE XPGeom and converts it to LOCAL XPGeom.
+        Used for later geometry changes.
+        """
+        self._convert_abs_to_local(abs_geom)
+        if self.parent is not None:
+            self.container_geom_applied = False
         self.window._dirty_widgets = True
 
-    @property
-    def descriptor(self) -> str:
-        """Return the current widget descriptor string."""
-        return self._descriptor
+    def _convert_abs_to_local(self, abs_geom: XPGeom) -> None:
+        client = self.window.client
 
-    def set_descriptor(self, value: str) -> None:
-        """Set the widget descriptor and mark the owning window as dirty."""
-        self._descriptor = value
-        self.window._dirty_widgets = True
+        # XP-style: Y increases upward
+        local_left = abs_geom.left - client.left
+        local_top = abs_geom.top - client.bottom
+
+        self._local_xpgeom = XPGeom(
+            left=local_left,
+            top=local_top,
+            right=local_left + abs_geom.width,
+            bottom=local_top - abs_geom.height,
+        )
 
     @property
     def visible(self) -> bool:
-        """Return True if the widget is visible."""
         return self._visible
 
     def set_visible(self, value: bool) -> None:
-        """Set widget visibility and mark the owning window as dirty."""
         self._visible = value
         self.window._dirty_widgets = True
 
     @property
+    def descriptor(self) -> str:
+        return self._descriptor
+
+    def set_descriptor(self, value: str) -> None:
+        self._descriptor = value
+        self.window._dirty_widgets = True
+
+    @property
     def properties(self) -> Dict[XPWidgetPropertyID | int, Any]:
-        """Return the widget property dictionary."""
         return self._properties
 
-    def set_property(self, prop: XPWidgetPropertyID, value: Any) -> None:
-        """Set a widget property and mark the owning window as dirty."""
+    def set_property(self, prop: XPWidgetPropertyID | int, value: Any) -> None:
         self._properties[prop] = value
         self.window._dirty_widgets = True
 
     @property
-    def callbacks(self) -> List[XPWidgetCallback]:
-        """Return the list of registered widget callbacks."""
+    def callbacks(self) -> list[XPWidgetCallback]:
         return self._callbacks
 
     def add_callback(self, cb: XPWidgetCallback) -> None:
-        """Register a new widget callback."""
         self._callbacks.append(cb)
 
     def remove_callback(self, cb: XPWidgetCallback) -> None:
-        """Unregister an existing widget callback."""
-        self._callbacks.remove(cb)
+        if cb in self._callbacks:
+            self._callbacks.remove(cb)
 
     @property
     def children(self) -> List[XPWidgetID]:
@@ -231,56 +266,6 @@ class WidgetInfo:
         if child_id in self._children:
             self._children.remove(child_id)
             self.window._dirty_widgets = True
-
-    # ------------------------------------------------------------
-    # DERIVED GEOMETRY HELPERS (read‑only)
-    # ------------------------------------------------------------
-
-    @property
-    def left(self) -> int:
-        """Return the left edge of the widget geometry."""
-        return self._geometry.left
-
-    @property
-    def top(self) -> int:
-        """Return the top edge of the widget geometry."""
-        return self._geometry.top
-
-    @property
-    def right(self) -> int:
-        """Return the right edge of the widget geometry."""
-        return self._geometry.right
-
-    @property
-    def bottom(self) -> int:
-        """Return the bottom edge of the widget geometry."""
-        return self._geometry.bottom
-
-    @property
-    def width(self) -> int:
-        """Return the non-negative width of the widget."""
-        return max(0, self.right - self.left)
-
-    @property
-    def height(self) -> int:
-        """Return the non-negative height of the widget."""
-        return max(0, self.bottom - self.top)
-
-    # ------------------------------------------------------------
-    # HIT‑TEST HELPERS (strongly typed)
-    # ------------------------------------------------------------
-
-    def contains(self, xp_pt: XPPoint) -> bool:
-        """
-        Hit-test this widget using XP-global coordinates.
-
-        Performs the full transform:
-            XPPoint → WindowPoint → ClientPoint → widget-local
-
-        Returns:
-            True if the XP-global point lies inside this widget.
-        """
-        return self._geometry.contains(xp_pt)
 
 
 @dataclass(slots=True)
@@ -508,13 +493,11 @@ class WindowExInfo:
     _dirty_dpg_to_xp: bool = False  # DPG window state changed
     _dirty_widgets: bool = False  # Widget tree changed (requires _render_widgets)
 
-    # Widget tree root
+    # Widget tree
     _widget_root: Optional[XPWidgetID] = None
-    _widget_close: Optional[XPWidgetID] = None
-
-    # XP WIDGET STATE (PER-WINDOW)
     _z_order: list[XPWidgetID] = field(default_factory=list)
     _focused_widget: Optional[XPWidgetID] = None
+    _close_widget: Optional[XPWidgetID] = None
 
     # Optional back-reference to a window manager providing decoration metrics
     window_manager: Any = None
@@ -621,20 +604,6 @@ class WindowExInfo:
         """Set the root widget ID and mark widgets as dirty."""
         self._widget_root = wid
         self._dirty_widgets = True
-
-    @property
-    def widget_close(self) -> Optional[XPWidgetID]:
-        """Close button for this window, if any."""
-        return self._widget_close
-
-    def set_widget_close(self, wid: Optional[XPWidgetID]) -> None:
-        """Set the close widget ID and mark widgets as dirty."""
-        self._widget_close = wid
-        self._dirty_widgets = True
-
-    # ------------------------------------------------------------
-    # WIDGET Z-ORDER HELPERS
-    # ------------------------------------------------------------
 
     @property
     def widget_z_order(self) -> list[XPWidgetID]:

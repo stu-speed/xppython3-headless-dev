@@ -58,7 +58,7 @@ class WidgetManager(WidgetRender):
         *,
         widget_class: XPWidgetClass,
         window: WindowExInfo,
-        geometry: XPGeom,
+        abs_geom: XPGeom,
         parent: Optional[XPWidgetID] = None,
         descriptor: str = "",
         visible: bool = True,
@@ -70,7 +70,7 @@ class WidgetManager(WidgetRender):
             wid=wid,
             widget_class=widget_class,
             window=window,
-            _geometry=geometry,  # ← FIXED: use property, not _geometry
+            abs_geom_param=abs_geom,
             parent=parent,
             _descriptor=descriptor,
             _visible=visible,
@@ -160,7 +160,13 @@ class WidgetManager(WidgetRender):
             None,
         )
 
-    def iter_subtree(self, root: XPWidgetID) -> Iterable[WidgetInfo]:
+    def iter_window_widgets(self, window: WindowExInfo) -> Iterable[WidgetInfo]:
+        root = window.widget_root
+        if root is None:
+            return ()
+        return self._iter_subtree(root)
+
+    def _iter_subtree(self, root: XPWidgetID) -> Iterable[WidgetInfo]:
         stack = [root]
         while stack:
             wid = stack.pop()
@@ -168,13 +174,9 @@ class WidgetManager(WidgetRender):
             if info is None:
                 continue
             yield info
-            stack.extend(reversed(info.children))
-
-    def iter_window_widgets(self, window: WindowExInfo) -> Iterable[WidgetInfo]:
-        root = window.widget_root
-        if root is None:
-            return ()
-        return self.iter_subtree(root)
+            # Push children in reverse so leftmost child is popped first
+            for child in reversed(info.children):
+                stack.append(child)
 
     def queue_msg(
         self,
@@ -222,7 +224,7 @@ class WidgetManager(WidgetRender):
                 continue
 
             # Hit-test child
-            if winfo.geometry.contains(p1):
+            if winfo.abs_xpgeom.contains(p1):
                 if self._dispatch_message(wid, msg, p1, p2):
                     return 1
 
@@ -348,6 +350,51 @@ class WidgetManager(WidgetRender):
                         0
                     )
                 return 1
+
+        # ---------------------------------------------------------
+        # TEXT FIELD DEFAULT KEY HANDLING (XP-authentic)
+        # ---------------------------------------------------------
+        if info.widget_class == xp.WidgetClass_TextField:
+            if msg == xp.Msg_KeyPress:
+                key, flags, vkey = p1
+
+                text = info.descriptor or ""
+                cursor = info.properties.get(xp.Property_EditFieldSelStart, 0)
+                sel_end = info.properties.get(xp.Property_EditFieldSelEnd, cursor)
+
+                # Collapse selection
+                if sel_end != cursor:
+                    start = min(cursor, sel_end)
+                    end = max(cursor, sel_end)
+                    text = text[:start] + text[end:]
+                    cursor = start
+                    sel_end = start
+
+                # Backspace / Delete
+                if key in (8, 127):
+                    if cursor > 0:
+                        text = text[:cursor - 1] + text[cursor:]
+                        cursor -= 1
+
+                # Printable ASCII
+                elif 32 <= key <= 126:
+                    ch = chr(key)
+                    text = text[:cursor] + ch + text[cursor:]
+                    cursor += 1
+
+                # Clamp cursor
+                if cursor < 0:
+                    cursor = 0
+                if cursor > len(text):
+                    cursor = len(text)
+
+                # Write back
+                info.set_descriptor(text)
+                info.properties[xp.Property_EditFieldSelStart] = cursor
+                info.properties[xp.Property_EditFieldSelEnd] = cursor
+
+                return 1
+
 
         # ---------------------------------------------------------
         # CLOSE BOX FALLBACK

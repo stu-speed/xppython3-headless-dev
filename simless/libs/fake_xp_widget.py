@@ -84,7 +84,7 @@ class FakeXPWidget:
         widgetClass: XPWidgetClass,
     ) -> XPWidgetID:
 
-        xp_geom = XPGeom(left, top, right, bottom)
+        abs_geom = XPGeom(left, top, right, bottom)
         visible_bool = bool(visible)
 
         # ---------------------------------------------------------
@@ -95,7 +95,7 @@ class FakeXPWidget:
                 raise ValueError(f"Root widget must have container=0 (got {container})")
 
             return self._create_root_widget_window(
-                xp_geom=xp_geom,
+                xp_geom=abs_geom,
                 descriptor=descriptor,
                 widgetClass=widgetClass,
                 visible=visible_bool,
@@ -111,34 +111,26 @@ class FakeXPWidget:
         parent_info = self.wm.require_info(parent_wid)
         window_info = parent_info.window
 
+        # geometry=abs_geom → WidgetInfo converts to local internally
         info = self.wm.create_widget(
             widget_class=widgetClass,
             window=window_info,
-            geometry=xp_geom,
+            abs_geom=abs_geom,
             parent=parent_wid,
             descriptor=descriptor,
             visible=visible_bool,
         )
 
+        # Text field selection properties
         if widgetClass == self.fake_xp.WidgetClass_TextField:
-            info.properties[self.fake_xp.Property_EditFieldSelStart] = 0
-            info.properties[self.fake_xp.Property_EditFieldSelEnd] = 0
+            info.set_property(self.fake_xp.Property_EditFieldSelStart, 0)
+            info.set_property(self.fake_xp.Property_EditFieldSelEnd, 0)
 
         return info.wid
 
-    def _create_root_widget_window(
-        self, xp_geom: XPGeom,
-        descriptor: str,
-        widgetClass: XPWidgetClass,
-        visible: bool
-    ) -> XPWidgetID:
-        """
-        Create an XP-authentic root widget window:
-        - no_title_bar=True → frame = client area exactly
-        - title bar + close button drawn as widgets INSIDE client area
-        - root widget owns all children
-        """
+    def _create_root_widget_window(self, xp_geom, descriptor, widgetClass, visible):
 
+        # Create XPLM-style window using ABSOLUTE XPGeom
         win_info = self.fake_xp.window_manager.create_window(
             left=xp_geom.left,
             top=xp_geom.top,
@@ -151,67 +143,93 @@ class FakeXPWidget:
         )
 
         # ---------------------------------------------------------
-        # 3. Create root widget (client area = full window)
+        # ROOT WIDGET
         # ---------------------------------------------------------
+        # Root widget uses the CLIENT RECT as its ABSOLUTE geometry.
+        # WidgetInfo will convert this to local_xpgeom = (0,0,w,h)
         root_info = self.wm.create_widget(
             widget_class=widgetClass,
             window=win_info,
-            geometry=xp_geom,  # client area = full window
+            abs_geom=win_info.client,
             parent=None,
             descriptor=descriptor,
             visible=visible,
         )
 
-        if widgetClass == self.fake_xp.WidgetClass_TextField:
-            root_info.properties[self.fake_xp.Property_EditFieldSelStart] = 0
-            root_info.properties[self.fake_xp.Property_EditFieldSelEnd] = 0
-
         win_info.set_widget_root(root_info.wid)
 
         # ---------------------------------------------------------
-        # 4. Title bar (widget-drawn INSIDE client area)
+        # TITLE BAR (absolute coords inside client)
         # ---------------------------------------------------------
         title_h = WindowExInfo.TITLE_BAR_HEIGHT
 
         title_geom = XPGeom(
-            left=xp_geom.left + 4,
-            top=xp_geom.top -4,
-            right=xp_geom.right + 4,
-            bottom=xp_geom.top - 4 - title_h,
+            left=win_info.client.left + 4,
+            top=win_info.client.top - 4,
+            right=win_info.client.right - 4,
+            bottom=win_info.client.top - 4 - title_h,
         )
 
         self.wm.create_widget(
             widget_class=self.fake_xp.WidgetClass_Caption,
             window=win_info,
-            geometry=title_geom,
+            abs_geom=title_geom,  # ABSOLUTE XPGeom
             parent=root_info.wid,
             descriptor=descriptor,
             visible=True,
         )
 
         # ---------------------------------------------------------
-        # 5. Close button (widget-drawn INSIDE client area)
+        # CLOSE BUTTON (absolute coords inside client)
         # ---------------------------------------------------------
         close_size = WindowExInfo.CLOSE_BOX_SIZE
-
         close_geom = XPGeom(
-            left=xp_geom.right - close_size - 4,
-            top=xp_geom.top - 4,
-            right=xp_geom.right - 4,
-            bottom=xp_geom.top - 4 - close_size,
+            left=win_info.client.right - close_size - 4,
+            top=win_info.client.top - 4,
+            right=win_info.client.right - 4,
+            bottom=win_info.client.top - 4 - close_size,
         )
-
         close_info = self.wm.create_widget(
             widget_class=self.fake_xp.WidgetClass_Button,
             window=win_info,
-            geometry=close_geom,
+            abs_geom=close_geom,
             parent=root_info.wid,
             descriptor="X",
-            visible=False,  # exposed with set widget property
+            visible=False,
         )
-        win_info.set_widget_close(close_info.wid)
+        # Attach close-button callback
+        close_info.add_callback(
+            self._close_button_handler
+        )
+        win_info._close_widget = close_info.wid
 
         return root_info.wid
+
+    def _close_button_handler(self, msg, wid, p1, p2):
+        """
+        Callback for the custom close button widget.
+
+        - Fires on xpMsg_PushButtonPressed.
+        - Sends xpMessage_CloseButtonPushed to the parent widget (root).
+        - Does NOT destroy anything directly.
+        """
+
+        if msg == self.fake_xp.Msg_PushButtonPressed:
+            wm = self.fake_xp.widget_manager
+            info = wm.require_info(wid)
+
+            parent = info.parent
+            if parent is not None:
+                wm.queue_msg(
+                    parent,
+                    self.fake_xp.Message_CloseButtonPushed,
+                    wid,  # p1 = close button widget ID
+                    0  # p2 unused
+                )
+
+            return 1  # handled
+
+        return 0  # not handled
 
     def destroyWidget(self, wid: XPWidgetID, destroy_children: int = 1) -> None:
         """
@@ -238,15 +256,13 @@ class FakeXPWidget:
         Geometry is stored as WGeom; WindowExInfo handles dirtying.
         """
         info = self.wm.require_info(wid)
-        info.geometry = XPGeom(left, top, right, bottom)  # setter dirties window
-        info.geom_applied = False
-        info.container_geom_applied = None
+        info.set_local_geom(XPGeom(left, top, right, bottom))
 
     def getWidgetGeometry(self, wid: XPWidgetID) -> tuple[int, int, int, int]:
         """
         XPWidgets API: return authoritative XP geometry.
         """
-        geom = self.wm.require_info(wid).geometry
+        geom = self.wm.require_info(wid).abs_xpgeom
         return geom.left, geom.top, geom.right, geom.bottom
 
     def getWidgetExposedGeometry(self, wid: XPWidgetID) -> tuple[int, int, int, int]:
@@ -293,13 +309,11 @@ class FakeXPWidget:
         info = self.wm.require_info(wid)
         info.properties[prop] = value
 
-        if info.widget_class == self.fake_xp.WidgetClass_MainWindow and prop == self.fake_xp.Property_MainWindowHasCloseBoxes:
-            close_info = self.wm.require_info(info.window.widget_close)
-            close_info.set_visible(bool(value))
-
         info.window._dirty_xp_to_dpg = True
 
-    def getWidgetProperty(self, widgetID: XPWidgetID, propertyID: XPWidgetPropertyID | int, exists: Optional[int] = None) -> Any:
+    def getWidgetProperty(
+        self, widgetID: XPWidgetID, propertyID: XPWidgetPropertyID | int, exists: Optional[int] = None
+    ) -> Any:
         """
         XPWidgets API: get a widget property.
         """
@@ -373,18 +387,18 @@ class FakeXPWidget:
     ) -> Optional[XPWidgetID]:
         """
         XPWidgets API: return the topmost widget at (x, y) under the given root.
-        Coordinates are in the widget's window coordinate system.
+        Coordinates are in the window's GLOBAL coordinate system.
         """
-        xp_pt = XPPoint(x, y)
-        info = self.wm.require_info(wid)
 
-        # 1. Hit test this widget first
-        if not info.geometry.contains(xp_pt):
+        info = self.wm.require_info(wid)
+        xp_pt = XPPoint(x, y)
+
+        # 1. Hit test this widget using GLOBAL geometry
+        if not info.abs_xpgeom.contains(xp_pt):
             return None
 
-        # 2. If recursive, search children front-to-back
+        # 2. If recursive, search children in front-to-back order
         if recursive:
-            # children are stored back-to-front; reverse for topmost
             for child in reversed(info.children):
                 hit = self.getWidgetForLocation(child, x, y, 1)
                 if hit is not None:

@@ -62,7 +62,6 @@ class WindowManager:
         wheel_cb=None,
         refcon=None,
         no_title_bar: bool = False,
-        no_background: bool = False,
     ) -> WindowExInfo:
 
         wid = XPLMWindowID(self._next_window_id)
