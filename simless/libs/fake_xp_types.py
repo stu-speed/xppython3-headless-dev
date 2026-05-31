@@ -121,152 +121,6 @@ class XPPoint:
     x: int
     y: int
 
-@dataclass(slots=True)
-class WidgetInfo:
-    """
-    Pure XP-side state capsule for a single widget.
-
-    This object stores only LOCAL XP geometry (relative to the owning
-    window's client rect) but referenced in absolute geometry by converting
-    relative to parent.
-
-    This mirrors X-Plane's widget model: widgets do not track global
-    screen coordinates, and their position is always interpreted in the
-    coordinate space of the parent window.
-    """
-
-    wid: XPWidgetID
-    widget_class: XPWidgetClass
-    window: WindowExInfo
-    abs_geom_param: XPGeom   # passed in, NOT stored
-
-    # Hierarchy
-    parent: Optional[XPWidgetID] = None
-    _children: list[XPWidgetID] = field(default_factory=list)
-
-    # XP state
-    _descriptor: str = ""
-    _visible: bool = True
-
-    # Backend handles (plain attributes)
-    dpg_id: Optional[str] = None
-    container_id: Optional[str] = None  # container constrains widget to geom
-
-    # Only local geometry is stored
-    _local_xpgeom: XPGeom = field(init=False)
-
-    # DPG geometry state
-    container_geom_applied: Optional[bool] = None
-
-    # Properties + callbacks
-    _properties: Dict[XPWidgetPropertyID | int, Any] = field(default_factory=dict)
-    _callbacks: List[XPWidgetCallback] = field(default_factory=list)
-
-    def __post_init__(self):
-        # Convert ABSOLUTE XPGeom -> LOCAL XPGeom immediately
-        self._convert_abs_to_local(self.abs_geom_param)
-        del self.abs_geom_param   # never stored
-
-    def __repr__(self) -> str:
-        return (
-            f"<Widget {self.wid} "
-            f"class={lookup_constant_name(self.widget_class, "WidgetClass_")} "
-            f"descriptor={self._descriptor} "
-        )
-
-    # ------------------------------------------------------------
-    # GEOMETRY
-    # ------------------------------------------------------------
-    @property
-    def abs_xpgeom(self) -> XPGeom:
-        client = self.window.client
-        g = self._local_xpgeom
-
-        abs_left = client.left + g.left
-        abs_top = client.bottom + g.top
-
-        return XPGeom(
-            left=abs_left,
-            top=abs_top,
-            right=abs_left + g.width,
-            bottom=abs_top - g.height,
-        )
-
-    def set_local_geom(self, abs_geom: XPGeom) -> None:
-        """
-        Accepts ABSOLUTE XPGeom and converts it to LOCAL XPGeom.
-        Used for later geometry changes.
-        """
-        self._convert_abs_to_local(abs_geom)
-        if self.parent is not None:
-            self.container_geom_applied = False
-        self.window._dirty_widgets = True
-
-    def _convert_abs_to_local(self, abs_geom: XPGeom) -> None:
-        client = self.window.client
-
-        # XP-style: Y increases upward
-        local_left = abs_geom.left - client.left
-        local_top = abs_geom.top - client.bottom
-
-        self._local_xpgeom = XPGeom(
-            left=local_left,
-            top=local_top,
-            right=local_left + abs_geom.width,
-            bottom=local_top - abs_geom.height,
-        )
-
-    @property
-    def visible(self) -> bool:
-        return self._visible
-
-    def set_visible(self, value: bool) -> None:
-        self._visible = value
-        self.window._dirty_widgets = True
-
-    @property
-    def descriptor(self) -> str:
-        return self._descriptor
-
-    def set_descriptor(self, value: str) -> None:
-        self._descriptor = value
-        self.window._dirty_widgets = True
-
-    @property
-    def properties(self) -> Dict[XPWidgetPropertyID | int, Any]:
-        return self._properties
-
-    def set_property(self, prop: XPWidgetPropertyID | int, value: Any) -> None:
-        self._properties[prop] = value
-        self.window._dirty_widgets = True
-
-    @property
-    def callbacks(self) -> list[XPWidgetCallback]:
-        return self._callbacks
-
-    def add_callback(self, cb: XPWidgetCallback) -> None:
-        self._callbacks.append(cb)
-
-    def remove_callback(self, cb: XPWidgetCallback) -> None:
-        if cb in self._callbacks:
-            self._callbacks.remove(cb)
-
-    @property
-    def children(self) -> List[XPWidgetID]:
-        """Return the list of child widget IDs."""
-        return self._children
-
-    def add_child(self, child_id: XPWidgetID) -> None:
-        """Add a child widget and mark the owning window as dirty."""
-        self._children.append(child_id)
-        self.window._dirty_widgets = True
-
-    def remove_child(self, child_id: XPWidgetID) -> None:
-        """Remove a child widget and mark the owning window as dirty."""
-        if child_id in self._children:
-            self._children.remove(child_id)
-            self.window._dirty_widgets = True
-
 
 @dataclass(slots=True)
 class XPGeom:
@@ -447,6 +301,206 @@ class DPGGeom:
             DPGGeom representing the same rectangle in DPG coordinates.
         """
         return xp.to_dpg(screen_h)
+
+
+@dataclass(slots=True)
+class LocalGeom:
+    """
+    Widget-local geometry.
+
+    Coordinate system:
+        • Origin: top-left of the parent widget (or window client area)
+        • Y increases downward
+        • Stored as (x, y, width, height)
+
+    XPGeom is derived on demand using client_xpgeom.
+    """
+
+    x: int
+    y: int
+    width: int
+    height: int
+
+    # Parent's XPGraphics client rect (absolute)
+    client_xpgeom: XPGeom
+
+    # ------------------------------------------------------------
+    # Factory: XPGeom (absolute) → LocalGeom (parent-relative)
+    # ------------------------------------------------------------
+    @classmethod
+    def from_xpgeom(cls, xpgeom: XPGeom, client_geom: XPGeom) -> "LocalGeom":
+        """
+        Convert absolute XPGeom (screen-space, bottom-left origin)
+        into LocalGeom (parent-relative, top-left origin).
+
+        Args:
+            xpgeom:      Absolute XPGeom of the widget.
+            client_geom: Absolute XPGeom of the parent client area.
+
+        Returns:
+            LocalGeom instance.
+        """
+
+        # XPGeom: bottom-left origin
+        # LocalGeom: top-left origin
+
+        local_x = xpgeom.left - client_geom.left
+        local_y = client_geom.top - xpgeom.top
+
+        return cls(
+            x=local_x,
+            y=local_y,
+            width=xpgeom.width,
+            height=xpgeom.height,
+            client_xpgeom=client_geom,
+        )
+
+    # ------------------------------------------------------------
+    # LocalGeom → XPGeom (absolute)
+    # ------------------------------------------------------------
+    def to_xp_geom(self) -> XPGeom:
+        abs_left   = self.client_xpgeom.left + self.x
+        abs_top    = self.client_xpgeom.top  - self.y
+        abs_right  = abs_left + self.width
+        abs_bottom = abs_top  - self.height
+        return XPGeom(abs_left, abs_top, abs_right, abs_bottom)
+
+    # ------------------------------------------------------------
+    # LocalGeom → DPGGeom (direct mapping)
+    # ------------------------------------------------------------
+    def to_local_dpg_geom(self) -> DPGGeom:
+        return DPGGeom(self.x, self.y, self.width, self.height)
+
+
+@dataclass(slots=True)
+class WidgetInfo:
+    """
+    Pure XP-side state capsule for a single widget.
+
+    Stores ONLY LocalGeom (top-left origin, parent-relative).
+    XPGeom and DPGGeom are derived on demand.
+
+    This mirrors the real XPWidget model:
+        • Widgets do NOT store global screen coordinates.
+        • All geometry is interpreted relative to the parent.
+        • Root widgets interpret LocalGeom relative to the window client area.
+    """
+
+    wid: XPWidgetID
+    widget_class: XPWidgetClass
+    window: WindowExInfo
+    local_geom: LocalGeom
+
+    # Hierarchy
+    parent: Optional[XPWidgetID] = None
+    _children: list[XPWidgetID] = field(default_factory=list)
+
+    # XP state
+    _descriptor: str = ""
+    _visible: bool = True
+
+    # Non-root handles
+    dpg_id: Optional[str] = None
+    container_id: Optional[str] = None
+
+    # Properties + callbacks
+    _properties: Dict[XPWidgetPropertyID | int, Any] = field(default_factory=dict)
+    _callbacks: List[XPWidgetCallback] = field(default_factory=list)
+
+    def __repr__(self) -> str:
+        return (
+            f"<Widget {self.wid} "
+            f"class={lookup_constant_name(self.widget_class, 'WidgetClass_')} "
+            f"descriptor={self._descriptor}>"
+        )
+
+    # ------------------------------------------------------------
+    # GEOMETRY ACCESSORS
+    # ------------------------------------------------------------
+    @property
+    def xp_geom(self) -> XPGeom:
+        """Absolute XPGraphics geometry derived from LocalGeom."""
+        return self.local_geom.to_xp_geom()
+
+    @property
+    def local_dpg_geom(self) -> DPGGeom:
+        """DPG-local geometry derived from LocalGeom."""
+        return self.local_geom.to_local_dpg_geom()
+
+    # ------------------------------------------------------------
+    # GEOMETRY MUTATION
+    # ------------------------------------------------------------
+    def set_abs_xpgeom(self, abs_geom: XPGeom) -> None:
+        """
+        Accepts ABSOLUTE XPGeom and converts it to LocalGeom.
+        Used for later geometry changes.
+        """
+        client = self.local_geom.client_xpgeom
+
+        # Convert XPGeom → LocalGeom (top-left origin)
+        local_x = abs_geom.left - client.left
+        local_y = client.top - abs_geom.top
+
+        self.local_geom.x = local_x
+        self.local_geom.y = local_y
+        self.local_geom.width = abs_geom.width
+        self.local_geom.height = abs_geom.height
+
+        self.window._dirty_widgets = True
+
+    # ------------------------------------------------------------
+    # VISIBILITY / DESCRIPTOR / PROPERTIES
+    # ------------------------------------------------------------
+    @property
+    def visible(self) -> bool:
+        return self._visible
+
+    def set_visible(self, value: bool) -> None:
+        self._visible = value
+        self.window._dirty_widgets = True
+
+    @property
+    def descriptor(self) -> str:
+        return self._descriptor
+
+    def set_descriptor(self, value: str) -> None:
+        self._descriptor = value
+        self.window._dirty_widgets = True
+
+    @property
+    def properties(self) -> Dict[XPWidgetPropertyID | int, Any]:
+        return self._properties
+
+    def set_property(self, prop: XPWidgetPropertyID | int, value: Any) -> None:
+        self._properties[prop] = value
+        self.window._dirty_widgets = True
+
+    @property
+    def callbacks(self) -> list[XPWidgetCallback]:
+        return self._callbacks
+
+    def add_callback(self, cb: XPWidgetCallback) -> None:
+        self._callbacks.append(cb)
+
+    def remove_callback(self, cb: XPWidgetCallback) -> None:
+        if cb in self._callbacks:
+            self._callbacks.remove(cb)
+
+    # ------------------------------------------------------------
+    # HIERARCHY
+    # ------------------------------------------------------------
+    @property
+    def children(self) -> List[XPWidgetID]:
+        return self._children
+
+    def add_child(self, child_id: XPWidgetID) -> None:
+        self._children.append(child_id)
+        self.window._dirty_widgets = True
+
+    def remove_child(self, child_id: XPWidgetID) -> None:
+        if child_id in self._children:
+            self._children.remove(child_id)
+            self.window._dirty_widgets = True
 
 
 @dataclass(slots=True)

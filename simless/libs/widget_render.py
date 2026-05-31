@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast, Dict, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import DPGGeom, DPGOp, WidgetInfo, WindowExInfo
+from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo
 from XPPython3.xp_typing import XPWidgetID, XPWidgetMessage
 
 if TYPE_CHECKING:
@@ -96,6 +96,23 @@ class WidgetRender:
         """
         Ensure that a DearPyGui representation exists for the given XPWidget.
         Structural only: queue backend ops, do not execute immediately.
+
+        WHY CONTROLS NEED A CONTAINER:
+        --------------------------------
+        XPWidgets use ABSOLUTE positioning and strict parent clipping.
+        DPG widgets do NOT support absolute positioning and do NOT clip
+        themselves to the parent.
+
+        Only mvChildWindow in DPG:
+            • can be positioned absolutely inside its parent
+            • has its own clipping rect
+            • isolates its children from DPG layout
+            • prevents auto-size/layout from breaking XPWidget geometry
+
+        Therefore:
+            EVERY XPWidget (except the root MainWindow) gets a dedicated
+            mvChildWindow container. The actual control (button, text, etc.)
+            lives INSIDE that container.
         """
 
         info = self.mgr.require_info(wid)
@@ -115,15 +132,11 @@ class WidgetRender:
 
             # createWindowEx already enqueued ADD_WINDOW + ADD_DRAWLIST
             info.dpg_id = win.dpg_tag
-            info.container_id = win.dpg_tag  # root has window for the container
-            info.container_geom_applied = None
+            info.container_id = win.dpg_tag  # root uses the window as its container
             return
 
         # ============================================================
         # ALL NON-ROOT WIDGETS
-        # XP widgets need absolute positioning + clipping.
-        # Only mvChildWindow supports that in DPG.
-        # Therefore every widget (including SubWindow) gets a child_window container.
         # ============================================================
         parent_wid = info.parent
         if parent_wid is None:
@@ -137,13 +150,9 @@ class WidgetRender:
         if parent_container is None:
             raise RuntimeError(f"[Create] wid={wid} ERROR: parent container missing")
 
-        # Apply XP auto-size rules
-        self._apply_xp_autosize_rules(info, parent_info)
-
         # ------------------------------------------------------------
         # Create container (child_window)
         # ------------------------------------------------------------
-
         if info.container_id is None:
             info.container_id = f"xp_widget_container_{wid}"
 
@@ -152,15 +161,18 @@ class WidgetRender:
                 kwargs=dict(
                     tag=info.container_id,
                     parent=parent_container,
+
+                    # These are temporary; real size applied later
                     width=20,
                     height=10,
-                    no_scrollbar=True,
-                    border=False,
-                    autosize_x=False,
-                    autosize_y=False,
+
+                    # Critical flags:
+                    no_scrollbar=True, # XPWidgets do not scroll unless explicitly a scroll widget
+                    border=False,      # XPWidgets do not draw borders for controls
+                    autosize_x=False,  # XPWidgets use fixed geometry
+                    autosize_y=False,  # XPWidgets use fixed geometry
                 ),
             )
-            info.container_geom_applied = False
 
         # ------------------------------------------------------------
         # Create actual control
@@ -214,7 +226,7 @@ class WidgetRender:
                 # Queue xpMsg_KeyLoseFocus (processed later)
                 xp.widget_manager.clear_focus(widget_id)
 
-                key = 13 # enter key
+                key = 13  # enter key
                 self.mgr.queue_msg(
                     info.wid,
                     self.mgr.fake_xp.Msg_KeyPress,
@@ -292,72 +304,105 @@ class WidgetRender:
                 ),
             )
 
-    def _apply_xp_autosize_rules(self, info, parent_info):
-        """
-        XPWidgets auto-size certain widget classes.
-        FakeXP must emulate this behavior.
-        """
-        wclass = info.widget_class
-        geom = info.abs_xpgeom
-        parent_geom = parent_info.abs_xpgeom
-
-        # Width of this widget as provided by plugin
-        width = geom.right - geom.left
-
-        # XP auto-expands captions, textfields, and buttons
-        if wclass in (
-                self.mgr.fake_xp.WidgetClass_Caption,
-                self.mgr.fake_xp.WidgetClass_TextField,
-                self.mgr.fake_xp.WidgetClass_Button,
-        ):
-            # XP rule: if width is small, expand to parent width
-            if width < 100:  # threshold; XP uses "small width" heuristic
-                geom.right = parent_geom.right
-
     def _apply_geometry(self, wid: XPWidgetID) -> None:
         """
-        Apply XP → DPG geometry for this widget.
+        Push XPWidget geometry into the DearPyGui backend.
 
-        XP side:
-          - Widgets store only local_xpgeom (relative to window.client)
-          - abs_xpgeom is computed on demand
-          - Window movement automatically updates abs_xpgeom
+        OVERVIEW
+        --------
+        XPWidgets store geometry in LocalGeom:
+            • Origin = top-left of parent (or window client area)
+            • Y increases downward
+            • Width/height are explicit (XP API requires l,t,r,b)
 
-        DPG side:
-          - mvChildWindow does NOT auto-move when parent moves
-          - So we must push abs_xpgeom into DPG every time geometry changes
+        XPGeom (absolute screen-space) is computed on demand from LocalGeom,
+        but DPG never uses absolute coordinates for child widgets. Instead,
+        DPG child windows use *parent-relative* coordinates with a top-left
+        origin — exactly matching LocalGeom.
+
+        WHY THIS METHOD EXISTS
+        -----------------------
+        DPG child windows (mvChildWindow) do NOT automatically reposition
+        when their parent moves. XPWidgets *do* automatically move when the
+        parent window moves. Therefore, FakeXP must explicitly push geometry
+        into DPG every time LocalGeom changes or the parent window moves.
+
+        WHAT GETS UPDATED
+        -----------------
+        • Only the widget's container child-window is positioned/sized here.
+          The actual control (button, caption, etc.) lives *inside* that
+          container and is sized separately when created.
+
+        • Root widgets (MainWindow) are NOT handled here. Their geometry is
+          managed by WindowExInfo, which owns the top-level DPG window.
+
+        WHEN THIS IS CALLED
+        -------------------
+        • After XPWidget geometry changes
+        • After window movement/resizing
+        • During layout passes
+        • During initial realization
+
+        PARAMETERS
+        ----------
+        wid : XPWidgetID
+            The widget whose geometry should be applied to DPG.
         """
 
         info = self.mgr.require_info(wid)
 
-        # Skip until DPG container exists
+        # ------------------------------------------------------------
+        # Skip if DPG container does not yet exist
+        # ------------------------------------------------------------
         if info.container_id is None:
             return
 
-        # Root widget window geometry is handled by WindowExInfo
+        # ------------------------------------------------------------
+        # Root widget geometry is handled by WindowExInfo
+        # ------------------------------------------------------------
         if info.window.widget_root == wid:
             return
 
         # ------------------------------------------------------------
-        # Compute DPG geometry using XPGeom helper
+        # Convert LocalGeom → DPGGeom (parent-relative)
         # ------------------------------------------------------------
-        abs_geom = info.abs_xpgeom  # XPGeom
-        screen_h = self.mgr.gm.dpg_get_viewport_client_height()
-
-        dpg_geom = abs_geom.to_dpg(screen_h)  # DPGGeom(x, y, w, h)
+        local_dpg_geom = info.local_geom.to_local_dpg_geom()
 
         # ------------------------------------------------------------
-        # Push geometry to DPG
+        # Push geometry to DPG child window container
         # ------------------------------------------------------------
         self.mgr.gm.enqueue_dpg(
             op=DPGOp.CONFIGURE_ITEM,
             args=(info.container_id,),
             kwargs=dict(
-                pos=(dpg_geom.x, dpg_geom.y),
-                width=dpg_geom.width,
-                height=dpg_geom.height,
+                pos=(local_dpg_geom.x, local_dpg_geom.y),
+                width=local_dpg_geom.width,
+                height=local_dpg_geom.height,
             ),
         )
+
+        self._apply_control_geometry(info)
+
+    def _apply_control_geometry(self, info: WidgetInfo) -> None:
+        """
+        Apply geometry to the actual DPG control inside the container.
+
+        WHY THIS EXISTS
+        ---------------
+        • XPWidgets expect the control to fill the entire (l,t,r,b) rect.
+        • DPG controls do NOT auto-size to fill their parent.
+        • Therefore FakeXP must explicitly size the control to match LocalGeom.
+
+        WHAT THIS DOES
+        --------------
+        • Uses LocalGeom width/height
+        • Applies width/height to the DPG control (info.dpg_id)
+        • Does NOT set position (the container handles that)
+        """
+
+        # DPG has limited sizing for controls.  Just let it auto-size
+        return
+
 
     def _apply_visibility(self, wid: XPWidgetID) -> None:
         """

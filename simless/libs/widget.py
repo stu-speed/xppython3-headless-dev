@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo, XPGeom
+from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo, XPGeom, LocalGeom
 from simless.libs.widget_render import WidgetRender
 from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage
 
@@ -55,7 +55,6 @@ class WidgetManager(WidgetRender):
 
     def create_widget(
         self,
-        *,
         widget_class: XPWidgetClass,
         window: WindowExInfo,
         abs_geom: XPGeom,
@@ -70,7 +69,7 @@ class WidgetManager(WidgetRender):
             wid=wid,
             widget_class=widget_class,
             window=window,
-            abs_geom_param=abs_geom,
+            local_geom=LocalGeom.from_xpgeom(abs_geom, window.client),
             parent=parent,
             _descriptor=descriptor,
             _visible=visible,
@@ -82,10 +81,6 @@ class WidgetManager(WidgetRender):
         if parent is not None:
             pinfo = self.require_info(parent)
             pinfo.add_child(wid)  # dirties window internally
-
-        # If window has no root, this becomes root
-        if window.widget_root is None:
-            window.set_widget_root(wid)
 
         # Add to z-order (dirties window internally)
         window.add_to_widget_z_order(wid)
@@ -224,7 +219,7 @@ class WidgetManager(WidgetRender):
                 continue
 
             # Hit-test child
-            if winfo.abs_xpgeom.contains(p1):
+            if winfo.xp_geom.contains(p1):
                 if self._dispatch_message(wid, msg, p1, p2):
                     return 1
 

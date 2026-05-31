@@ -54,6 +54,7 @@ from __future__ import annotations
 
 from typing import Any, cast, Literal, Optional, TYPE_CHECKING
 
+from simless.libs.fake_xp_constants import lookup_constant_name
 from simless.libs.fake_xp_types import XPPoint, XPGeom, XPWidgetCallback, WindowExInfo
 from simless.libs.widget import WidgetManager
 from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage, XPWidgetPropertyID
@@ -88,11 +89,17 @@ class FakeXPWidget:
         visible_bool = bool(visible)
 
         # ---------------------------------------------------------
-        # ROOT WIDGET
+        # ROOT WIDGET VALIDATION
         # ---------------------------------------------------------
         if isRoot:
             if container != 0:
                 raise ValueError(f"Root widget must have container=0 (got {container})")
+
+            if widgetClass != self.fake_xp.WidgetClass_MainWindow:
+                raise ValueError(
+                    f"Root widget must be WidgetClass_MainWindow "
+                    f"(got {lookup_constant_name(widgetClass, 'WidgetClass_')})"
+                )
 
             return self._create_root_widget_window(
                 xp_geom=abs_geom,
@@ -102,10 +109,14 @@ class FakeXPWidget:
             )
 
         # ---------------------------------------------------------
-        # NON-ROOT WIDGET
+        # NON-ROOT VALIDATION
         # ---------------------------------------------------------
-        if container == 0:
-            raise ValueError("Non-root widget cannot have container=0")
+        if not isRoot:
+            if container == 0:
+                raise ValueError("Non-root widget cannot have container=0")
+
+            if widgetClass == self.fake_xp.WidgetClass_MainWindow:
+                raise ValueError("MainWindow widget cannot be a child widget")
 
         parent_wid = XPWidgetID(container)
         parent_info = self.wm.require_info(parent_wid)
@@ -256,13 +267,13 @@ class FakeXPWidget:
         Geometry is stored as WGeom; WindowExInfo handles dirtying.
         """
         info = self.wm.require_info(wid)
-        info.set_local_geom(XPGeom(left, top, right, bottom))
+        info.set_abs_xpgeom(XPGeom(left, top, right, bottom))
 
     def getWidgetGeometry(self, wid: XPWidgetID) -> tuple[int, int, int, int]:
         """
         XPWidgets API: return authoritative XP geometry.
         """
-        geom = self.wm.require_info(wid).abs_xpgeom
+        geom = self.wm.require_info(wid).xp_geom
         return geom.left, geom.top, geom.right, geom.bottom
 
     def getWidgetExposedGeometry(self, wid: XPWidgetID) -> tuple[int, int, int, int]:
@@ -394,7 +405,7 @@ class FakeXPWidget:
         xp_pt = XPPoint(x, y)
 
         # 1. Hit test this widget using GLOBAL geometry
-        if not info.abs_xpgeom.contains(xp_pt):
+        if not info.xp_geom.contains(xp_pt):
             return None
 
         # 2. If recursive, search children in front-to-back order
