@@ -25,7 +25,7 @@ from typing import Any, Callable, cast, List, MutableSequence, Optional, Sequenc
 
 from simless.libs.dataref import DataRefManager
 from simless.libs.fake_xp_types import FakeDataRef
-from XPPython3.xp_typing import XPLMDataRefInfo_t
+from xp_typing import XPLMDataRefInfo_t
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP

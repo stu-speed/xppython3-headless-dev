@@ -65,29 +65,39 @@ Follow these steps to set up a fully functional sim‑less XPPython3 development
 ```
 xppython3-headless-dev/
 │
-├── plugins/                                # Mirrors X‑Plane's Resources/plugins/
-│   │                                        # Production-only; FakeXP NEVER writes here
-│   ├── XPPython3/                           # Real XPPython3 API (importable by plugins)
-│   │   ├── xp.py                            # Real xp API surface (FakeXP monkey‑patches this)
-│   │   ├── xp.pyi                           # Typing surface for IDE/mypy
-│   │   ├── xp_types.pyi                     # XPLM typedefs, enums, structs
-│   │   └── utils/                           # Real XPPython3 helpers (commands, datarefs)
-│   │       ├── commands.py
-│   │       ├── datarefs.py
-│   │       └── ...
-│   │
-│   └── PythonPlugins/                       # ALL plugins live here (exactly like X‑Plane)
-│       ├── PI_sshd_ota.py                   # Example plugin with managed DataRefs
-│       ├── PI_sshd_dev_ota_gui.py           # Example XPWidget GUI plugin
+├── Resources/                               # Mirrors real X‑Plane/Resources/
+│   └── plugins/                             # EXACT X‑Plane plugin root
+│       ├── XPPython3/                       # Real XPPython3 API (importable by plugins)
+│       │   ├── xp.py                        # Real xp API surface (FakeXP monkey‑patches this)
+│       │   ├── xp.pyi                       # Typing surface for IDE/mypy
+│       │   ├── xp_types.pyi                 # XPLM typedefs, enums, structs
+│       │   └── utils/                       # Real XPPython3 helpers (commands, datarefs)
+│       │       ├── commands.py
+│       │       ├── datarefs.py
+│       │       └── ...
 │       │
-│       ├── sshd_extlibs/                    # Shared production modules for plugins
-│       │   ├── ss_serial_device.py
-│       │   └── ...
-│       │
-│       └── sshd_extensions/                 # Shared plugin architecture (production)
-│           ├── datarefs.py                  # Managed DataRefs
-│           ├── bridge_protocol.py           # Bridge datarefs
-│           └── ...
+│       └── PythonPlugins/                   # ALL plugins live here (exactly like X‑Plane)
+│           ├── PI_sshd_ota.py               # Example plugin with managed DataRefs
+│           ├── PI_sshd_dev_ota_gui.py       # Example XPWidget GUI plugin
+│           │
+│           ├── noaaweather/                 # NOAA weather plugin (server + widgets)
+│           │   ├── weatherServer.py
+│           │   ├── realweather.py
+│           │   ├── weathersource.py
+│           │   └── ...
+│           │
+│           ├── sshd_extlibs/                # Shared production modules for plugins
+│           │   ├── ss_serial_device.py
+│           │   └── ...
+│           │
+│           └── sshd_extensions/             # Shared plugin architecture (production)
+│               ├── datarefs.py              # Managed DataRefs
+│               ├── bridge_protocol.py       # Bridge datarefs
+│               └── ...
+│
+├── Output/                                  # X‑Plane‑authentic Output directory
+│   └── real weather/                        # NOAA expects this directory to exist
+│       └── .gitkeep                         # Ensures Git tracks the directory
 │
 ├── simless/                                 # Sim‑less execution harness (development‑only)
 │   │
@@ -96,19 +106,19 @@ xppython3-headless-dev/
 │   │
 │   └── libs/                                # FakeXP runtime + XP API monkey‑patch layer
 │       ├── fake_xp.py                       # FakeXP: public xp.* API façade
-│       ├── fake_xp.pyi                      # Generated Protocol: fake xp.* API surface
+│       ├── fake_xp.pyi                      # Typing surface for FakeXP API
 │       ├── plugin_runner.py                 # Lifecycle, plugin loading, timing
 │       ├── plugin_loader.py                 # Load plugin compatible environment
 │       ├── fake_xp_widget.py                # XPWidget emulation (DearPyGui-backed)
 │       ├── fake_xp_graphics.py              # XPLMDisplay/XPLMGraphics simulation
 │       ├── fake_xp_dataref.py               # DataRef engine (managed + inferred + bridged)
 │       ├── fake_xp_utilities.py             # Commands, menus, misc XPLM shims
-│       ├── fake_xp_input.py                 # mouse / keyboard
-│       └── fake_xp_interface.pyi            # Typing surface for FakeXPInterface
+│       └── fake_xp_input.py                 # mouse / keyboard
 │
 ├── tests/                                   # Unit tests for FakeXP + plugin lifecycle
 │
 └── pyproject.toml                           # Poetry package management
+
 ```
 ---------------------------------------------------------------------
 

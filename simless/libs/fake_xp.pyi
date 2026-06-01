@@ -3,7 +3,7 @@
 # Type stub file generated from XP*.pyi files
 # This file contains type hints for all functions, classes, and constants
 
-from XPPython3.xp_typing import (
+from xp_typing import (
     XPDispatchMode,
     XPElementStyle,
     XPLMAudioBus,
@@ -552,7 +552,7 @@ pythonExecutable: str
 
 # Functions
 
-from XPPython3.xp_typing import (
+from xp_typing import (
     XPLMCursorStatus, XPLMFontID, XPLMMenuID, XPLMMouseStatus, XPLMWindowDecoration,
     XPLMWindowID, XPLMDataRefInfo_t, XPLMFlightLoopID, XPLMFlightLoopPhaseType, XPLMWindowLayer, XPWidgetClass,
     XPWidgetID, XPWidgetMessage, XPWidgetPropertyID

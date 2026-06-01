@@ -6,7 +6,7 @@
 
 import XPPython3
 
-from PythonPlugins.sshd_extensions.bridge_protocol import BridgeData, BridgeDataType
+from sshd_extensions.bridge_protocol import BridgeData, BridgeDataType
 from simless.libs.fake_xp import FakeXP
 
 

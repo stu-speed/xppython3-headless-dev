@@ -8,7 +8,7 @@ from simless.libs.fake_xp_types import XPGeom
 from simless.libs.fake_xp_types import (
     DPGCommand, DPGGeom, DPGOp, WindowExInfo
 )
-from XPPython3.xp_typing import XPLMMenuID, XPLMWindowID
+from xp_typing import XPLMMenuID, XPLMWindowID
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP

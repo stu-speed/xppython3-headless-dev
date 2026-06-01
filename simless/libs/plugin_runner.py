@@ -52,7 +52,7 @@ from simless.libs.fake_xp_types import XPShutdown
 from simless.libs.plugin_loader import LoadedPlugin
 
 if TYPE_CHECKING:
-    import PythonPlugins.sshd_extensions.bridge_protocol as bridge_type
+    import sshd_extensions.bridge_protocol as bridge_type
     from simless.libs.fake_xp import FakeXP
 
 
@@ -111,7 +111,7 @@ class SimlessRunner:
         # plugins/XPPython3/xp.py and crash on:
         #       import XPLMCamera
         #
-        import PythonPlugins.sshd_extensions.bridge_protocol as bridge_mod
+        import sshd_extensions.bridge_protocol as bridge_mod
         self._bridge_mod = bridge_mod
 
         # ------------------------------------------------------------------

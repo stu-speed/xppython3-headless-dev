@@ -6,7 +6,7 @@ from typing import List, Optional, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import DPGOp, WindowExInfo, XPGeom, XPPoint
 from simless.libs.graphics import GraphicsManager
-from XPPython3.xp_typing import (
+from xp_typing import (
     XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer
 )
 

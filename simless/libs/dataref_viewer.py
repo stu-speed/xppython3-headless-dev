@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional, Pattern, TYPE_CHECKING
 
 from simless.libs.dataref import DataRefManager
 from simless.libs.fake_xp_types import FakeDataRef
-from XPPython3.xp_typing import XPWidgetID, XPWidgetMessage
+from xp_typing import XPWidgetID, XPWidgetMessage
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP

@@ -46,7 +46,7 @@ from typing import Any, List, Optional, TYPE_CHECKING
 import dearpygui.dearpygui as dpg
 
 from simless.libs.fake_xp_types import EventInfo, EventKind, XPPoint
-from XPPython3.xp_typing import (
+from xp_typing import (
     XPLMCursorStatus,
     XPLMMouseStatus,
     XPLMWindowID,

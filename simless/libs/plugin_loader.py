@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
 import sys
 import types
 from pathlib import Path
@@ -18,8 +19,11 @@ if TYPE_CHECKING:
 
 class PythonInterfaceProto(Protocol):
     def XPluginStart(self) -> tuple[str, str, str]: ...
+
     def XPluginEnable(self) -> int: ...
+
     def XPluginDisable(self) -> None: ...
+
     def XPluginStop(self) -> None: ...
 
 
@@ -55,15 +59,26 @@ class LoadedPlugin:
 
 class SimlessPluginLoader:
     """
-    Loads Python plugins from plugins/PythonPlugins, wires a synthetic
-    XPPython3 runtime, and exposes X‑Plane‑authentic plugin lifecycle behavior.
+    Loads Python plugins from Resources/plugins/PythonPlugins,
+    wires a synthetic XPPython3 runtime, and exposes X‑Plane‑authentic
+    plugin lifecycle behavior.
     """
 
     def __init__(self, xp: FakeXP) -> None:
+        # --------------------------------------------------------------
+        # 1) Project root = X‑Plane root
+        # --------------------------------------------------------------
         project_root = Path(__file__).resolve().parents[2]
 
-        # Real X‑Plane structure:
-        self.plugins_root = project_root / "plugins"
+        # NOAA expects cwd == X‑Plane root
+        # (weatherServer.py uses relative paths)
+        os.chdir(project_root)
+
+        # --------------------------------------------------------------
+        # 2) Real X‑Plane directory layout
+        # --------------------------------------------------------------
+        self.xplane_root = project_root
+        self.plugins_root = project_root / "Resources" / "plugins"
         self.root = self.plugins_root / "PythonPlugins"
         self.xppython3_root = self.plugins_root / "XPPython3"
 

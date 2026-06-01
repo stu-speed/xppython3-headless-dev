@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterable, Optional, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo, XPGeom, LocalGeom, XPPoint
 from simless.libs.widget_render import WidgetRender
-from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage
+from xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP

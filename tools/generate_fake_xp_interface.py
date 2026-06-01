@@ -19,7 +19,7 @@ from pathlib import Path
 # Paths
 # ---------------------------------------------------------------------------
 
-XP_PYI = Path("../plugins/XPPython3/xp.pyi")
+XP_PYI = Path("../Resources/plugins/XPPython3/xp.pyi")
 SIMLESS_DIR = Path("../simless/libs")
 
 SIMLESS_SOURCES = {

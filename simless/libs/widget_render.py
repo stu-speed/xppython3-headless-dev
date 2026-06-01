@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, cast, Dict, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo
-from XPPython3.xp_typing import XPWidgetID, XPWidgetMessage
+from xp_typing import XPWidgetID, XPWidgetMessage
 
 if TYPE_CHECKING:
     from simless.libs.widget import WidgetManager

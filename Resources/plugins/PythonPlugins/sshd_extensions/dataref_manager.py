@@ -35,7 +35,10 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+import XPPython3
+print("XPPython3 loaded from:", XPPython3.__file__)
 from XPPython3 import xp
+
 from XPPython3.xp_typing import XPLMDataRef, XPLMDataRefInfo_t
 
 

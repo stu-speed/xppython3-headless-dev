@@ -51,7 +51,7 @@ from simless.libs.fake_xp_types import (
     WindowExInfo
 )
 from simless.libs.graphics_dpg import GraphicsDpg
-from XPPython3.xp_typing import XPLMMenuID
+from xp_typing import XPLMMenuID
 
 
 class GraphicsManager(GraphicsDpg):

@@ -1,6 +1,6 @@
 import pytest
 
-from PythonPlugins.sshd_extensions.bridge_protocol import (
+from sshd_extensions.bridge_protocol import (
     Add, BridgeMsg, BridgeMsgType, ErrorMsg, Meta, Ping, Pong, Reset, Update, UpdateEntry
 )
 

@@ -57,7 +57,7 @@ from typing import Any, cast, Literal, Optional, TYPE_CHECKING
 from simless.libs.fake_xp_constants import lookup_constant_name
 from simless.libs.fake_xp_types import XPPoint, XPGeom, XPWidgetCallback, WindowExInfo
 from simless.libs.widget import WidgetManager
-from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage, XPWidgetPropertyID
+from xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage, XPWidgetPropertyID
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP

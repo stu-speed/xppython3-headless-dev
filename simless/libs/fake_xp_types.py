@@ -7,7 +7,7 @@ from enum import auto, StrEnum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from simless.libs.fake_xp_constants import lookup_constant_name
-from XPPython3.xp_typing import (
+from xp_typing import (
     XPLMCursorStatus,
     XPLMMouseStatus,
     XPLMWindowDecoration,

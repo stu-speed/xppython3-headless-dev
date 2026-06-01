@@ -47,7 +47,7 @@ from typing import Any, Callable, cast, List, Optional, Sequence, Tuple, TYPE_CH
 
 from simless.libs.graphics import GraphicsManager
 from simless.libs.fake_xp_types import DPGOp, XPGeom
-from XPPython3.xp_typing import (
+from xp_typing import (
     XPLMCursorStatus, XPLMFontID, XPLMMenuID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID,
     XPLMWindowLayer
 )
