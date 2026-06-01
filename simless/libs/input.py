@@ -426,6 +426,11 @@ class InputManager:
         # ------------------------------------------------------------
         root_id = info.widget_root
         if root_id:
+            if mouseStatus == xp.MouseDown:
+                target_widget = xp.widget_manager.hit_test(root_id, xp_pt)
+                if target_widget:
+                    xp.widget_manager.set_focus(target_widget)
+
             xp.widget_manager.queue_msg(
                 wid=root_id,
                 msg=(xp.Msg_MouseDown if mouseStatus == xp.MouseDown else xp.Msg_MouseUp),
@@ -481,10 +486,10 @@ class InputManager:
             return 1
 
         # 2) Widget wheel callback (if any)
-        # Walk z‑order manually
-        for wid in reversed(info.widget_z_order):
-            winfo = self.fake_xp.widget_manager.get_widget(wid)
-            if winfo and winfo.contains(xp_pt):
+        root_id = info.widget_root
+        if root_id:
+            target_widget = xp.widget_manager.hit_test(root_id, xp_pt)
+            if target_widget:
                 return self._dispatch_widget_wheel(
                     widgetID=winfo.wid,
                     wheel=wheel,

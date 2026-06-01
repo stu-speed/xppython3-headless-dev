@@ -401,22 +401,8 @@ class FakeXPWidget:
         Coordinates are in the window's GLOBAL coordinate system.
         """
 
-        info = self.wm.require_info(wid)
         xp_pt = XPPoint(x, y)
-
-        # 1. Hit test this widget using GLOBAL geometry
-        if not info.xp_geom.contains(xp_pt):
-            return None
-
-        # 2. If recursive, search children in front-to-back order
-        if recursive:
-            for child in reversed(info.children):
-                hit = self.getWidgetForLocation(child, x, y, 1)
-                if hit is not None:
-                    return hit
-
-        # 3. No child hit → this widget is the hit
-        return wid
+        return self.wm.hit_test(wid, xp_pt, recursive)
 
     # ------------------------------------------------------------------
     # Z‑ORDER

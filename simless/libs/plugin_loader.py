@@ -117,7 +117,7 @@ class SimlessPluginLoader:
         exactly like in X‑Plane.
         """
         xp_mod = types.ModuleType("xp")
-        xp_mod.VERSION = "simless"
+        xp_mod.VERSION = "FakeXP"
         xp_mod.log = self.xp.log
 
         # Expose FakeXP API surface

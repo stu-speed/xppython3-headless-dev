@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo, XPGeom, LocalGeom
+from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo, XPGeom, LocalGeom, XPPoint
 from simless.libs.widget_render import WidgetRender
 from XPPython3.xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage
 
@@ -140,6 +140,15 @@ class WidgetManager(WidgetRender):
         info.window.lower_widget(wid)  # dirties window internally
 
     def set_focus(self, wid: XPWidgetID) -> None:
+        info = self.require_info(wid)
+        fw = info.window.focused_widget
+
+        if fw == wid:
+            return  # no-op
+
+        if fw is not None:
+            self.clear_focus(fw)
+
         self.queue_msg(
             wid,
             self.fake_xp.Msg_KeyTakeFocus,
@@ -154,6 +163,33 @@ class WidgetManager(WidgetRender):
             None,
             None,
         )
+
+    def hit_test(
+        self,
+        root_wid: XPWidgetID,
+        xp_pt: XPPoint,
+        recursive: bool = True,
+    ) -> Optional[XPWidgetID]:
+        """
+        XPWidgets API: return the topmost widget at (x, y) under the given root.
+        Coordinates are in the window's GLOBAL coordinate system.
+        """
+
+        info = self.require_info(root_wid)
+
+        # 1. Hit test this widget using GLOBAL geometry
+        if not info.visible or not info.xp_geom.contains(xp_pt):
+            return None
+
+        # 2. If recursive, search children in front-to-back order
+        if recursive:
+            for child in reversed(info.children):
+                hit = self.hit_test(child, xp_pt, recursive)
+                if hit is not None:
+                    return hit
+
+        # 3. No child hit → this widget is the hit
+        return info.wid
 
     def iter_window_widgets(self, window: WindowExInfo) -> Iterable[WidgetInfo]:
         root = window.widget_root
@@ -331,11 +367,7 @@ class WidgetManager(WidgetRender):
             if msg == xp.Msg_MouseUp:
                 parent = info.parent
 
-                # If this button *is* the window's close button:
-                if info.window and info.window.widget_close == info.wid:
-                    event = xp.Message_CloseButtonPushed
-                else:
-                    event = xp.Msg_PushButtonPressed
+                event = xp.Msg_PushButtonPressed
 
                 if parent:
                     self._dispatch_message(

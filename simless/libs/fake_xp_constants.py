@@ -31,12 +31,10 @@ from __future__ import annotations
 
 def bind_xp_constants(xp) -> None:
     """
-    Bind all module-level ALL_CAPS constants into the xp namespace.
-    This keeps the module importable without circular dependencies.
+    Bind all module-level constants into the xp namespace.
     """
     for name, val in globals().items():
-        if name and name[0].isupper():
-            setattr(xp, name, val)
+        setattr(xp, name, val)
 
 def lookup_constant_name(value: int, prefix: str) -> str:
     """
