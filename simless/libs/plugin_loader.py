@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 class PythonInterfaceProto(Protocol):
+    # Required plugin methods
+
     def XPluginStart(self) -> tuple[str, str, str]: ...
 
     def XPluginEnable(self) -> int: ...
@@ -48,6 +50,16 @@ class LoadedPlugin:
         self.module = module
         self.instance = instance
         self.enabled = False
+
+        # Bind optional receive method
+        self._recv = getattr(instance, "XPluginReceiveMessage", None)
+
+    def has_receive(self) -> bool:
+        return callable(self._recv)
+
+    def receive_message(self, sender: int, msg: int, param) -> None:
+        if self._recv:
+            self._recv(sender, msg, param)
 
     def __repr__(self) -> str:
         return f"<LoadedPlugin id={self.plugin_id} name={self.name}>"
@@ -88,6 +100,10 @@ class SimlessPluginLoader:
 
         self._ensure_sys_path()
         self._install_xp_facade()
+
+    @property
+    def loaded_plugins(self) -> List[LoadedPlugin]:
+        return self._loaded_plugins
 
     # ----------------------------------------------------------------------
     # sys.path setup
@@ -176,7 +192,9 @@ class SimlessPluginLoader:
         if not plugin_path.exists():
             raise RuntimeError(f"[Loader] Plugin '{name}' not found in {self.root}")
 
-    def load_plugins(self, modules: List[str | ModuleType]) -> List[LoadedPlugin]:
+    def load_plugins(self, modules: List[str | ModuleType]) -> None:
+        self.xp.log("[Loader] === XPluginStart ===")
+
         plugins: List[LoadedPlugin] = []
 
         for item in modules:
@@ -191,7 +209,6 @@ class SimlessPluginLoader:
             plugins.append(plugin)
 
         self._loaded_plugins = plugins
-        return plugins
 
     def _load_single(self, name: str) -> LoadedPlugin:
         self.xp.log(f"[Loader] Loading module {name}")
@@ -216,14 +233,10 @@ class SimlessPluginLoader:
 
         # Provide xp.* façade to plugin instance
         instance.xp = self.xp
-
-        # Run XPluginStart
-        self.xp.log("[Loader] === XPluginStart BEGIN ===")
         try:
             name, sig, desc = instance.XPluginStart()
         except Exception as exc:
             raise RuntimeError(f"[Loader] XPluginStart failed for {module.__name__}: {exc!r}")
-        self.xp.log("[Loader] === XPluginStart END ===")
 
         plugin_id = self._next_id
         self._next_id += 1

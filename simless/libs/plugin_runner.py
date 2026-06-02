@@ -19,6 +19,37 @@
 #   • Bridge synchronization is runner‑owned: inbound META/UPDATE/ERROR
 #     events are dispatched to DataRefManager before flightloops run.
 #
+#   • IMPORT ROOT BOOTSTRAP (simless/__init__.py):
+#       simless/__init__.py inserts the production‑authentic XPPython3 import
+#       roots into sys.path BEFORE any simless module is imported. This ensures:
+#
+#         - XPPython3 is always treated as a real package (never a namespace)
+#         - xp_typing, utils, and all package submodules remain importable
+#         - plugin imports behave identically to X‑Plane’s embedded Python
+#
+#       The bootstrap is transparent to all run scripts and requires no
+#       participation from FakeXP or the runner.
+#
+#   • XPPython3.xp FAÇADE WIRING (simless/xppython3_runtime.py):
+#       The façade is installed during simless bootstrap, not by FakeXP.
+#       The real XPPython3 package is preserved intact; only the `xp`
+#       submodule is synthetic. simless/xppython3_runtime.py installs a
+#       dynamic proxy module into:
+#
+#         • sys.modules["xp"]
+#         • sys.modules["XPPython3.xp"]
+#         • XPPython3.xp
+#
+#       The façade implements module‑level __getattr__ and __dir__ so that:
+#
+#         import xp
+#         from XPPython3 import xp
+#         from XPPython3.xp import foo
+#
+#       all resolve to a proxy whose attribute access forwards to the active
+#       FakeXP instance. This mirrors XPPython3’s dynamic attribute model
+#       while preserving the rest of the package unchanged.
+#
 # CORE INVARIANTS
 #   • No inference, no hidden state: runner behavior is explicit and
 #     deterministic across all environments.
@@ -27,6 +58,10 @@
 #     XPluginEnable, ensuring production‑authentic UI behavior.
 #   • Flightloops, bridge sync, and graphics frames are executed in a strict,
 #     documented order each frame.
+#   • XPPython3 package integrity is preserved; only the `xp` submodule is
+#     synthetic and always forwards to the active FakeXP instance.
+#   • sys.path bootstrap ensures import stability and prevents namespace
+#     package creation across all environments.
 #
 # LIFECYCLE SEQUENCE
 #   1. xp.init_graphics_root()        — graphics + widget system ready
@@ -44,7 +79,7 @@ from __future__ import annotations
 import time
 import traceback
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from simless.libs.dataref import DataRefManager
 from simless.libs.dataref_viewer import FakeXPDataRefViewerClient
@@ -163,6 +198,47 @@ class SimlessRunner:
     @property
     def current_plugin_id(self) -> int | None:
         return self._current_plugin_id
+
+    @contextmanager
+    def plugin_context(self, plugin_id: int):
+        """
+        Context manager that temporarily sets the active plugin identity for the
+        duration of a callback, matching XPPython3 and X‑Plane execution semantics.
+
+        X‑Plane always executes plugin callbacks (flightloops, widget handlers,
+        message receivers, draw callbacks, etc.) with a specific "current plugin"
+        in scope. This identity determines:
+
+          • xp.getMyID() return value
+          • which plugin owns newly created flightloops, widgets, and datarefs
+          • which plugin receives log attribution
+          • which plugin receives synchronous message replies
+          • correct routing of nested plugin→plugin calls
+
+        Because plugin callbacks may be nested (e.g., Plugin A sends a message to
+        Plugin B, and Plugin B calls back into the SDK), the context manager must
+        restore the previous plugin ID after the callback completes. Without this
+        push/pop behavior, subsequent API calls would execute under the wrong
+        plugin identity, breaking ownership, logging, and message routing.
+
+        This context manager therefore:
+
+          1. Saves the currently active plugin ID.
+          2. Sets the active plugin to `plugin_id` for the duration of the block.
+          3. Restores the previous plugin ID on exit, even if an exception occurs.
+
+        All plugin lifecycle calls (XPluginStart, XPluginEnable, XPluginDisable,
+        XPluginStop), message dispatch (XPluginReceiveMessage), flightloop
+        execution, and widget event handling must run inside this context to
+        preserve X‑Plane‑authentic behavior.
+        """
+
+        prev = self._current_plugin_id
+        self._current_plugin_id = plugin_id
+        try:
+            yield
+        finally:
+            self._current_plugin_id = prev
 
     def get_bridge_status(self) -> tuple[bool, bool, str | None]:
         """
@@ -294,14 +370,6 @@ class SimlessRunner:
     # ----------------------------------------------------------------------
     # One frame
     # ----------------------------------------------------------------------
-    @contextmanager
-    def plugin_context(self, plugin_id: int) -> Iterator[None]:
-        prev = self._current_plugin_id
-        self._current_plugin_id = plugin_id
-        try:
-            yield
-        finally:
-            self._current_plugin_id = prev
 
     def _run_one_frame(self) -> None:
         xp = self.fake_xp
@@ -389,12 +457,13 @@ class SimlessRunner:
         # ------------------------------------------------------------
         # 2. XPluginStart (loader handles this)
         # ------------------------------------------------------------
-        plugins: List[LoadedPlugin] = self.loader.load_plugins(plugin_names)
+        self.loader.load_plugins(plugin_names)
+        plugins = self.loader.loaded_plugins
 
         # ------------------------------------------------------------
         # 3. XPluginEnable
         # ------------------------------------------------------------
-        xp.log("[Runner] === XPluginEnable BEGIN ===")
+        xp.log("[Runner] === XPluginEnable ===")
 
         for p in plugins:
             try:
@@ -411,13 +480,12 @@ class SimlessRunner:
             if not p.enabled:
                 xp.log(f"[Runner] Plugin disabled by XPluginEnable: {p.name}")
 
-        xp.log("[Runner] === XPluginEnable END ===")
-
         # ------------------------------------------------------------
         # 4. Main loop
         # ------------------------------------------------------------
-        xp.log("[Runner] === Main loop BEGIN ===")
+        xp.log("[Runner] === Flight Loop ===")
         self._running = True
+        self._xplane_broadcast_sent = False
         start = time.monotonic()
         target_dt = 1.0 / 60.0
 
@@ -428,7 +496,7 @@ class SimlessRunner:
                 # Flightloop + XPWidgets sync + draw dispatch
                 self._run_one_frame()
             except XPShutdown:
-                xp.log("[Runner] Main loop exit: shutdown")
+                xp.log("[Runner] Fligh loop exit: shutdown")
                 break
             except Exception as exc:
                 tb = traceback.format_exc()
@@ -437,7 +505,7 @@ class SimlessRunner:
 
             # Optional timed exit
             if 0 <= run_time <= (time.time() - start):
-                xp.log("[Runner] Main loop exit: run_time reached")
+                xp.log("[Runner] Flight loop exit: run_time reached")
                 break
 
             # Maintain ~60 FPS
@@ -446,12 +514,15 @@ class SimlessRunner:
             if remaining > 0:
                 time.sleep(remaining)
 
-        xp.log("[Runner] === Main loop END ===")
+            if not self._xplane_broadcast_sent and time.monotonic() - start > 5:
+                xp.log("[Runner] === Send X-Plane Broadcasts ===")
+                self.send_initial_xplane_broadcasts()
+                self._xplane_broadcast_sent = True
 
         # ------------------------------------------------------------
         # 5. XPluginDisable
         # ------------------------------------------------------------
-        xp.log("[Runner] === XPluginDisable BEGIN ===")
+        xp.log("[Runner] === XPluginDisable ===")
         for p in plugins:
             try:
                 xp.log(f"[Runner] → XPluginDisable: {p.name}")
@@ -463,12 +534,11 @@ class SimlessRunner:
                 raise RuntimeError(
                     f"[Runner] XPluginDisable failed for {p.name}: {exc!r}"
                 )
-        xp.log("[Runner] === XPluginDisable END ===")
 
         # ------------------------------------------------------------
         # 6. XPluginStop
         # ------------------------------------------------------------
-        xp.log("[Runner] === XPluginStop BEGIN ===")
+        xp.log("[Runner] === XPluginStop ===")
         for p in plugins:
             try:
                 xp.log(f"[Runner] → XPluginStop: {p.name}")
@@ -477,7 +547,6 @@ class SimlessRunner:
                 raise RuntimeError(
                     f"[Runner] XPluginStop failed for {p.name}: {exc!r}"
                 )
-        xp.log("[Runner] === XPluginStop END ===")
 
         # ------------------------------------------------------------
         # 7. GUI teardown
@@ -488,3 +557,42 @@ class SimlessRunner:
 
         if xp.enable_gui:
             xp.log("[Runner] === GUI Teardown ===")
+
+    def dispatch_message_to_plugin(
+        self,
+        plugin: LoadedPlugin,
+        sender_id: int,
+        msg: int,
+        param,
+    ) -> None:
+        """Execute XPluginReceiveMessage using the same workflow as Start/Enable."""
+        if not plugin.enabled or not plugin.has_receive():
+            return
+
+        try:
+            # noinspection PyArgumentList
+            with self.plugin_context(plugin.plugin_id):
+                plugin.receive_message(sender_id, msg, param)
+        except Exception as exc:
+            raise RuntimeError(
+                f"[Runner] XPluginReceiveMessage failed for {plugin.name}: {exc!r}"
+            )
+
+    def broadcast_message(self, sender_id: int, msg: int, param) -> None:
+        """Broadcast to all enabled plugins."""
+        for p in self.loader.loaded_plugins:
+            self.dispatch_message_to_plugin(p, sender_id, msg, param)
+
+    def send_initial_xplane_broadcasts(self) -> None:
+        xp = self.fake_xp
+
+        initial_msgs = [
+            xp.MSG_PLANE_LOADED,
+            xp.MSG_AIRPORT_LOADED,
+            xp.MSG_SCENERY_LOADED,
+        ]
+
+        for msg in initial_msgs:
+            # sender is X‑Plane itself
+            self.broadcast_message(xp.PLUGIN_XPLANE, msg, None)
+

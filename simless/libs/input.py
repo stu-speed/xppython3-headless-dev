@@ -488,10 +488,10 @@ class InputManager:
         # 2) Widget wheel callback (if any)
         root_id = info.widget_root
         if root_id:
-            target_widget = xp.widget_manager.hit_test(root_id, xp_pt)
+            target_widget = self.fake_xp.widget_manager.hit_test(root_id, xp_pt)
             if target_widget:
                 return self._dispatch_widget_wheel(
-                    widgetID=winfo.wid,
+                    widgetID=target_widget,
                     wheel=wheel,
                     clicks=clicks,
                 )

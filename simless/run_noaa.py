@@ -8,15 +8,15 @@
 from simless.libs.fake_xp import FakeXP
 
 
-def run_simless_oat_gui() -> None:
-    xp = FakeXP(enable_dataref_bridge=True)
+def run_simless_noaa() -> None:
+    xp = FakeXP()
 
     plugins = [
-        "PI_sshd_OAT",
+        "PI_noaaWeather",
     ]
 
-    xp.simless_runner.run_plugin_lifecycle(plugins, enable_dataref_viewer=True)
+    xp.simless_runner.run_plugin_lifecycle(plugins)
 
 
 if __name__ == "__main__":
-    run_simless_oat_gui()
+    run_simless_noaa()

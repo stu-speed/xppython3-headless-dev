@@ -35,10 +35,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-import XPPython3
-print("XPPython3 loaded from:", XPPython3.__file__)
 from XPPython3 import xp
-
 from XPPython3.xp_typing import XPLMDataRef, XPLMDataRefInfo_t
 
 
@@ -52,7 +49,7 @@ class DataRefSpec:
     - `default` is returned by get_value() when no handle exists (unless required).
     """
     name: str
-    type: int               # xp.Type_* bitmask
+    type: int  # xp.Type_* bitmask
     writable: bool
 
     required: bool = False

@@ -25,10 +25,7 @@
 #      autosize_x=False and autosize_y=False are required or containers
 #      collapse to (0, 0) and clip their contents.
 #
-#   4. Window geometry must be applied EXACTLY ONCE per widget
-#      Re‑applying geometry every frame causes user window moves to snap back.
-#
-#   5. Geometry application is deferred until layout is valid
+#   4. Geometry application is deferred until layout is valid
 #      XP → DPG geometry transforms occur during render, never during creation.
 #
 # CORE INVARIANTS
@@ -55,7 +52,7 @@ from __future__ import annotations
 from typing import Any, cast, Literal, Optional, TYPE_CHECKING
 
 from simless.libs.fake_xp_constants import lookup_constant_name
-from simless.libs.fake_xp_types import XPPoint, XPGeom, XPWidgetCallback, WindowExInfo
+from simless.libs.fake_xp_types import XPGeom, XPPoint, XPWidgetCallback
 from simless.libs.widget import WidgetManager
 from xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage, XPWidgetPropertyID
 
@@ -161,7 +158,7 @@ class FakeXPWidget:
         root_info = self.wm.create_widget(
             widget_class=widgetClass,
             window=win_info,
-            abs_geom=win_info.client,
+            abs_geom=win_info.frame,
             parent=None,
             descriptor=descriptor,
             visible=visible,
@@ -170,35 +167,35 @@ class FakeXPWidget:
         win_info.set_widget_root(root_info.wid)
 
         # ---------------------------------------------------------
-        # TITLE BAR (absolute coords inside client)
+        # TITLE BAR
         # ---------------------------------------------------------
-        title_h = WindowExInfo.TITLE_BAR_HEIGHT
+        title_h = 18
 
         title_geom = XPGeom(
-            left=win_info.client.left + 4,
-            top=win_info.client.top - 4,
-            right=win_info.client.right - 4,
-            bottom=win_info.client.top - 4 - title_h,
+            left=win_info.frame.left + 8,
+            top=win_info.frame.top - 4,
+            right=win_info.frame.right,
+            bottom=win_info.frame.top - title_h - 4,
         )
 
         self.wm.create_widget(
             widget_class=self.fake_xp.WidgetClass_Caption,
             window=win_info,
-            abs_geom=title_geom,  # ABSOLUTE XPGeom
+            abs_geom=title_geom,
             parent=root_info.wid,
             descriptor=descriptor,
             visible=True,
         )
 
         # ---------------------------------------------------------
-        # CLOSE BUTTON (absolute coords inside client)
+        # CLOSE BUTTON
         # ---------------------------------------------------------
-        close_size = WindowExInfo.CLOSE_BOX_SIZE
+        close_size = 18
         close_geom = XPGeom(
-            left=win_info.client.right - close_size - 4,
-            top=win_info.client.top - 4,
-            right=win_info.client.right - 4,
-            bottom=win_info.client.top - 4 - close_size,
+            left=win_info.frame.right - close_size,
+            top=win_info.frame.top - 4,
+            right=win_info.frame.right,
+            bottom=win_info.frame.top - close_size - 4,
         )
         close_info = self.wm.create_widget(
             widget_class=self.fake_xp.WidgetClass_Button,
@@ -402,7 +399,7 @@ class FakeXPWidget:
         """
 
         xp_pt = XPPoint(x, y)
-        return self.wm.hit_test(wid, xp_pt, recursive)
+        return self.wm.hit_test(wid, xp_pt, bool(recursive))
 
     # ------------------------------------------------------------------
     # Z‑ORDER

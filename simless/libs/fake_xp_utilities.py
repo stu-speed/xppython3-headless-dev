@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import os
-
+from pathlib import Path
 
 class FakeXPUtilities:
     """
@@ -16,7 +16,9 @@ class FakeXPUtilities:
 
     def _init_utilities(self) -> None:
         # Stateless subsystem
-        pass
+        # Determine the simless "system path" once
+        self._system_path = str(Path(__file__).resolve().parents[2])
+        self._prefs_path = os.path.join(self._system_path, "Output", "preferences")
 
     # ------------------------------------------------------------------
     # SPEAK
@@ -28,10 +30,10 @@ class FakeXPUtilities:
     # PATHS
     # ------------------------------------------------------------------
     def getSystemPath(self) -> str:
-        return os.getcwd()
+        return self._system_path + os.sep
 
     def getPrefsPath(self) -> str:
-        return os.path.join(os.getcwd(), "prefs")
+        return self._prefs_path + os.sep
 
     def getDirectorySeparator(self) -> str:
         return os.sep

@@ -321,21 +321,18 @@ class LocalGeom:
     width: int
     height: int
 
-    # Parent's XPGraphics client rect (absolute)
-    client_xpgeom: XPGeom
-
     # ------------------------------------------------------------
     # Factory: XPGeom (absolute) → LocalGeom (parent-relative)
     # ------------------------------------------------------------
     @classmethod
-    def from_xpgeom(cls, xpgeom: XPGeom, client_geom: XPGeom) -> "LocalGeom":
+    def from_xpgeom(cls, xpgeom: XPGeom, frame_geom: XPGeom) -> "LocalGeom":
         """
         Convert absolute XPGeom (screen-space, bottom-left origin)
         into LocalGeom (parent-relative, top-left origin).
 
         Args:
             xpgeom:      Absolute XPGeom of the widget.
-            client_geom: Absolute XPGeom of the parent client area.
+            frame_geom: Absolute XPGeom of the parent client area.
 
         Returns:
             LocalGeom instance.
@@ -344,23 +341,22 @@ class LocalGeom:
         # XPGeom: bottom-left origin
         # LocalGeom: top-left origin
 
-        local_x = xpgeom.left - client_geom.left
-        local_y = client_geom.top - xpgeom.top
+        local_x = xpgeom.left - frame_geom.left
+        local_y = frame_geom.top - xpgeom.top
 
         return cls(
             x=local_x,
             y=local_y,
             width=xpgeom.width,
             height=xpgeom.height,
-            client_xpgeom=client_geom,
         )
 
     # ------------------------------------------------------------
     # LocalGeom → XPGeom (absolute)
     # ------------------------------------------------------------
-    def to_xp_geom(self) -> XPGeom:
-        abs_left   = self.client_xpgeom.left + self.x
-        abs_top    = self.client_xpgeom.top  - self.y
+    def to_xp_geom(self, frame_xpgeom: XPGeom) -> XPGeom:
+        abs_left   = frame_xpgeom.left + self.x
+        abs_top    = frame_xpgeom.top  - self.y
         abs_right  = abs_left + self.width
         abs_bottom = abs_top  - self.height
         return XPGeom(abs_left, abs_top, abs_right, abs_bottom)
@@ -420,7 +416,7 @@ class WidgetInfo:
     @property
     def xp_geom(self) -> XPGeom:
         """Absolute XPGraphics geometry derived from LocalGeom."""
-        return self.local_geom.to_xp_geom()
+        return self.local_geom.to_xp_geom(self.window.frame)
 
     @property
     def local_dpg_geom(self) -> DPGGeom:
@@ -435,17 +431,8 @@ class WidgetInfo:
         Accepts ABSOLUTE XPGeom and converts it to LocalGeom.
         Used for later geometry changes.
         """
-        client = self.local_geom.client_xpgeom
 
-        # Convert XPGeom → LocalGeom (top-left origin)
-        local_x = abs_geom.left - client.left
-        local_y = client.top - abs_geom.top
-
-        self.local_geom.x = local_x
-        self.local_geom.y = local_y
-        self.local_geom.width = abs_geom.width
-        self.local_geom.height = abs_geom.height
-
+        self.local_geom = LocalGeom.from_xpgeom(abs_geom, self.window.frame)
         self.window._dirty_widgets = True
 
     # ------------------------------------------------------------
@@ -506,12 +493,6 @@ class WidgetInfo:
 @dataclass(slots=True)
 class WindowExInfo:
     """Authoritative XP-side model of a WindowEx window."""
-
-    TITLE_BAR_HEIGHT = 22
-    BORDER_LEFT = 4
-    BORDER_RIGHT = 4
-    BORDER_BOTTOM = 4
-    CLOSE_BOX_SIZE = 14
 
     # XP identity
     wid: XPLMWindowID | int

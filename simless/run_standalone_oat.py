@@ -9,14 +9,14 @@ from simless.libs.fake_xp import FakeXP
 
 
 def run_simless_oat_gui() -> None:
-    xp = FakeXP(enable_gui=True)
+    xp = FakeXP()
 
     plugins = [
         "PI_sshd_OAT",
         "PI_sshd_oat_gui",
     ]
 
-    xp.simless_runner.run_plugin_lifecycle(plugins, enable_dataref_viewer=False)
+    xp.simless_runner.run_plugin_lifecycle(plugins, enable_dataref_viewer=True)
 
 
 if __name__ == "__main__":

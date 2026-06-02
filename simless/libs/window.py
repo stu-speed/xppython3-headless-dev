@@ -17,6 +17,12 @@ if TYPE_CHECKING:
 class WindowManager:
     """Owns WindowEx registry, IDs, and Z-order."""
 
+    BORDER_TOP = 4
+    BORDER_LEFT = 4
+    BORDER_RIGHT = 4
+    BORDER_BOTTOM = 4
+    TITLE_BAR_HEIGHT = 18 + BORDER_TOP
+
     def __init__(self, fake_xp: FakeXP) -> None:
         self._windows_ex: OrderedDict[XPLMWindowID, WindowExInfo] = OrderedDict()
         self._next_window_id: int = 1
@@ -73,19 +79,15 @@ class WindowManager:
         frame = XPGeom(left, top, right, bottom)
 
         # ---------------------------------------------------------
-        # CLIENT AREA
+        # CLIENT AREA (hit-test area)
         # ---------------------------------------------------------
-        if no_title_bar:
-            # SDK: no decorations → client = frame exactly
-            client = XPGeom(left, top, right, bottom)
-        else:
-            # SDK: decorations applied by X-Plane
-            client = XPGeom(
-                left=frame.left + WindowExInfo.BORDER_LEFT,
-                top=frame.top - WindowExInfo.TITLE_BAR_HEIGHT,
-                right=frame.right - WindowExInfo.BORDER_RIGHT,
-                bottom=frame.bottom + WindowExInfo.BORDER_BOTTOM,
-            )
+        title_offset = self.BORDER_TOP if no_title_bar else self.TITLE_BAR_HEIGHT
+        client = XPGeom(
+            left=frame.left + self.BORDER_LEFT,
+            top=frame.top - title_offset,
+            right=frame.right - self.BORDER_RIGHT,
+            bottom=frame.bottom + self.BORDER_BOTTOM,
+        )
 
         # ---------------------------------------------------------
         # Create WindowExInfo

@@ -437,11 +437,14 @@ Msg_TextFieldChanged = 8021
 Msg_PushButtonPressed = 8022
 Msg_ScrollBarSliderPositionChanged = 8023
 Msg_UserStart = 8024
+Msg_ButtonStateChanged = 8025
+Msg_Show = 8016         # alias for Msg_Shown
+Msg_Hide = 8015         # alias for Msg_Hidden
+Msg_Resize = 8017       # alias for Msg_Reshape
 
 # ----------------------------------------------------------------------
 # KEYBOARD / VK_* (9000–10999)
 # ----------------------------------------------------------------------
-
 VK_0 = 9000
 VK_1 = 9001
 VK_2 = 9002

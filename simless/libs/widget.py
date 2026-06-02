@@ -69,7 +69,7 @@ class WidgetManager(WidgetRender):
             wid=wid,
             widget_class=widget_class,
             window=window,
-            local_geom=LocalGeom.from_xpgeom(abs_geom, window.client),
+            local_geom=LocalGeom.from_xpgeom(abs_geom, window.frame),
             parent=parent,
             _descriptor=descriptor,
             _visible=visible,
