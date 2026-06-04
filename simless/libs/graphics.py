@@ -88,12 +88,12 @@ class GraphicsManager(GraphicsDpg):
     # Screen-level XPLMGraphics calls enqueue commands targeting
     # _active_drawlist.
     # ------------------------------------------------------------------
-    _screen_drawlist_back: Optional[str]  # Behind all windows
-    _screen_drawlist_front: Optional[str]  # Above all windows
+    _screen_drawlist_back: int | str  # Behind all windows
+    _screen_drawlist_front: int | str  # Above all windows
 
     # Currently selected draw target for XPLMGraphics enqueue.
     # Switched temporarily while processing WindowEx draw callbacks.
-    _active_drawlist: Optional[str]
+    _active_drawlist: int | str
 
     # ----------------------------------------------------------------------
     # INITIALIZATION
@@ -114,19 +114,14 @@ class GraphicsManager(GraphicsDpg):
         self._next_tex_id = 1
         self._textures = {}
 
-        # Global screen drawlists
-        self._screen_drawlist_back = None  # Behind all windows
-        self._screen_drawlist_front = None  # Above all windows (optional)
-
-        # Dynamic draw context
-        self._active_drawlist = None
+        # Dynamic draw contex
         self._current_window_ex = None
 
         # Menu bookkeeping (renderer owns DPG menus)
         self._menus = {}
-        self._next_menu_id = 1
+        self._next_menu_idx = 1
         self._menu_callbacks = {}
-        self._root_plugins_menu = None
+        self._root_plugins_menu = XPLMMenuID(0)
 
         # Deferred DPG command queue
         self._dpg_commands = []
@@ -162,17 +157,15 @@ class GraphicsManager(GraphicsDpg):
             if not (entry[0] is cb and entry[1] == phase and entry[2] == wants_before)
         ]
 
-    def get_screen_drawlists(self) -> tuple[
-        Optional[str], Optional[str]
-    ]:
+    def get_screen_drawlists(self) -> tuple[ str | int, str | int ]:
         """Return (back_drawlist, front_drawlist)."""
         return self._screen_drawlist_back, self._screen_drawlist_front
 
-    def get_active_drawlist(self) -> Optional[str]:
+    def get_active_drawlist(self) -> int | str:
         """Return the currently active drawlist."""
         return self._active_drawlist
 
-    def set_active_drawlist(self, dl: Optional[str]) -> None:
+    def set_active_drawlist(self, dl: int | str) -> None:
         self._active_drawlist = dl
 
     def get_current_window(self) -> Optional[WindowExInfo]:
@@ -187,7 +180,7 @@ class GraphicsManager(GraphicsDpg):
         """Return the internal texture map (read-only)."""
         return dict(self._textures)
 
-    def get_root_plugins_menu(self) -> Optional[XPLMMenuID]:
+    def get_root_plugins_menu(self) -> XPLMMenuID:
         """Return the root Plugins menu ID."""
         return self._root_plugins_menu
 
@@ -199,20 +192,20 @@ class GraphicsManager(GraphicsDpg):
         """Return the menu dict or None."""
         return self._menus.get(menu_id)
 
-    def get_menu_items(self, menu_id: XPLMMenuID) -> Optional[list[Dict[str, Any]]]:
+    def get_menu_items(self, menu_id: XPLMMenuID) -> list[Dict[str, Any]]:
         """Return the list of items for a menu."""
         menu = self._menus.get(menu_id)
-        return menu["items"] if menu else None
+        return menu["items"] if menu else []
 
-    def get_menu_parent_tag(self, menu_id: XPLMMenuID) -> Optional[str]:
+    def get_menu_dpg_tag(self, menu_id: XPLMMenuID) -> int | str:
         """Return the DPG tag for the menu."""
-        menu = self._menus.get(menu_id)
-        return menu["dpg_tag"] if menu else None
+        menu = self._menus[menu_id]
+        return menu["dpg_tag"]
 
     def allocate_menu_id(self) -> XPLMMenuID:
         """Allocate a new XPLMMenuID."""
-        mid = XPLMMenuID(self._next_menu_id)
-        self._next_menu_id += 1
+        mid = XPLMMenuID(self._next_menu_idx)
+        self._next_menu_idx += 1
         return mid
 
     def create_menu_record(

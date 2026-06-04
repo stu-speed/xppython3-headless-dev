@@ -45,7 +45,7 @@ from typing import Any, List, Optional, TYPE_CHECKING
 
 import dearpygui.dearpygui as dpg
 
-from simless.libs.fake_xp_types import EventInfo, EventKind, XPPoint
+from simless.libs.fake_xp_types import EventInfo, EventKind, XPPoint, XPWidgetID
 from xp_typing import (
     XPLMCursorStatus,
     XPLMMouseStatus,
@@ -98,7 +98,7 @@ class InputManager:
         self._keyboard_focus_window = None
 
     def install_dpg_input_callbacks(self) -> None:
-        with dpg.handler_registry():
+        with dpg.handler_registry():  # type: ignore
             dpg.add_mouse_down_handler(
                 callback=lambda sender, app_data: (
                     self.queue_input_event(
@@ -203,6 +203,8 @@ class InputManager:
                 self.fake_xp.MouseDown if event.state == "down" else self.fake_xp.MouseUp
             )
 
+            xp_pt = event.xp_pt
+            assert xp_pt is not None
             return self._handle_mouse_button(
                 xp_pt=event.xp_pt,
                 mouseStatus=mouse_status,
@@ -212,7 +214,8 @@ class InputManager:
         if event.kind is EventKind.MOUSE_WHEEL:
             if event.wheel is None or event.clicks is None:
                 raise RuntimeError("MOUSE_WHEEL requires wheel, clicks")
-
+            xp_pt = event.xp_pt
+            assert xp_pt is not None
             return self._handle_mouse_wheel(
                 xp_pt=event.xp_pt,
                 wheel=event.wheel,
@@ -220,6 +223,8 @@ class InputManager:
             )
 
         if event.kind is EventKind.CURSOR:
+            xp_pt = event.xp_pt
+            assert xp_pt is not None
             return self._handle_cursor_query(event.xp_pt)
 
         if event.kind is EventKind.KEY:
@@ -238,11 +243,11 @@ class InputManager:
     # WINDOW DISPATCH HELPERS (engine-invoked only)
     # ------------------------------------------------------------------
     def _dispatch_window_click(
-        self,
-        windowID: XPLMWindowID,
-        xp_pt: XPPoint,
-        mouseStatus: XPLMMouseStatus,
-        right: bool = False,
+            self,
+            windowID: XPLMWindowID,
+            xp_pt: XPPoint,
+            mouseStatus: XPLMMouseStatus,
+            right: bool = False,
     ) -> int:
         info = self.fake_xp.window_manager.require_info(windowID)
         if not info.client.contains(xp_pt):
@@ -255,12 +260,12 @@ class InputManager:
         return int(cb(windowID, xp_pt.x, xp_pt.y, mouseStatus, info.refcon))
 
     def _dispatch_window_key(
-        self,
-        windowID: XPLMWindowID,
-        key: int,
-        flags: int,
-        vKey: int,
-        losingFocus: int,
+            self,
+            windowID: XPLMWindowID,
+            key: int,
+            flags: int,
+            vKey: int,
+            losingFocus: int,
     ) -> int:
         info = self.fake_xp.window_manager.require_info(windowID)
         if info.key_cb is None:
@@ -277,12 +282,12 @@ class InputManager:
             )
         )
 
-    def _dispatch_window_wheel( self,
-        windowID: XPLMWindowID,
-        xp_pt: XPPoint,
-        wheel: int,
-        clicks: int,
-    ) -> int:
+    def _dispatch_window_wheel(self,
+                               windowID: XPLMWindowID,
+                               xp_pt: XPPoint,
+                               wheel: int,
+                               clicks: int,
+                               ) -> int:
         info = self.fake_xp.window_manager.require_info(windowID)
         if info.wheel_cb is None:
             return 0
@@ -290,9 +295,9 @@ class InputManager:
         return int(info.wheel_cb(windowID, xp_pt.x, xp_pt.y, wheel, clicks, info.refcon))
 
     def _dispatch_window_cursor(
-        self,
-        windowID: XPLMWindowID,
-        xp_pt: XPPoint,
+            self,
+            windowID: XPLMWindowID,
+            xp_pt: XPPoint,
     ) -> XPLMCursorStatus:
         info = self.fake_xp.window_manager.require_info(windowID)
         if info.cursor_cb is None:
@@ -304,10 +309,10 @@ class InputManager:
     # WIDGET DISPATCH HELPERS
     # ------------------------------------------------------------------
     def _dispatch_widget_wheel(
-        self,
-        widgetID: int,
-        wheel: int,
-        clicks: int
+            self,
+            widgetID: XPWidgetID,
+            wheel: int,
+            clicks: int
     ) -> int:
         """
         Deliver xpMsg_MouseWheel to a widget and bubble upward.
@@ -335,11 +340,11 @@ class InputManager:
         return 0
 
     def _dispatch_widget_key(
-        self,
-        widgetID: int,
-        key: int,
-        flags: int,
-        vKey: int
+            self,
+            widgetID: XPWidgetID,
+            key: int,
+            flags: int,
+            vKey: int
     ) -> int:
         """
         Deliver xpMsg_KeyPress to a widget and bubble upward.
@@ -378,13 +383,15 @@ class InputManager:
         if info is None:
             return self.fake_xp.CursorDefault
 
+        win_id = info.wid
+        assert win_id is not None
         return self._dispatch_window_cursor(info.wid, xp_pt)
 
     def _handle_mouse_button(
-        self,
-        xp_pt: XPPoint,
-        mouseStatus: XPLMMouseStatus,
-        right: bool,
+            self,
+            xp_pt: XPPoint,
+            mouseStatus: XPLMMouseStatus,
+            right: bool,
     ) -> int:
 
         xp = self.fake_xp
@@ -411,6 +418,9 @@ class InputManager:
 
         if info is None:
             return 0
+
+        win_id = info.wid
+        assert win_id is not None
 
         # ------------------------------------------------------------
         # 3) Drag-to-front (XP-authentic)
@@ -466,10 +476,10 @@ class InputManager:
         return consumed
 
     def _handle_mouse_wheel(
-        self,
-        xp_pt: XPPoint,
-        wheel: int,
-        clicks: int,
+            self,
+            xp_pt: XPPoint,
+            wheel: int,
+            clicks: int,
     ) -> int:
         info = self.fake_xp.window_manager.hit_test(xp_pt)
         if info is None:

@@ -37,7 +37,7 @@ class GraphicsDpg:
     # Menu bookkeeping (renderer owns DPG menu structures)
     # ------------------------------------------------------------------
     _menus: Dict[XPLMMenuID, Dict[str, Any]]
-    _next_menu_id: int
+    _next_menu_idx: int
     _menu_callbacks: Dict[XPLMMenuID, Callable]
     _root_plugins_menu: Optional[XPLMMenuID]
 
@@ -61,20 +61,22 @@ class GraphicsDpg:
     def dpg_get_value(self, item: int | str) -> Any:
         return dpg.get_value(item)
 
-    def dpg_set_value(self, item: int | str, value: Any) -> Any:
-        return dpg.set_value(item, value)
+    def dpg_set_value(self, item: int | str, value: Any) -> None:
+        dpg.set_value(item, value)
 
-    def dpg_is_item_shown(self, item: int | str) -> bool:
+    def dpg_is_item_shown(self, item: int | str) -> bool | None:
         return dpg.is_item_shown(item)
 
     def dpg_get_mouse_pos(self, **kwargs) -> list[int] | tuple[int, ...]:
         return dpg.get_mouse_pos(**kwargs)
 
+    def dpg_get_text_size(self, text: str) -> list[float] | tuple[float, ...]:
+        return dpg.get_text_size(text)
+
     def enqueue_dpg(
         self,
         op: DPGOp,
-        *,
-        target_drawlist: str | None = None,
+        target_drawlist: str | int | None = None,
         args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
     ) -> None:
@@ -138,6 +140,7 @@ class GraphicsDpg:
         # ------------------------------------------------------------
         win_info = self.fake_xp.window_manager.require_info_by_dpg_id(dpg_window_id)
         dl_id = win_info.drawlist_tag
+        assert dl_id is not None
 
         dl_min_x, dl_min_y = dpg.get_item_rect_min(dl_id)
         dl_max_x, dl_max_y = dpg.get_item_rect_max(dl_id)
@@ -209,6 +212,9 @@ class GraphicsDpg:
             case DPGOp.ADD_BUTTON:
                 dpg.add_button(*cmd.args, **cmd.kwargs)
 
+            case DPGOp.ADD_CHECKBOX:
+                dpg.add_checkbox(*cmd.args, **cmd.kwargs)
+
             # --------------------------------------------------
             # Menus (XPLMMenus → DearPyGui)
             # --------------------------------------------------
@@ -263,10 +269,8 @@ class GraphicsDpg:
             case _:
                 raise RuntimeError(f"Unhandled DPG operation: {cmd.op}")
 
-    def _clear_drawlist_children(self, drawlist_id: Optional[str]) -> None:
+    def _clear_drawlist_children(self, drawlist_id: int | str) -> None:
         """Clear per-frame draw primitives to avoid unbounded accumulation."""
-        if drawlist_id is None:
-            return
         if not dpg.does_item_exist(drawlist_id):
             return
         dpg.delete_item(drawlist_id, children_only=True)
@@ -280,11 +284,11 @@ class GraphicsDpg:
             if not info._dirty_xp_to_dpg:
                 continue
 
-            wid = info.wid
             dpg_id = info.dpg_tag
+            assert dpg_id is not None
 
             if not dpg.does_item_exist(dpg_id):
-                print(f"[XP→DPG] SKIP: DPG item missing for wid={wid}")
+                print(f"[XP→DPG] SKIP: DPG item missing for wid={info.wid}")
                 continue
 
             xp_geom = info.frame
@@ -312,7 +316,9 @@ class GraphicsDpg:
 
         for info in self.fake_xp.window_manager.all_info():
             dpg_id = info.dpg_tag
+            assert dpg_id is not None
             dl_id = info.drawlist_tag
+            assert dl_id is not None
 
             if not dpg.does_item_exist(dpg_id) or not dpg.does_item_exist(dl_id):
                 continue
@@ -321,7 +327,9 @@ class GraphicsDpg:
             try:
                 win_x, win_y = dpg.get_item_pos(dpg_id)
                 win_w = dpg.get_item_width(dpg_id)
+                assert win_w
                 win_h = dpg.get_item_height(dpg_id)
+                assert win_h
             except Exception:
                 continue
 
@@ -362,23 +370,29 @@ class GraphicsDpg:
         """Create the top-level X-Plane-style menu bar on the viewport."""
 
         dpg_tag = "xp_menu_plugins"
-        with dpg.viewport_menu_bar(tag="xp_menu_bar"):
-            with dpg.menu(label="File", tag="xp_menu_file"):
-                dpg.add_menu_item(
-                    label="Quit",
-                    tag="xp_menu_file_quit",
-                    callback=lambda: self.fake_xp.simless_runner.end_run_loop()
-                )
 
-            # The actual DPG root for plugin menus
-            dpg.add_menu(
-                label="Plugins",
-                tag=dpg_tag
-            )
+        # Create the viewport menu bar
+        dpg.add_viewport_menu_bar(tag="xp_menu_bar")
 
-        # Allocate a real XP menu ID for the plugin vroot
-        root_id = XPLMMenuID(self._next_menu_id)
-        self._next_menu_id += 1
+        # File menu
+        dpg.add_menu(label="File", tag="xp_menu_file", parent="xp_menu_bar")
+        dpg.add_menu_item(
+            label="Quit",
+            tag="xp_menu_file_quit",
+            parent="xp_menu_file",
+            callback=lambda: self.fake_xp.simless_runner.end_run_loop()
+        )
+
+        # Plugins root menu
+        dpg.add_menu(
+            label="Plugins",
+            tag=dpg_tag,
+            parent="xp_menu_bar"
+        )
+
+        # Allocate XP menu ID
+        root_id = XPLMMenuID(self._next_menu_idx)
+        self._next_menu_idx += 1
 
         self._root_plugins_menu = root_id
 

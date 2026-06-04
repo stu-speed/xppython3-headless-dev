@@ -212,7 +212,7 @@ class WidgetManager(WidgetRender):
     def queue_msg(
         self,
         wid: XPWidgetID,
-        msg: XPWidgetMessage | int,
+        msg: XPWidgetMessage,
         p1: Any = None,
         p2: Any = None,
     ) -> None:
@@ -306,12 +306,7 @@ class WidgetManager(WidgetRender):
                 return 1
 
         # ---------------------------------------------------------
-        # 3. Additional class behavior (non-blocking)
-        # ---------------------------------------------------------
-        self._class_behavior_additional(info, msg, p1, p2)
-
-        # ---------------------------------------------------------
-        # 4. Default-if-unhandled class behavior
+        # 3. Default-if-unhandled class behavior
         # ---------------------------------------------------------
         if self._class_behavior_default(info, msg, p1, p2):
             return 1
@@ -319,64 +314,10 @@ class WidgetManager(WidgetRender):
         return 0
 
     # ------------------------------------------------------------------
-    # ADDITIONAL CLASS BEHAVIOR (NON-BLOCKING)
-    # ------------------------------------------------------------------
-    def _class_behavior_additional(
-        self,
-        info: WidgetInfo,
-        msg: XPWidgetMessage | int,
-        p1: Any,
-        p2: Any,
-    ) -> None:
-        xp = self.fake_xp
-
-        # ---------------------------------------------------------
-        # BUTTON: Generate PushButtonPressed on parent
-        # ---------------------------------------------------------
-        if info.widget_class == xp.WidgetClass_Button:
-            if msg == xp.Msg_MouseUp:
-                if info.parent is not None:
-                    parent_info = self.require_info(info.parent)
-
-                    # Deliver PushButtonPressed to parent
-                    for cb in parent_info.callbacks:
-                        cb(
-                            xp.Msg_PushButtonPressed,
-                            info.parent,  # inWidget = parent
-                            info.wid,  # param1 = button ID
-                            0  # param2 unused
-                        )
-                # Additional behavior NEVER returns handled
-
-    # ------------------------------------------------------------------
     # DEFAULT-IF-UNHANDLED CLASS BEHAVIOR (FALLBACKS ONLY)
     # ------------------------------------------------------------------
     def _class_behavior_default(self, info, msg, p1, p2):
         xp = self.fake_xp
-
-        # ---------------------------------------------------------
-        # BUTTON DEFAULT BEHAVIOR (no arming, no contains)
-        # ---------------------------------------------------------
-        if info.widget_class == xp.WidgetClass_Button:
-
-            # MouseDown → consume
-            if msg == xp.Msg_MouseDown:
-                return 1
-
-            # MouseUp → generate PushButtonPressed (or close)
-            if msg == xp.Msg_MouseUp:
-                parent = info.parent
-
-                event = xp.Msg_PushButtonPressed
-
-                if parent:
-                    self._dispatch_message(
-                        parent,
-                        event,
-                        info.wid,  # p1 = button ID
-                        0
-                    )
-                return 1
 
         # ---------------------------------------------------------
         # TEXT FIELD DEFAULT KEY HANDLING (XP-authentic)
@@ -386,8 +327,8 @@ class WidgetManager(WidgetRender):
                 key, flags, vkey = p1
 
                 text = info.descriptor or ""
-                cursor = info.properties.get(xp.Property_EditFieldSelStart, 0)
-                sel_end = info.properties.get(xp.Property_EditFieldSelEnd, cursor)
+                cursor = int(info.properties.get(xp.Property_EditFieldSelStart, 0))
+                sel_end = int(info.properties.get(xp.Property_EditFieldSelEnd, cursor))
 
                 # Collapse selection
                 if sel_end != cursor:
@@ -427,7 +368,7 @@ class WidgetManager(WidgetRender):
         # CLOSE BOX FALLBACK
         # ---------------------------------------------------------
         if msg == xp.Message_CloseButtonPushed:
-            info.set_visible(False)
+            info.window.widget_root.set_visible(False)
             return 1
 
         return 0
@@ -470,7 +411,9 @@ class WidgetManager(WidgetRender):
         # ---------------------------------------------------------
         # 1) Get current text from DPG
         # ---------------------------------------------------------
-        dpg_text = self.fake_xp.graphics_manager.dpg_get_value(info.dpg_id)
+        dpg_id = info.dpg_id
+        assert dpg_id is not None
+        dpg_text = self.fake_xp.graphics_manager.dpg_get_value(dpg_id)
         if not isinstance(dpg_text, str):
             return
 

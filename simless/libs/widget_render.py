@@ -77,19 +77,11 @@ class WidgetRender:
         for info in self.mgr.iter_window_widgets(win):
             wid = info.wid
 
-            # 1. Ensure DPG structure exists
             self._ensure_dpg_item_for_widget(wid)
-
-            # 2. Geometry
-            self._apply_geometry(wid)
-
-            # 3. Visibility
-            self._apply_visibility(wid)
-
-            # 4. Descriptor text
             self._apply_descriptor(wid)
-
-            # 5. Widget properties (scrollbar min/max/value, etc.)
+            self._apply_autosize(wid)
+            self._apply_geometry(wid)
+            self._apply_visibility(wid)
             self._apply_properties(wid)
 
     def _ensure_dpg_item_for_widget(self, wid: XPWidgetID) -> None:
@@ -185,6 +177,7 @@ class WidgetRender:
         info.dpg_id = f"xp_widget_{wid}"
 
         # Now create the control for this widget class
+        behavior = info.properties.get(self.mgr.fake_xp.Property_ButtonBehavior)
         if wclass == self.mgr.fake_xp.WidgetClass_Caption:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.ADD_TEXT,
@@ -208,32 +201,6 @@ class WidgetRender:
                 )
                 return
 
-            # ---------------------------------------------------------
-            # EDITABLE TEXTFIELD → DPG add_input_text
-            # No per-keystroke callbacks.
-            # Only Enter commits (on_enter=True).
-            # ---------------------------------------------------------
-
-            def _on_enter(sender, app_data, user_data):
-                """
-                Called ONLY when Enter is pressed.
-                DPG has already updated the text buffer.
-                XPWidgets should now lose focus and commit.
-                """
-                xp = self.mgr.fake_xp
-                widget_id = XPWidgetID(user_data)
-
-                # Queue xpMsg_KeyLoseFocus (processed later)
-                xp.widget_manager.clear_focus(widget_id)
-
-                key = 13  # enter key
-                self.mgr.queue_msg(
-                    info.wid,
-                    self.mgr.fake_xp.Msg_KeyPress,
-                    (key, self.mgr.fake_xp.input_manager.make_xp_flags(key), key),
-                    0
-                )
-
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.ADD_INPUT_TEXT,
                 kwargs=dict(
@@ -241,7 +208,7 @@ class WidgetRender:
                     default_value=desc.strip(),
                     parent=info.container_id,
                     on_enter=True,  # Only Enter commits
-                    callback=_on_enter,  # No per-keystroke updates
+                    callback=self._on_enter,  # No per-keystroke updates
                     user_data=wid,
                     no_spaces=True,
                 ),
@@ -254,21 +221,6 @@ class WidgetRender:
                 self.mgr.fake_xp.Property_ScrollBarSliderPosition, min_v
             )
 
-            def _on_scroll(sender, app_data, user_data):
-                widget_id = XPWidgetID(user_data)
-                new_pos = int(app_data)
-                self.mgr.fake_xp.setWidgetProperty(
-                    widget_id,
-                    self.mgr.fake_xp.Property_ScrollBarSliderPosition,
-                    new_pos,
-                )
-                self.mgr.fake_xp.sendMessageToWidget(
-                    widget_id,
-                    self.mgr.fake_xp.Msg_ScrollBarSliderPositionChanged,
-                    widget_id,
-                    new_pos,
-                )
-
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.ADD_SLIDER_INT,
                 kwargs=dict(
@@ -278,70 +230,177 @@ class WidgetRender:
                     min_value=min_v,
                     max_value=max_v,
                     default_value=cur_v,
-                    callback=_on_scroll,
+                    callback=self._on_scroll,
                     user_data=wid,
                 ),
             )
 
-        elif wclass == self.mgr.fake_xp.WidgetClass_Button:
-            def _on_button(sender, app_data, user_data):
-                widget_id = XPWidgetID(user_data)
-                self.mgr.fake_xp.sendMessageToWidget(
-                    widget_id,
-                    self.mgr.fake_xp.Msg_PushButtonPressed,
-                    widget_id,
-                    None,
-                )
+        elif wclass == self.mgr.fake_xp.WidgetClass_Button and \
+                behavior == self.mgr.fake_xp.ButtonBehaviorCheckBox:
 
+            self.mgr.gm.enqueue_dpg(
+                op=DPGOp.ADD_CHECKBOX,
+                kwargs=dict(
+                    tag=info.dpg_id,
+                    label=info.descriptor,
+                    parent=info.container_id,
+                    default_value=bool(
+                        info.properties.get(
+                            self.mgr.fake_xp.Property_ButtonState, False
+                        )
+                    ),
+                    callback=self._on_checkbox,
+                    user_data=wid,
+                ),
+            )
+
+        elif wclass == self.mgr.fake_xp.WidgetClass_Button and \
+                behavior == self.mgr.fake_xp.ButtonBehaviorRadioButton:
+            self.mgr.gm.enqueue_dpg(
+                op=DPGOp.ADD_BUTTON,
+                kwargs=dict(
+                    tag=info.dpg_id,
+                    label=info.descriptor,
+                    parent=info.container_id,
+                ),
+            )
+
+        elif wclass == self.mgr.fake_xp.WidgetClass_Button:
             self.mgr.gm.enqueue_dpg(
                 op=DPGOp.ADD_BUTTON,
                 kwargs=dict(
                     tag=info.dpg_id,
                     label=desc,
                     parent=info.container_id,
-                    callback=_on_button,
+                    callback=self._on_button,
                     user_data=wid,
                 ),
             )
 
+    def _on_enter(self, sender, app_data, user_data):
+        """
+        Called ONLY when Enter is pressed.
+        DPG has already updated the text buffer.
+        XPWidgets should now lose focus and commit.
+        """
+        xp = self.mgr.fake_xp
+        info = self.mgr.require_info(XPWidgetID(user_data))
+        wid = info.wid
+        assert wid is not None
+
+        # Queue xpMsg_KeyLoseFocus (processed later)
+        xp.widget_manager.clear_focus(wid)
+
+        key = 13  # enter key
+        self.mgr.queue_msg(
+            wid,
+            self.mgr.fake_xp.Msg_KeyPress,
+            (key, self.mgr.fake_xp.input_manager.make_xp_flags(key), key),
+            0
+        )
+
+    def _on_scroll(self, sender, app_data, user_data):
+        widget_id = XPWidgetID(user_data)
+        new_pos = int(app_data)
+        self.mgr.fake_xp.setWidgetProperty(
+            widget_id,
+            self.mgr.fake_xp.Property_ScrollBarSliderPosition,
+            new_pos,
+        )
+        self.mgr.fake_xp.sendMessageToWidget(
+            widget_id,
+            self.mgr.fake_xp.Msg_ScrollBarSliderPositionChanged,
+            widget_id,
+            new_pos,
+        )
+
+    def _on_button(self, sender, app_data, user_data):
+        """
+        In real XPWidgets, a button widget NEVER receives xpMsg_PushButtonPressed
+        itself. Instead, the button's PARENT widget is always the recipient of the
+        press event. The button is treated as a control, and the parent is the
+        logical owner responsible for handling clicks, toggles, and close actions.
+        """
+
+        info = self.mgr.require_info(XPWidgetID(user_data))
+
+        event = self.mgr.fake_xp.Msg_PushButtonPressed
+        if info.wid == info.window._close_widget:
+            event = self.mgr.fake_xp.Message_CloseButtonPushed
+        parent = info.parent
+        if parent is not None:
+            self.mgr.fake_xp.sendMessageToWidget(
+                parent,
+                event,
+                info.wid,
+                None,
+            )
+
+    def _on_checkbox(self, sender, app_data, user_data):
+        """
+        This callback fires ONLY when the user interacts with the DPG checkbox.
+        It must immediately update the XPWidget's Property_ButtonState so the
+        widget tree sees the new state before any message dispatch.
+        """
+
+        info = self.mgr.require_info(XPWidgetID(user_data))
+
+        # Update XPWidget state immediately (UI‑driven)
+        info.properties[self.mgr.fake_xp.Property_ButtonState] = bool(app_data)
+
+        # Send XPWidgets button press message to parent
+        parent = info.parent
+        if parent is not None:
+            self.mgr.fake_xp.sendMessageToWidget(
+                parent,
+                self.mgr.fake_xp.Msg_PushButtonPressed,
+                info.wid,
+                None,
+            )
+
     def _apply_geometry(self, wid: XPWidgetID) -> None:
         """
-        Push XPWidget geometry into the DearPyGui backend.
+        Apply XPWidget LocalGeom → DPG child‑window geometry.
 
         OVERVIEW
         --------
         XPWidgets store geometry in LocalGeom:
             • Origin = top-left of parent (or window client area)
             • Y increases downward
-            • Width/height are explicit (XP API requires l,t,r,b)
+            • Width/height are explicit (XP API uses l,t,r,b)
 
-        XPGeom (absolute screen-space) is computed on demand from LocalGeom,
-        but DPG never uses absolute coordinates for child widgets. Instead,
-        DPG child windows use *parent-relative* coordinates with a top-left
-        origin — exactly matching LocalGeom.
+        DPG child windows use parent‑relative coordinates with a top-left origin,
+        which matches LocalGeom exactly. Therefore, FakeXP pushes LocalGeom
+        directly into the DPG container.
 
         WHY THIS METHOD EXISTS
         -----------------------
-        DPG child windows (mvChildWindow) do NOT automatically reposition
-        when their parent moves. XPWidgets *do* automatically move when the
-        parent window moves. Therefore, FakeXP must explicitly push geometry
-        into DPG every time LocalGeom changes or the parent window moves.
+        DPG child windows (mvChildWindow) do NOT automatically reposition when
+        their parent moves. XPWidgets *do* automatically move with their parent.
+        FakeXP must therefore explicitly push geometry into DPG whenever:
+
+            • LocalGeom changes
+            • The parent window moves
+            • Layout passes occur
+            • Initial realization happens
 
         WHAT GETS UPDATED
         -----------------
         • Only the widget's container child-window is positioned/sized here.
           The actual control (button, caption, etc.) lives *inside* that
-          container and is sized separately when created.
+          container and is created separately.
 
         • Root widgets (MainWindow) are NOT handled here. Their geometry is
-          managed by WindowExInfo, which owns the top-level DPG window.
+          owned by WindowExInfo, which manages the top-level DPG window.
 
-        WHEN THIS IS CALLED
-        -------------------
-        • After XPWidget geometry changes
-        • After window movement/resizing
-        • During layout passes
-        • During initial realization
+        CHILD-WINDOW BASELINE OFFSET
+        ----------------------------
+        ImGui text-bearing widgets draw their text baseline ~3–4 px below y=0.
+        DPG child windows clip at y=0. This causes the bottom of text to clip
+        unless the container is slightly taller.
+
+        FakeXP applies a universal +4 px height correction to *child widgets*
+        (non-root) to ensure all text-bearing controls render correctly.
 
         PARAMETERS
         ----------
@@ -369,6 +428,12 @@ class WidgetRender:
         local_dpg_geom = info.local_geom.to_local_dpg_geom()
 
         # ------------------------------------------------------------
+        # Universal child-window baseline correction (+4 px)
+        # Only applied to non-root widgets.
+        # ------------------------------------------------------------
+        corrected_height = local_dpg_geom.height + 4
+
+        # ------------------------------------------------------------
         # Push geometry to DPG child window container
         # ------------------------------------------------------------
         self.mgr.gm.enqueue_dpg(
@@ -377,32 +442,9 @@ class WidgetRender:
             kwargs=dict(
                 pos=(local_dpg_geom.x, local_dpg_geom.y),
                 width=local_dpg_geom.width,
-                height=local_dpg_geom.height,
+                height=corrected_height,
             ),
         )
-
-        self._apply_control_geometry(info)
-
-    def _apply_control_geometry(self, info: WidgetInfo) -> None:
-        """
-        Apply geometry to the actual DPG control inside the container.
-
-        WHY THIS EXISTS
-        ---------------
-        • XPWidgets expect the control to fill the entire (l,t,r,b) rect.
-        • DPG controls do NOT auto-size to fill their parent.
-        • Therefore FakeXP must explicitly size the control to match LocalGeom.
-
-        WHAT THIS DOES
-        --------------
-        • Uses LocalGeom width/height
-        • Applies width/height to the DPG control (info.dpg_id)
-        • Does NOT set position (the container handles that)
-        """
-
-        # DPG has limited sizing for controls.  Just let it auto-size
-        return
-
 
     def _apply_visibility(self, wid: XPWidgetID) -> None:
         """
@@ -506,6 +548,7 @@ class WidgetRender:
         props = info.properties
         xp = self.mgr.fake_xp
         wclass = info.widget_class
+        behavior = info.properties.get(self.mgr.fake_xp.Property_ButtonBehavior)
 
         # ------------------------------------------------------------
         # MAIN WINDOW PROPERTIES
@@ -514,10 +557,49 @@ class WidgetRender:
             # Toggle visibility of the XP-authentic close box widget
             if xp.Property_MainWindowHasCloseBoxes in props:
                 close_wid = info.window._close_widget
+                assert close_wid is not None
                 close_info = self.mgr.require_info(close_wid)
                 close_info.set_visible(bool(props[xp.Property_MainWindowHasCloseBoxes]))
             return
 
+        # ------------------------------------------------------------
+        # CHECKBOX (XPWidget_Button + ButtonBehaviorCheckBox)
+        # ------------------------------------------------------------
+        if wclass == self.mgr.fake_xp.WidgetClass_Button and \
+                behavior == xp.ButtonBehaviorCheckBox:
+            dpg_id = info.dpg_id
+            if dpg_id is None:
+                return
+
+            # --------------------------------------------------------
+            # 1. Push XP → DPG (checked state)
+            # --------------------------------------------------------
+            xp_checked = bool(info.properties.get(xp.Property_ButtonState, 0))
+            dpg_checked = bool(self.mgr.gm.dpg_get_value(dpg_id))
+            if dpg_checked != xp_checked:
+                self.mgr.gm.enqueue_dpg(
+                    op=DPGOp.SET_VALUE,
+                    args=(dpg_id, xp_checked),
+                )
+            return
+
+        # ------------------------------------------------------------
+        # RADIO BOX
+        # ------------------------------------------------------------
+        if wclass == self.mgr.fake_xp.WidgetClass_Button and \
+                behavior == xp.ButtonBehaviorRadioButton:
+            dpg_id = info.dpg_id
+            if dpg_id is None:
+                return
+
+            xp_checked = bool(info.properties.get(xp.Property_ButtonState, 0))
+            value = "***" if xp_checked else "   "
+            self.mgr.gm.enqueue_dpg(
+                op=DPGOp.CONFIGURE_ITEM,
+                args=(dpg_id,),
+                kwargs=dict(label=value),
+            )
+            return
         # ------------------------------------------------------------
         # SCROLLBAR PROPERTIES
         # ------------------------------------------------------------
@@ -551,3 +633,44 @@ class WidgetRender:
                 )
 
             return
+
+    def _apply_autosize(self, wid: XPWidgetID):
+        info = self.mgr.require_info(wid)
+        text = info.descriptor or "   "
+        spacing = 4
+
+        wc = info.widget_class
+        behavior = info.properties.get(self.mgr.fake_xp.Property_ButtonBehavior)
+
+        # ---------------------------------------------------------
+        # CHECKBOX
+        # ---------------------------------------------------------
+        if wc == self.mgr.fake_xp.WidgetClass_Button and behavior == self.mgr.fake_xp.ButtonBehaviorCheckBox:
+            tw, th = self.mgr.fake_xp.graphics_manager.dpg_get_text_size(text)
+            tw, th = int(tw), int(th)
+
+            checkbox_box = 10
+
+            measured_w = checkbox_box + spacing + tw
+            measured_h = th  # no offset here — handled in geometry
+
+            info.local_geom.width = max(info.local_geom.width, measured_w)
+            info.local_geom.height = max(info.local_geom.height, measured_h)
+            return
+
+        # ---------------------------------------------------------
+        # TEXT‑BASED WIDGETS (caption, textfield, button)
+        # ---------------------------------------------------------
+        if wc in (
+            self.mgr.fake_xp.WidgetClass_Caption,
+            self.mgr.fake_xp.WidgetClass_TextField,
+            self.mgr.fake_xp.WidgetClass_Button,
+        ):
+            w, h = self.mgr.fake_xp.graphics_manager.dpg_get_text_size(text)
+            w, h = int(w), int(h)
+
+            # no offset here — handled in geometry
+            info.local_geom.width = max(info.local_geom.width, w + spacing)
+            info.local_geom.height = max(info.local_geom.height, h)
+            return
+

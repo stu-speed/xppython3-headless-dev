@@ -495,7 +495,7 @@ class WindowExInfo:
     """Authoritative XP-side model of a WindowEx window."""
 
     # XP identity
-    wid: XPLMWindowID | int
+    wid: XPLMWindowID
 
     # XP authoritative geometry
     _frame: XPGeom
@@ -504,7 +504,7 @@ class WindowExInfo:
     # XP state
     _visible: bool
     _decoration: XPLMWindowDecoration
-    _layer: XPLMWindowLayer | int
+    _layer: XPLMWindowLayer
 
     # XP callback hooks
     draw_cb: Optional[Callable[[XPLMWindowID, Any], None]]
@@ -616,12 +616,12 @@ class WindowExInfo:
         self._dirty_xp_to_dpg = True
 
     @property
-    def layer(self) -> XPLMWindowLayer | int:
+    def layer(self) -> XPLMWindowLayer:
         """Return the current window layer."""
         return self._layer
 
     @layer.setter
-    def layer(self, value: XPLMWindowLayer | int) -> None:
+    def layer(self, value: XPLMWindowLayer) -> None:
         """Set window layer and mark geometry as dirty."""
         self._layer = value
         self._dirty_xp_to_dpg = True
@@ -792,6 +792,7 @@ class DPGOp(StrEnum):
     ADD_INPUT_TEXT = auto()
     ADD_SLIDER_INT = auto()
     ADD_BUTTON = auto()
+    ADD_CHECKBOX = auto()
 
     # --------------------------------------------------
     # Item mutation
@@ -824,7 +825,7 @@ class DPGCommand:
     op: DPGOp
 
     # Routing
-    target_drawlist: Optional[int] = None  # None for non-draw ops
+    target_drawlist: Optional[int | str] = None  # None for non-draw ops
 
     # Positional + keyword arguments for the DPG call
     args: Tuple[Any, ...] = field(default_factory=tuple)

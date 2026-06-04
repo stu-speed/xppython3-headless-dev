@@ -205,39 +205,11 @@ class FakeXPWidget:
             descriptor="X",
             visible=False,
         )
-        # Attach close-button callback
-        close_info.add_callback(
-            self._close_button_handler
-        )
+
+        # default parent handling will process
         win_info._close_widget = close_info.wid
 
         return root_info.wid
-
-    def _close_button_handler(self, msg, wid, p1, p2):
-        """
-        Callback for the custom close button widget.
-
-        - Fires on xpMsg_PushButtonPressed.
-        - Sends xpMessage_CloseButtonPushed to the parent widget (root).
-        - Does NOT destroy anything directly.
-        """
-
-        if msg == self.fake_xp.Msg_PushButtonPressed:
-            wm = self.fake_xp.widget_manager
-            info = wm.require_info(wid)
-
-            parent = info.parent
-            if parent is not None:
-                wm.queue_msg(
-                    parent,
-                    self.fake_xp.Message_CloseButtonPushed,
-                    wid,  # p1 = close button widget ID
-                    0  # p2 unused
-                )
-
-            return 1  # handled
-
-        return 0  # not handled
 
     def destroyWidget(self, wid: XPWidgetID, destroy_children: int = 1) -> None:
         """
@@ -338,7 +310,7 @@ class FakeXPWidget:
     def sendMessageToWidget(
         self,
         wid: XPWidgetID,
-        msg: XPWidgetMessage | int,
+        msg: XPWidgetMessage,
         param1: Any,
         param2: Any,
     ) -> None:
@@ -351,7 +323,7 @@ class FakeXPWidget:
     def broadcastMessageToWidget(
         self,
         wid: XPWidgetID,
-        msg: XPWidgetMessage | int,
+        msg: XPWidgetMessage,
         param1: Any,
         param2: Any,
     ) -> None:

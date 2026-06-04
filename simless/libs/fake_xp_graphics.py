@@ -86,12 +86,12 @@ class FakeXPGraphics:
             Callable[[XPLMWindowID, int, int, int, int, Any], int]
         ] = None,
         refCon: Any = None,
-        decoration: XPLMWindowDecoration = None,
-        layer: XPLMWindowLayer = None,
+        decoration: Optional[XPLMWindowDecoration] = None,
+        layer: Optional[XPLMWindowLayer] = None,
         rightClick: Optional[
             Callable[[XPLMWindowID, int, int, XPLMMouseStatus, Any], int]
         ] = None,
-    ) -> XPLMWindowID:
+    ) -> XPLMWindowID | int:
         if decoration is None:
             decoration = self.fake_xp.WindowDecorationRoundRectangle
         if layer is None:
@@ -120,13 +120,12 @@ class FakeXPGraphics:
         return info.wid
 
     def destroyWindow(self, wid: XPLMWindowID) -> None:
-        info = self.fake_xp.window_manager.get_info(wid)
-        if info is None:
-            return  # XP silently ignores invalid IDs
+        info = self.fake_xp.window_manager.require_info(wid)
 
         # Destroy widgets first
-        if info.widget_root:
-            self.fake_xp.destroyWidget(info.widget_root)
+        root = info.widget_root
+        if root is not None:
+            self.fake_xp.destroyWidget(root)
             return
 
         # Remove from registry
@@ -326,41 +325,46 @@ class FakeXPGraphics:
         x, y = self.gm.dpg_get_mouse_pos()
         return int(x), int(y)
 
-    def getFontDimensions(self, font_id: XPLMFontID) -> None | tuple[int, int, int]:
+    def getFontDimensions(self, font_id: XPLMFontID) -> tuple[int, int, int]:
         # Basic, XP-authentic defaults
-        if font_id == self.fake_xp.Font_Basic:
-            return 8, 14, 3
-        if font_id == self.fake_xp.Font_Proportional:
-            return 7, 11, 2
+        digits_only = 0
+        s = self.gm.dpg_get_text_size("L")
+        if s is None:
+            return 7, 13, digits_only  # dpg not ready
+        return int(s[0]), int(s[1]), digits_only
 
-        # fallback
-        return 8, 14, 3
+    def measureString(self, font_id: XPLMFontID, string: str) -> float:
+        # Basic, XP-authentic defaults
+        digits_only = 0
+        s = self.gm.dpg_get_text_size("L")
+        if s is None:
+            return 7  # dpg not ready
+        return s[0]
 
     # ================================================================
     # XPLMMenus API — XP-faithful, strongly typed, GM-backed
     # ================================================================
 
-    def _resolve_parent(self, parentMenuID: Optional[XPLMMenuID]) -> XPLMMenuID:
+    def _resolve_menu_id(self, menu_id: Optional[XPLMMenuID]) -> XPLMMenuID:
         """
         XP semantics:
           - None → Plugins menu
           - 0 → Plugins menu
           - otherwise → explicit parent
         """
-        if parentMenuID is None or parentMenuID == XPLMMenuID(0):
+        if menu_id is None:
             return self.gm.get_root_plugins_menu()
-        return parentMenuID
+        return menu_id
 
     def createMenu(
         self,
         name: Optional[str] = None,
         parentMenuID: Optional[XPLMMenuID] = None,
-        parentItem: Optional[int] = 0,
+        parentItem: int = 0,
         handler: Optional[Callable[[Any, Any], None]] = None,
         refCon: Optional[Any] = None,
     ) -> Optional[XPLMMenuID]:
-
-        parent = self._resolve_parent(parentMenuID)
+        parent = self._resolve_menu_id(parentMenuID)
 
         # Validate parent menu
         if not self.gm.has_menu(parent):
@@ -387,7 +391,7 @@ class FakeXPGraphics:
             dpg_tag=dpg_tag,
         )
 
-        parent_tag = self.gm.get_menu_parent_tag(parent)
+        parent_tag = self.gm.get_menu_dpg_tag(parent)
 
         # Enqueue DPG creation
         self.gm.enqueue_dpg(
@@ -411,16 +415,14 @@ class FakeXPGraphics:
 
         gm = self.gm
 
-        if menuID is None or not gm.has_menu(menuID):
-            return -1
-
-        parent_tag = gm.get_menu_parent_tag(menuID)
-        items = gm.get_menu_items(menuID)
+        menu_id = self._resolve_menu_id(menuID)
+        parent_tag = gm.get_menu_dpg_tag(menu_id)
+        items = gm.get_menu_items(menu_id)
         idx = len(items)
         item_tag = f"{parent_tag}_{idx}"
 
         gm.append_menu_item_record(
-            menu_id=menuID,
+            menu_id=menu_id,
             name=name,
             refcon=refCon,
             checked=self.fake_xp.Menu_Unchecked,
@@ -449,16 +451,14 @@ class FakeXPGraphics:
         commandRef: Any = None,
     ) -> int:
 
-        if menuID is None or not self.gm.has_menu(menuID):
-            return -1
-
-        parent_tag = self.gm.get_menu_parent_tag(menuID)
-        items = self.gm.get_menu_items(menuID)
+        menu_id = self._resolve_menu_id(menuID)
+        parent_tag = self.gm.get_menu_dpg_tag(menu_id)
+        items = self.gm.get_menu_items(menu_id)
         idx = len(items)
         item_tag = f"{parent_tag}_{idx}"
 
         self.gm.append_menu_item_record(
-            menu_id=menuID,
+            menu_id=menu_id,
             name=name,
             refcon=None,
             checked=self.fake_xp.Menu_Unchecked,
@@ -484,16 +484,15 @@ class FakeXPGraphics:
         if menuID is None or not self.gm.has_menu(menuID):
             return None
 
-        items = self.gm.get_menu_items(menuID)
-        if items is None:
-            return None
+        menu_id = self._resolve_menu_id(menuID)
+        items = self.gm.get_menu_items(menu_id)
 
-        idx: int = len(items)
-        parent_tag: str = self.gm.get_menu_parent_tag(menuID)
+        idx = len(items)
+        parent_tag = self.gm.get_menu_dpg_tag(menu_id)
 
         # Insert separator record
         self.gm.append_menu_item_record(
-            menu_id=menuID,
+            menu_id=menu_id,
             name="",
             refcon=None,
             enabled=False,
@@ -513,16 +512,15 @@ class FakeXPGraphics:
         return idx
 
     def setMenuItemName(self, menuID: Optional[XPLMMenuID], index: int, name: str) -> None:
-        if menuID is None or not self.gm.has_menu(menuID):
-            return
+        menu_id = self._resolve_menu_id(menuID)
 
-        items = self.gm.get_menu_items(menuID)
+        items = self.gm.get_menu_items(menu_id)
         if items is None or index < 0 or index >= len(items):
             return
 
-        self.gm.set_menu_item_name(menuID, index, name)
+        self.gm.set_menu_item_name(menu_id, index, name)
 
-        tag: str = f"{self.gm.get_menu_parent_tag(menuID)}_{index}"
+        tag: str = f"{self.gm.get_menu_dpg_tag(menu_id)}_{index}"
 
         self.gm.enqueue_dpg(
             DPGOp.CONFIGURE_ITEM,
@@ -538,17 +536,15 @@ class FakeXPGraphics:
     ) -> None:
         if checked is None:
             checked = self.fake_xp.Menu_Checked
+        menu_id = self._resolve_menu_id(menuID)
 
-        if menuID is None or not self.gm.has_menu(menuID):
-            return
-
-        items = self.gm.get_menu_items(menuID)
+        items = self.gm.get_menu_items(menu_id)
         if items is None or index < 0 or index >= len(items):
             return
 
-        self.gm.set_menu_item_checked(menuID, index, checked)
+        self.gm.set_menu_item_checked(menu_id, index, checked)
 
-        tag: str = f"{self.gm.get_menu_parent_tag(menuID)}_{index}"
+        tag: str = f"{self.gm.get_menu_dpg_tag(menu_id)}_{index}"
 
         self.gm.enqueue_dpg(
             DPGOp.SET_MENU_ITEM_CHECKED,
@@ -562,16 +558,15 @@ class FakeXPGraphics:
         index: int,
         enabled: int = 1,
     ) -> None:
-        if menuID is None or not self.gm.has_menu(menuID):
-            return
+        menu_id = self._resolve_menu_id(menuID)
 
-        items = self.gm.get_menu_items(menuID)
+        items = self.gm.get_menu_items(menu_id)
         if items is None or index < 0 or index >= len(items):
             return
 
-        self.gm.set_menu_item_enabled(menuID, index, bool(enabled))
+        self.gm.set_menu_item_enabled(menu_id, index, bool(enabled))
 
-        tag: str = f"{self.gm.get_menu_parent_tag(menuID)}_{index}"
+        tag: str = f"{self.gm.get_menu_dpg_tag(menu_id)}_{index}"
 
         self.gm.enqueue_dpg(
             DPGOp.SET_MENU_ITEM_ENABLED,
@@ -580,16 +575,15 @@ class FakeXPGraphics:
         )
 
     def removeMenuItem(self, menuID: Optional[XPLMMenuID], index: int) -> None:
-        if menuID is None or not self.gm.has_menu(menuID):
-            return
+        menu_id = self._resolve_menu_id(menuID)
 
-        items = self.gm.get_menu_items(menuID)
+        items = self.gm.get_menu_items(menu_id)
         if items is None or index < 0 or index >= len(items):
             return
 
-        self.gm.remove_menu_item(menuID, index)
+        self.gm.remove_menu_item(menu_id, index)
 
-        tag: str = f"{self.gm.get_menu_parent_tag(menuID)}_{index}"
+        tag: str = f"{self.gm.get_menu_dpg_tag(menu_id)}_{index}"
 
         self.gm.enqueue_dpg(
             DPGOp.DELETE_ITEM,

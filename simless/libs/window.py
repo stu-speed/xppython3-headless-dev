@@ -24,7 +24,7 @@ class WindowManager:
     TITLE_BAR_HEIGHT = 18 + BORDER_TOP
 
     def __init__(self, fake_xp: FakeXP) -> None:
-        self._windows_ex: OrderedDict[XPLMWindowID, WindowExInfo] = OrderedDict()
+        self._windows_ex: OrderedDict[XPLMWindowID | int, WindowExInfo] = OrderedDict()
         self._next_window_id: int = 1
         self.fake_xp = fake_xp
 
@@ -170,7 +170,7 @@ class WindowManager:
             return
 
         if self.fake_xp.graphics_manager.get_active_drawlist() == removed.drawlist_tag:
-            self.fake_xp.graphics_manager.set_active_drawlist(None)
+            self.fake_xp.graphics_manager.set_active_drawlist(self.fake_xp.graphics_manager._screen_drawlist_back)
 
     # ------------------------------------------------------------
     # WINDOW LOOKUP / Z-ORDER
