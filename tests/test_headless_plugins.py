@@ -15,7 +15,7 @@ from simless.libs.fake_xp import FakeXP
 # ===========================================================================
 
 def test_headless_plugin_lifecycle(inline_plugin):
-    xp = FakeXP(debug=True, enable_gui=False)
+    xp = FakeXP(debug_logging=True, enable_gui=False)
     XPPython3.xp = xp
 
     class Plugin:
@@ -49,7 +49,7 @@ def test_headless_plugin_lifecycle(inline_plugin):
 # ===========================================================================
 
 def test_headless_plugin_dataref_usage(inline_plugin):
-    xp = FakeXP(debug=True, enable_gui=False)
+    xp = FakeXP(debug_logging=True, enable_gui=False)
     XPPython3.xp = xp
 
     class Plugin:
@@ -88,7 +88,7 @@ def test_headless_plugin_dataref_usage(inline_plugin):
 # ===========================================================================
 
 def test_headless_shared_datarefs(inline_plugin):
-    xp = FakeXP(debug=True, enable_gui=False)
+    xp = FakeXP(debug_logging=True, enable_gui=False)
     XPPython3.xp = xp
 
     class Writer:
@@ -155,7 +155,7 @@ def test_headless_shared_datarefs(inline_plugin):
 # ===========================================================================
 
 def test_example_gui(inline_plugin):
-    xp = FakeXP(debug=True, enable_gui=True)
+    xp = FakeXP(debug_logging=True, enable_gui=True)
     XPPython3.xp = xp
 
     class DevOTAGUIPlugin:
@@ -234,7 +234,7 @@ def test_headless_bridge_enabled(inline_plugin, monkeypatch):
     # ----------------------------------------------------------------------
     # 1. FakeXP in headless mode (bridge is runner-owned)
     # ----------------------------------------------------------------------
-    xp = FakeXP(debug=True, enable_gui=False, enable_dataref_bridge=True)
+    xp = FakeXP(debug_logging=True, enable_gui=False, enable_dataref_bridge=True)
     XPPython3.xp = xp
 
     # ----------------------------------------------------------------------

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from xp_typing import XPLMPluginID
 
 @dataclass
 class FlightLoop:
@@ -14,7 +15,7 @@ class FlightLoop:
     callback: Callable[[float, float, int, Any], float]
     refcon: Any
     phase: int
-    plugin_id: int
+    plugin_id: XPLMPluginID
 
     # Mutable scheduling state
     interval: float = 0.0

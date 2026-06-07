@@ -60,7 +60,7 @@ class FakeXPFlightLoop:
     def createFlightLoop(
         self,
         callback: Callable[[float, float, int, Any], float],
-        phase: XPLMFlightLoopPhaseType = None,
+        phase: XPLMFlightLoopPhaseType = XPLMFlightLoopPhaseType(0),
         refCon: Any = None,
     ) -> XPLMFlightLoopID | int:
 

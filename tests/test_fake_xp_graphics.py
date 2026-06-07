@@ -13,7 +13,7 @@ def xp() -> FakeXP:
     Full DearPyGui environment, identical to SimlessRunner.
     No monkeypatching. GUI fully functional.
     """
-    fake = FakeXP(enable_gui=True, debug=True)
+    fake = FakeXP(enable_gui=True, debug_logging=True)
     XPPython3.xp = fake
     fake.graphics_manager.init_graphics_root()
     return fake

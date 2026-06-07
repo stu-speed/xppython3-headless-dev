@@ -24,7 +24,7 @@ from simless.libs.fake_xp import FakeXP
 from simless.libs.xppython3_runtime import wire_xppython3_runtime
 
 # This must run at import time, not inside a fixture
-wire_xppython3_runtime(FakeXP(debug=False, enable_gui=False))
+wire_xppython3_runtime(FakeXP(enable_gui=False))
 
 
 # ---------------------------------------------------------------------------

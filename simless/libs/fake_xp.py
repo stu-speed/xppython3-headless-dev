@@ -44,10 +44,11 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Optional
 
 from simless.libs.dataref import DataRefManager
-from simless.libs.fake_xp_command import FakeXPCommand
 from simless.libs.fake_xp_constants import bind_xp_constants
 from simless.libs.fake_xp_dataref import FakeXPDataRef
 from simless.libs.fake_xp_flightloop import FakeXPFlightLoop
@@ -59,6 +60,8 @@ from simless.libs.input import InputManager
 from simless.libs.plugin_runner import SimlessRunner
 from simless.libs.widget import WidgetManager
 from simless.libs.window import WindowManager
+from simless.libs.fake_xp_menu import FakeXPMenu, MenuManager
+from xp_typing import XPLMPluginID
 
 
 class FakeXP(
@@ -67,7 +70,7 @@ class FakeXP(
     FakeXPGraphics,
     FakeXPFlightLoop,
     FakeXPUtilities,
-    FakeXPCommand,
+    FakeXPMenu,
 ):
     """
     Unified xp.* façade for simless plugin execution.
@@ -78,72 +81,35 @@ class FakeXP(
     plugin development and testing.
     """
 
-    enable_gui: bool
-
-    enable_dataref_bridge: bool
-    bridge_host: str
-    bridge_port: int
-
-    simless_runner: SimlessRunner
-    window_manager: WindowManager
-    graphics_manager: GraphicsManager
-    input_manager: InputManager
-    widget_manager: WidgetManager
-    dataref_manager: DataRefManager
-
-    _debug: bool
-    _sim_time: float
-
     def __init__(
-        self,
-        debug: bool = False,
-        enable_gui: bool = True,
-        enable_dataref_bridge: bool = False,
-        bridge_host: Optional[str] = None,
-        bridge_port: Optional[int] = None,
+            self,
+            enable_dataref_bridge: bool = False,
+            bridge_host: Optional[str] = None,
+            bridge_port: Optional[int] = None,
+            enable_gui: bool = True,
+            terminal_logging: bool = True,
+            debug_logging: bool = False,
     ) -> None:
-        """Initialize the FakeXP façade.
-
-        Args:
-            debug (bool, optional):
-                Enable verbose logging and additional diagnostics useful
-                during simless development. Defaults to False.
-
-            enable_gui (bool, optional):
-                Enable DearPyGui-backed rendering via FakeXPGraphics.
-                When False, all GUI drawing calls become no-ops.
-                Defaults to True.
-
-            enable_dataref_bridge (bool, optional):
-                Enable the external DataRef bridge used to synchronize
-                real X‑Plane DataRefs into the simless environment.
-                When True, the SimlessRunner will create and manage an
-                XPBridgeClient and forward metadata/value updates into
-                the DataRefManager. Defaults to False.
-
-            bridge_host (str, optional):
-                Hostname or IP address of the DataRef bridge server.
-
-            bridge_port (int, optional):
-                TCP port of the DataRef bridge server.
-
-            run_time (float, optional):
-                Maximum wall‑clock duration (in seconds) for the simless
-                main loop. A negative value disables the limit and allows
-                execution to continue until a plugin calls
-                xp.end_run_loop(). Defaults to -1.0.
-        """
-
         self.enable_gui = enable_gui
-        self._debug = debug
-        self._sim_time = 0.0
+        self.terminal_logging = terminal_logging
+        self.debug_logging = debug_logging
+
+        self._xplane_root = Path(__file__).resolve().parents[2]
+        self._xpp_log = (
+                self._xplane_root / "Resources" / "plugins" / "XPPython3" / "XPPython3Log.txt"
+        )
+        self._sim_log = self._xplane_root / "Log.txt"
+
+        if not self.terminal_logging:
+            # Fresh logs every run
+            self._xpp_log.write_text("")
+            self._sim_log.write_text("")
 
         # ------------------------------------------------------------------
         # Initialize subsystems
         # ------------------------------------------------------------------
         self._init_flightloop()
         self._init_utilities()
-        self._init_command()
 
         # ------------------------------------------------------------------
         # Bind constants
@@ -158,30 +124,72 @@ class FakeXP(
         self.input_manager = InputManager(self)
         self.window_manager = WindowManager(self)
         self.widget_manager = WidgetManager(self)
+        self.menu_manager = MenuManager(self)
 
+        # Must be done last as it builds the FakeXP facade with what has been instantiated to this point
         self.simless_runner = SimlessRunner(self, enable_dataref_bridge, bridge_host, bridge_port)
 
-    # ----------------------------------------------------------------------
-    # Helpers
-    # ----------------------------------------------------------------------
-    def log(self, msg: str) -> None:
-        print(f"[FakeXP] {msg}")
+    # ------------------------------------------------------------------
+    # Plugin‑aware log → XPPython3Log.txt OR terminal
+    # ------------------------------------------------------------------
+    def log(self, msg: str, debug: bool = False) -> None:
+        # Debug suppression
+        if debug and not self.debug_logging:
+            return
+
+        try:
+            plugin = self.simless_runner.active_plugin
+        except AttributeError:
+            plugin = None  # not instantiated yet
+        prefix = plugin.name if plugin else "FakeXP"
+
+        # Format line
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"{timestamp} {prefix}: {msg}\n"
+
+        # Terminal-only mode
+        if self.terminal_logging:
+            print(line, end="")
+            return
+
+        # File output (XPPython3 log only)
+        with self._xpp_log.open("a", encoding="utf-8") as f:
+            f.write(line)
 
     def dbg(self, msg: str) -> None:
-        if self._debug:
-            print(f"[FakeXP] {msg}")
+        self.log(msg, debug=True)
+
+    # ------------------------------------------------------------------
+    # System log → Log.txt OR terminal
+    # ------------------------------------------------------------------
+    def systemLog(self, msg: str) -> None:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"{timestamp} FakeXP: {msg}\n"
+
+        # Terminal-only mode
+        if self.terminal_logging:
+            print(line, end="")
+            return
+
+        # File output (X‑Plane Log.txt only)
+        with self._sim_log.open("a", encoding="utf-8") as f:
+            f.write(line)
+
+    def sys_log(self, msg: str) -> None:
+        self.systemLog(msg)
 
     # ----------------------------------------------------------------------
     # Base xp methods (XPPython3-compatible, SimlessXPInterface)
     # ----------------------------------------------------------------------
-    def getMyID(self) -> int:
+    def getMyID(self) -> XPLMPluginID:
         """
         XPLMGetMyID()
         Returns the plugin ID of the currently executing plugin.
         """
-        return self.simless_runner.current_plugin_id or 0
+        plugin = self.simless_runner.active_plugin
+        return plugin.plugin_id if plugin else XPLMPluginID(0)
 
-    def disablePlugin(self, plugin_id: int) -> None:
+    def disablePlugin(self, plugin_id: XPLMPluginID) -> None:
         """
         XPLMDisablePlugin(plugin_id)
         Marks the plugin as disabled.
@@ -191,7 +199,7 @@ class FakeXP(
             return
         p.enabled = False
 
-    def isPluginEnabled(self, plugin_id: int) -> int:
+    def isPluginEnabled(self, plugin_id: XPLMPluginID) -> int:
         """
         XPLMIsPluginEnabled(plugin_id)
         Returns 1 if enabled, 0 if disabled.
@@ -201,21 +209,21 @@ class FakeXP(
             return 0
         return 1 if p.enabled else 0
 
-    def findPluginBySignature(self, signature: str) -> int:
+    def findPluginBySignature(self, signature: str) -> XPLMPluginID:
         """
         XPLMFindPluginBySignature(signature)
         Returns plugin ID or -1.
         """
         return self.simless_runner.loader.find_plugin_by_signature(signature)
 
-    def findPluginByPath(self, path: str) -> int:
+    def findPluginByPath(self, path: str) -> XPLMPluginID:
         """
         XPLMFindPluginByPath(path)
         Returns plugin ID or -1.
         """
         return self.simless_runner.loader.find_plugin_by_path(path)
 
-    def getPluginInfo(self, plugin_id: int) -> tuple[str, str, str, str]:
+    def getPluginInfo(self, plugin_id: XPLMPluginID) -> tuple[str, str, str, str]:
         """
         XPLMGetPluginInfo(plugin_id)
         Returns (name, signature, description, path).
@@ -234,3 +242,10 @@ class FakeXP(
             plugin.description,
             module_path,
         )
+
+    def sendMessageToPlugin(self, pluginID: XPLMPluginID, message: int, param: Optional[Any]) -> None:
+        plugin = self.simless_runner.loader.get_plugin(pluginID)
+        if plugin is None:
+            return
+        sender = self.getMyID()
+        self.simless_runner.dispatch_message_to_plugin(plugin, sender, message, param)

@@ -889,7 +889,7 @@ class XPBridgeClient:
     # ------------------------------------------------------------------
     def add(self, paths: List[str]) -> None:
         """Request tracking of one or more DataRefs."""
-        self._send_batch([BridgeMsg(BridgeMsgType.ADD, Add(paths=list(paths)))])
+        self._send_batch([BridgeMsg(BridgeMsgType.ADD, Add(paths=paths))])
 
     def reset(self) -> None:
         """Explicit full reset request; both sides should rebuild state."""

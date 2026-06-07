@@ -6,9 +6,7 @@ from typing import List, Optional, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import DPGOp, WindowExInfo, XPGeom, XPPoint
 from simless.libs.graphics import GraphicsManager
-from xp_typing import (
-    XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer
-)
+from xp_typing import XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
@@ -51,23 +49,23 @@ class WindowManager:
             win._dirty_dpg_to_xp = False
 
     def create_window(
-        self,
-        *,
-        left: int,
-        top: int,
-        right: int,
-        bottom: int,
-        visible: bool,
-        decoration: XPLMWindowDecoration,
-        layer: XPLMWindowLayer,
-        draw_cb=None,
-        click_cb=None,
-        right_click_cb=None,
-        key_cb=None,
-        cursor_cb=None,
-        wheel_cb=None,
-        refcon=None,
-        no_title_bar: bool = False,
+            self,
+            *,
+            left: int,
+            top: int,
+            right: int,
+            bottom: int,
+            visible: bool,
+            decoration: XPLMWindowDecoration,
+            layer: XPLMWindowLayer,
+            draw_cb=None,
+            click_cb=None,
+            right_click_cb=None,
+            key_cb=None,
+            cursor_cb=None,
+            wheel_cb=None,
+            refcon=None,
+            no_title_bar: bool = False,
     ) -> WindowExInfo:
 
         wid = XPLMWindowID(self._next_window_id)
@@ -233,9 +231,9 @@ class WindowManager:
         for layer in layers:
             # Yield windows in this layer in insertion order (topmost last)
             for info in reversed(
-                [
-                    w for w in self.fake_xp.window_manager.all_info()
-                    if w.layer == layer
-                ]
+                    [
+                        w for w in self.fake_xp.window_manager.all_info()
+                        if w.layer == layer
+                    ]
             ):
                 yield info

@@ -551,6 +551,17 @@ class WidgetRender:
         behavior = info.properties.get(self.mgr.fake_xp.Property_ButtonBehavior)
 
         # ------------------------------------------------------------
+        # FONT BINDING (only when non-default)
+        # ------------------------------------------------------------
+        xp_font = props.get(xp.Property_Font)
+        if xp_font == xp.Font_Basic:
+            font = self.mgr.fake_xp.graphics_manager.font_mono
+            self.mgr.gm.enqueue_dpg(
+                op=DPGOp.BIND_ITEM_FONT,
+                args=(info.dpg_id, font),
+            )
+
+        # ------------------------------------------------------------
         # MAIN WINDOW PROPERTIES
         # ------------------------------------------------------------
         if wclass == xp.WidgetClass_MainWindow:

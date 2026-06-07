@@ -47,11 +47,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 import dearpygui.dearpygui as dpg
 
-from simless.libs.fake_xp_types import (
-    WindowExInfo
-)
+from simless.libs.fake_xp_types import WindowExInfo, MenuRecord
 from simless.libs.graphics_dpg import GraphicsDpg
-from xp_typing import XPLMMenuID
+from xp_typing import XPLMWindowID
 
 
 class GraphicsManager(GraphicsDpg):
@@ -95,6 +93,16 @@ class GraphicsManager(GraphicsDpg):
     # Switched temporarily while processing WindowEx draw callbacks.
     _active_drawlist: int | str
 
+    # ------------------------------------------------------------------
+    # WindowEx bookkeeping
+    #
+    # Graphics-owned windows with independent drawlists and callbacks.
+    # ------------------------------------------------------------------
+    _current_window_ex: Optional[WindowExInfo]
+
+    # Input focus (owned by InputManager, but renderer stores the tag)
+    _keyboard_focus_window: Optional[XPLMWindowID]
+
     # ----------------------------------------------------------------------
     # INITIALIZATION
     # ----------------------------------------------------------------------
@@ -117,12 +125,6 @@ class GraphicsManager(GraphicsDpg):
         # Dynamic draw contex
         self._current_window_ex = None
 
-        # Menu bookkeeping (renderer owns DPG menus)
-        self._menus = {}
-        self._next_menu_idx = 1
-        self._menu_callbacks = {}
-        self._root_plugins_menu = XPLMMenuID(0)
-
         # Deferred DPG command queue
         self._dpg_commands = []
 
@@ -136,19 +138,19 @@ class GraphicsManager(GraphicsDpg):
         return list(self._draw_callbacks)
 
     def register_draw_callback(
-        self,
-        cb: Callable[[int, int], Any],
-        phase: int,
-        wants_before: int,
+            self,
+            cb: Callable[[int, int], Any],
+            phase: int,
+            wants_before: int,
     ) -> None:
         """Public API: register a draw callback."""
         self._draw_callbacks.append((cb, phase, wants_before))
 
     def unregister_draw_callback(
-        self,
-        cb: Callable[[int, int], Any],
-        phase: int,
-        wants_before: int,
+            self,
+            cb: Callable[[int, int], Any],
+            phase: int,
+            wants_before: int,
     ) -> None:
         """Public API: unregister a draw callback."""
         self._draw_callbacks = [
@@ -157,7 +159,7 @@ class GraphicsManager(GraphicsDpg):
             if not (entry[0] is cb and entry[1] == phase and entry[2] == wants_before)
         ]
 
-    def get_screen_drawlists(self) -> tuple[ str | int, str | int ]:
+    def get_screen_drawlists(self) -> tuple[str | int, str | int]:
         """Return (back_drawlist, front_drawlist)."""
         return self._screen_drawlist_back, self._screen_drawlist_front
 
@@ -179,119 +181,6 @@ class GraphicsManager(GraphicsDpg):
     def get_texture_map(self) -> Dict[int, Any]:
         """Return the internal texture map (read-only)."""
         return dict(self._textures)
-
-    def get_root_plugins_menu(self) -> XPLMMenuID:
-        """Return the root Plugins menu ID."""
-        return self._root_plugins_menu
-
-    def has_menu(self, menu_id: XPLMMenuID) -> bool:
-        """Return True if menu_id exists in the registry."""
-        return menu_id in self._menus
-
-    def get_menu(self, menu_id: XPLMMenuID) -> Optional[Dict[str, Any]]:
-        """Return the menu dict or None."""
-        return self._menus.get(menu_id)
-
-    def get_menu_items(self, menu_id: XPLMMenuID) -> list[Dict[str, Any]]:
-        """Return the list of items for a menu."""
-        menu = self._menus.get(menu_id)
-        return menu["items"] if menu else []
-
-    def get_menu_dpg_tag(self, menu_id: XPLMMenuID) -> int | str:
-        """Return the DPG tag for the menu."""
-        menu = self._menus[menu_id]
-        return menu["dpg_tag"]
-
-    def allocate_menu_id(self) -> XPLMMenuID:
-        """Allocate a new XPLMMenuID."""
-        mid = XPLMMenuID(self._next_menu_idx)
-        self._next_menu_idx += 1
-        return mid
-
-    def create_menu_record(
-        self,
-        menu_id: XPLMMenuID,
-        name: str,
-        parent: XPLMMenuID,
-        parent_item: int,
-        handler: Optional[Callable[[Any, Any], None]],
-        refcon: Any,
-        dpg_tag: str,
-    ) -> None:
-        """Insert a new menu record into the registry."""
-        self._menus[menu_id] = {
-            "name": name,
-            "parent": parent,
-            "parent_item": parent_item,
-            "handler": handler,
-            "refcon": refcon,
-            "items": [],
-            "dpg_tag": dpg_tag,
-        }
-
-        if handler:
-            self._menu_callbacks[menu_id] = handler
-
-    def append_menu_item_record(
-        self,
-        menu_id: XPLMMenuID,
-        name: str,
-        refcon: Any,
-        checked: int,
-        enabled: bool,
-        separator: bool,
-        command: Any,
-        tag: str,
-    ) -> int:
-        """Append a menu item to a menu and return its index."""
-        menu = self._menus[menu_id]
-        idx = len(menu["items"])
-
-        menu["items"].append(
-            {
-                "name": name,
-                "refcon": refcon,
-                "enabled": enabled,
-                "checked": checked,
-                "separator": separator,
-                "command": command,
-                "tag": tag,
-            }
-        )
-
-        return idx
-
-    def set_menu_item_name(self, menu_id: XPLMMenuID, index: int, name: str) -> None:
-        self._menus[menu_id]["items"][index]["name"] = name
-
-    def set_menu_item_checked(self, menu_id: XPLMMenuID, index: int, checked: int) -> None:
-        self._menus[menu_id]["items"][index]["checked"] = checked
-
-    def set_menu_item_enabled(self, menu_id: XPLMMenuID, index: int, enabled: bool) -> None:
-        self._menus[menu_id]["items"][index]["enabled"] = enabled
-
-    def remove_menu_item(self, menu_id: XPLMMenuID, index: int) -> None:
-        del self._menus[menu_id]["items"][index]
-
-    def get_menu_handler(self, menu_id: XPLMMenuID) -> Optional[Callable]:
-        return self._menu_callbacks.get(menu_id)
-
-    def destroy_menu_model(self, menu_id: XPLMMenuID) -> None:
-        """
-        Remove a menu from the authoritative model.
-        XP semantics:
-          • Destroying a non-existent menu is a no-op.
-          • All items and callbacks must be removed.
-        """
-        # XP: destroying an unknown menu is allowed (no-op)
-        if menu_id not in self._menus:
-            return
-
-        # Remove menu entry
-        del self._menus[menu_id]
-
-        # Remove handler if present
-        self._menu_callbacks.pop(menu_id, None)
 
     # ----------------------------------------------------------------------
     # DPG INITIALIZATION
@@ -325,6 +214,8 @@ class GraphicsManager(GraphicsDpg):
         # 4. Show the viewport
         # --------------------------------------------------------------
         dpg.show_viewport()
+
+        self.init_fonts()
 
         # --------------------------------------------------------------
         # 5. Install input callbacks AFTER viewport is visible
@@ -437,3 +328,23 @@ class GraphicsManager(GraphicsDpg):
 
         # 12) Widget rendering
         self.fake_xp.widget_manager.render_widget_frame()
+
+    def _init_menu_bar(self) -> None:
+        """Create the top-level X-Plane-style menu bar on the viewport."""
+
+        root_menu = self.fake_xp.menu_manager.root_menu
+
+        # Create the viewport menu bar
+        dpg.add_viewport_menu_bar(tag=root_menu.parent_dpg_tag)
+
+        # File menu
+        dpg.add_menu(label="File", tag="xp_menu_file", parent=root_menu.parent_dpg_tag)
+        dpg.add_menu_item(
+            label="Quit",
+            tag="xp_menu_file_quit",
+            parent="xp_menu_file",
+            callback=lambda: self.fake_xp.simless_runner.end_run_loop()
+        )
+
+        # Plugins root menu
+        dpg.add_menu(label=root_menu.name, tag=root_menu.dpg_tag, parent=root_menu.parent_dpg_tag)

@@ -3,20 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import auto, StrEnum
+from enum import StrEnum, auto
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from simless.libs.fake_xp_constants import lookup_constant_name
-from xp_typing import (
-    XPLMCursorStatus,
-    XPLMMouseStatus,
-    XPLMWindowDecoration,
-    XPLMWindowID,
-    XPLMWindowLayer,
-    XPWidgetClass,
-    XPWidgetID,
-    XPWidgetPropertyID,
-)
+from simless.libs.fake_xp_constants import lookup_constant_name, Menu_Unchecked
+from xp_typing import (XPLMCommandPhase, XPLMCommandRef, XPLMCursorStatus, XPLMMenuCheck, XPLMMenuID, XPLMMouseStatus,
+                       XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer, XPWidgetClass, XPWidgetID,
+                       XPWidgetPropertyID)
 
 XPWidgetCallback = Callable[[int, int, Any, Any], int]
 
@@ -355,10 +348,10 @@ class LocalGeom:
     # LocalGeom → XPGeom (absolute)
     # ------------------------------------------------------------
     def to_xp_geom(self, frame_xpgeom: XPGeom) -> XPGeom:
-        abs_left   = frame_xpgeom.left + self.x
-        abs_top    = frame_xpgeom.top  - self.y
-        abs_right  = abs_left + self.width
-        abs_bottom = abs_top  - self.height
+        abs_left = frame_xpgeom.left + self.x
+        abs_top = frame_xpgeom.top - self.y
+        abs_right = abs_left + self.width
+        abs_bottom = abs_top - self.height
         return XPGeom(abs_left, abs_top, abs_right, abs_bottom)
 
     # ------------------------------------------------------------
@@ -743,24 +736,24 @@ class EventInfo:
     # ------------------------------------------------------------------
     @classmethod
     def from_xp(
-        cls,
-        *,
-        kind: EventKind,
-        xp_pt: Optional[XPPoint] = None,
-        **kwargs: Any,
+            cls,
+            *,
+            kind: EventKind,
+            xp_pt: Optional[XPPoint] = None,
+            **kwargs: Any,
     ) -> "EventInfo":
         """Create an EventInfo with explicit XP coordinates."""
         return cls(kind=kind, xp_pt=xp_pt, **kwargs)
 
     @classmethod
     def from_dpg(
-        cls,
-        *,
-        kind: EventKind,
-        dpg_x: int,
-        dpg_y: int,
-        dpg_vp_height: int,
-        **kwargs: Any,
+            cls,
+            *,
+            kind: EventKind,
+            dpg_x: int,
+            dpg_y: int,
+            dpg_vp_height: int,
+            **kwargs: Any,
     ) -> "EventInfo":
         """Create an EventInfo from DearPyGui coordinates.
 
@@ -768,7 +761,7 @@ class EventInfo:
         """
         return cls(
             kind=kind,
-            xp_pt=XPPoint(int(dpg_x),int(dpg_vp_height - dpg_y)),
+            xp_pt=XPPoint(int(dpg_x), int(dpg_vp_height - dpg_y)),
             **kwargs,
         )
 
@@ -802,16 +795,13 @@ class DPGOp(StrEnum):
     SHOW_ITEM = auto()
     HIDE_ITEM = auto()
     DELETE_ITEM = auto()
+    BIND_ITEM_FONT = auto()
 
     # --------------------------------------------------
     # Menus (XPLMMenus → DearPyGui)
     # --------------------------------------------------
-    ADD_MENU_BAR = auto()  # dpg.add_menu_bar()
     ADD_MENU = auto()  # dpg.add_menu()
     ADD_MENU_ITEM = auto()  # dpg.add_menu_item()
-    ADD_MENU_SEPARATOR = auto()  # dpg.add_separator()
-    SET_MENU_ITEM_CHECKED = auto()  # dpg.configure_item(check=True/False)
-    SET_MENU_ITEM_ENABLED = auto()  # dpg.configure_item(enabled=True/False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -830,3 +820,37 @@ class DPGCommand:
     # Positional + keyword arguments for the DPG call
     args: Tuple[Any, ...] = field(default_factory=tuple)
     kwargs: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class MenuRecord:
+    menu_id: XPLMMenuID
+    name: str
+    dpg_tag: str
+    parent_dpg_tag: str
+    refcon: Any
+    handler: Optional[Callable[[Any, Any], None]]
+    items: List[MenuItemRecord] = field(default_factory=list)
+
+
+@dataclass
+class MenuItemRecord:
+    name: str
+    dpg_tag: str
+    refcon: Any
+    checked: XPLMMenuCheck
+    enabled: bool
+    separator: bool
+    command: Optional[XPLMCommandRef]
+    submenu_id: Optional[XPLMMenuID]
+
+
+CommandCallback = Callable[[XPLMCommandRef, XPLMCommandPhase, Any], int]
+
+
+@dataclass(slots=True)
+class CommandHandlerRecord:
+    callback: CommandCallback
+    refcon: Any
+    before: bool
+    after: bool

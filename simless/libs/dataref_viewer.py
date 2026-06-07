@@ -54,7 +54,7 @@ class DataRefViewer:
     def __init__(self, xp: FakeXP) -> None:
         self.fake_xp = xp
 
-        self.win: XPWidgetID | None = None
+        self.win: XPWidgetID = None
         self.status_caption: XPWidgetID | None = None
 
         self.filter_label: XPWidgetID | None = None

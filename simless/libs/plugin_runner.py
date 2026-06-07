@@ -76,12 +76,15 @@
 
 from __future__ import annotations
 
+import os
 import time
 import traceback
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from simless.libs.dataref import DataRefManager
+from XPPython3.xp_typing import XPLMPluginID
+
+from simless.libs.dataref import DataRefManager, FakeDataRef
 from simless.libs.dataref_viewer import FakeXPDataRefViewerClient
 from simless.libs.fake_xp_types import XPShutdown
 from simless.libs.plugin_loader import LoadedPlugin
@@ -115,7 +118,9 @@ class SimlessRunner:
         # Core state
         # ------------------------------------------------------------------
         self.fake_xp = fake_xp
+
         self._running: bool = False
+        self._sim_time = 0.0
         self._bridge_connected: bool = False
         self._bridge_last_error: str | None = None
         self._bridge_client = None
@@ -173,7 +178,7 @@ class SimlessRunner:
         self._sim_time: float = 0.0
         self._cycles: int = 0
         # No plugin executing by default
-        self._current_plugin_id: int | None = None
+        self._current_plugin_id: XPLMPluginID | None = None
 
     @property
     def dm(self) -> DataRefManager:
@@ -196,11 +201,13 @@ class SimlessRunner:
         self._cycles = value
 
     @property
-    def current_plugin_id(self) -> int | None:
-        return self._current_plugin_id
+    def active_plugin(self) -> LoadedPlugin | None:
+        if self._current_plugin_id is None:
+            return None
+        return self.loader.get_plugin(self._current_plugin_id)
 
     @contextmanager
-    def plugin_context(self, plugin_id: int):
+    def plugin_context(self, plugin_id: XPLMPluginID):
         """
         Context manager that temporarily sets the active plugin identity for the
         duration of a callback, matching XPPython3 and X‑Plane execution semantics.
@@ -259,19 +266,18 @@ class SimlessRunner:
         """
         self.dm.attach_handle_callback(self._on_dataref_handle_created)
 
-    def _on_dataref_handle_created(self, ref: Any) -> None:
+    def _on_dataref_handle_created(self, ref: FakeDataRef) -> None:
         """Called synchronously when FakeXPDataRef creates a handle."""
-        path = getattr(ref, "path", None)
-        if not path:
-            return
         if not self._bridge_connected:
+            return
+        if self._bridge_client is None:
             return
 
         try:
-            self._bridge_client.add(path)
+            self._bridge_client.add([ref.path])
         except Exception as exc:
             try:
-                self.fake_xp.log(f"[Runner] Bridge registration failed for {path}: {exc}")
+                self.fake_xp.log(f"[Runner] Bridge registration failed for {ref.path}: {exc}")
             except Exception:
                 pass
 
@@ -324,9 +330,12 @@ class SimlessRunner:
             self._register_all_datarefs_with_bridge()
 
         for ev in events:
+            if not ev.path:
+                continue
             if ev.type is self._bridge_mod.BridgeDataType.META:
                 ref = self.dm.get_handle(ev.path)
-                assert ref is not None
+                if not ref or not ev.dtype:
+                    continue
 
                 # Promote TYPE authority only
                 self.dm.promote_type(
@@ -460,6 +469,8 @@ class SimlessRunner:
         self.loader.load_plugins(plugin_names)
         plugins = self.loader.loaded_plugins
 
+        os.chdir(self.loader.plugins_root)
+
         # ------------------------------------------------------------
         # 3. XPluginEnable
         # ------------------------------------------------------------
@@ -558,12 +569,17 @@ class SimlessRunner:
         if xp.enable_gui:
             xp.log("[Runner] === GUI Teardown ===")
 
+    def broadcast_message(self, sender_id: int, msg: int, param) -> None:
+        """Broadcast to all enabled plugins."""
+        for p in self.loader.loaded_plugins:
+            self.dispatch_message_to_plugin(p, sender_id, msg, param)
+
     def dispatch_message_to_plugin(
-        self,
-        plugin: LoadedPlugin,
-        sender_id: int,
-        msg: int,
-        param,
+            self,
+            plugin: LoadedPlugin,
+            sender_id: int,
+            msg: int,
+            param,
     ) -> None:
         """Execute XPluginReceiveMessage using the same workflow as Start/Enable."""
         if not plugin.enabled or not plugin.has_receive():
@@ -578,11 +594,6 @@ class SimlessRunner:
                 f"[Runner] XPluginReceiveMessage failed for {plugin.name}: {exc!r}"
             )
 
-    def broadcast_message(self, sender_id: int, msg: int, param) -> None:
-        """Broadcast to all enabled plugins."""
-        for p in self.loader.loaded_plugins:
-            self.dispatch_message_to_plugin(p, sender_id, msg, param)
-
     def send_initial_xplane_broadcasts(self) -> None:
         xp = self.fake_xp
 
@@ -594,5 +605,4 @@ class SimlessRunner:
 
         for msg in initial_msgs:
             # sender is X‑Plane itself
-            self.broadcast_message(xp.PLUGIN_XPLANE, msg, None)
-
+            self.broadcast_message(0, msg, xp.PLUGIN_XPLANE)

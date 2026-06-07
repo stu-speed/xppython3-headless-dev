@@ -12,7 +12,7 @@ from simless.libs.fake_xp_types import FakeDataRef
 @pytest.fixture
 def xp() -> FakeXP:
     """Create a FakeXP façade and initialize the global XPPython3.xp as tests expect."""
-    fake = FakeXP(debug=True)
+    fake = FakeXP(debug_logging=True)
     XPPython3.xp = fake
     return fake
 

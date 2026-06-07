@@ -5,9 +5,10 @@ import inspect
 import os
 import sys
 import types
-from pathlib import Path
 from types import ModuleType
 from typing import List, Protocol, TYPE_CHECKING
+
+from xp_typing import XPLMPluginID
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
@@ -35,13 +36,13 @@ class PythonInterfaceProto(Protocol):
 
 class LoadedPlugin:
     def __init__(
-        self,
-        plugin_id: int,
-        name: str,
-        sig: str,
-        desc: str,
-        module: ModuleType,
-        instance: PythonInterfaceProto,
+            self,
+            plugin_id: XPLMPluginID,
+            name: str,
+            sig: str,
+            desc: str,
+            module: ModuleType,
+            instance: PythonInterfaceProto,
     ) -> None:
         self.plugin_id = plugin_id
         self.name = name
@@ -77,24 +78,13 @@ class SimlessPluginLoader:
     """
 
     def __init__(self, xp: FakeXP) -> None:
-        # --------------------------------------------------------------
-        # 1) Project root = X‑Plane root
-        # --------------------------------------------------------------
-        project_root = Path(__file__).resolve().parents[2]
-
-        # NOAA expects cwd == X‑Plane root
-        # (weatherServer.py uses relative paths)
-        os.chdir(project_root)
-
-        # --------------------------------------------------------------
-        # 2) Real X‑Plane directory layout
-        # --------------------------------------------------------------
-        self.xplane_root = project_root
-        self.plugins_root = project_root / "Resources" / "plugins"
+        self.xp = xp
+        self.plugins_root = self.xp._xplane_root / "Resources" / "plugins"
         self.root = self.plugins_root / "PythonPlugins"
         self.xppython3_root = self.plugins_root / "XPPython3"
+        # Plugins expects cwd == X‑Plane root
+        os.chdir(self.xp._xplane_root)
 
-        self.xp = xp
         self._loaded_plugins: List[LoadedPlugin] = []
         self._next_id: int = 1
 
@@ -171,17 +161,15 @@ class SimlessPluginLoader:
     # Plugin lookup APIs
     # ----------------------------------------------------------------------
 
-    def get_plugin(self, plugin_id: int) -> LoadedPlugin | None:
-        return next((p for p in self._loaded_plugins if p.plugin_id == plugin_id), None)
+    def get_plugin(self, plugin_id: XPLMPluginID) -> LoadedPlugin | None:
+        return next((p for p in self.loaded_plugins if p.plugin_id == plugin_id), None)
 
-    def find_plugin_by_signature(self, signature: str) -> int:
-        return next((p.plugin_id for p in self._loaded_plugins if p.signature == signature), -1)
+    def find_plugin_by_signature(self, signature: str) -> XPLMPluginID:
+        return next((p.plugin_id for p in self.loaded_plugins if p.signature == signature), XPLMPluginID(-1))
 
-    def find_plugin_by_path(self, path: str) -> int:
-        return next(
-            (p.plugin_id for p in self._loaded_plugins if getattr(p.module, "__file__", None) == path),
-            -1,
-        )
+    def find_plugin_by_path(self, path: str) -> XPLMPluginID:
+        return next((p.plugin_id for p in self.loaded_plugins if getattr(p.module, "__file__", None) == path),
+                    XPLMPluginID(-1))
 
     # ----------------------------------------------------------------------
     # Plugin loading
@@ -238,7 +226,7 @@ class SimlessPluginLoader:
         except Exception as exc:
             raise RuntimeError(f"[Loader] XPluginStart failed for {module.__name__}: {exc!r}")
 
-        plugin_id = self._next_id
+        plugin_id = XPLMPluginID(self._next_id)
         self._next_id += 1
 
         return LoadedPlugin(

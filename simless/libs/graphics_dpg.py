@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import dearpygui.dearpygui as dpg
 
-from simless.libs.fake_xp_types import XPGeom
-from simless.libs.fake_xp_types import (
-    DPGCommand, DPGGeom, DPGOp, WindowExInfo
-)
-from xp_typing import XPLMMenuID, XPLMWindowID
+from simless.libs.fake_xp_types import DPGCommand, DPGGeom, DPGOp, XPGeom
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
@@ -23,25 +19,27 @@ class GraphicsDpg:
     # ------------------------------------------------------------------
     _dpg_commands: list[DPGCommand]
 
-    # ------------------------------------------------------------------
-    # WindowEx bookkeeping
-    #
-    # Graphics-owned windows with independent drawlists and callbacks.
-    # ------------------------------------------------------------------
-    _current_window_ex: Optional[WindowExInfo]
-
-    # Input focus (owned by InputManager, but renderer stores the tag)
-    _keyboard_focus_window: Optional[XPLMWindowID]
-
-    # ------------------------------------------------------------------
-    # Menu bookkeeping (renderer owns DPG menu structures)
-    # ------------------------------------------------------------------
-    _menus: Dict[XPLMMenuID, Dict[str, Any]]
-    _next_menu_idx: int
-    _menu_callbacks: Dict[XPLMMenuID, Callable]
-    _root_plugins_menu: Optional[XPLMMenuID]
+    font_proportional: int | str
+    font_mono = int | str
 
     fake_xp: FakeXP
+
+    # ------------------------------------------------------------------
+    # Initialize font registry and load bundled fonts
+    # ------------------------------------------------------------------
+    def init_fonts(self):
+        """Load proportional + monospaced fonts bundled with FakeXP."""
+        font_dir = self.fake_xp._xplane_root / "simless" / "fonts"
+
+        prop_path = font_dir / "DejaVuSans.ttf"
+        mono_path = font_dir / "DejaVuSansMono.ttf"
+
+        with dpg.font_registry():  # type: ignore
+            self.font_proportional = dpg.add_font(str(prop_path), 14)
+            self.font_mono = dpg.add_font(str(mono_path), 14)
+
+        # bind proportional as global default
+        dpg.bind_font(self.font_proportional)
 
     # ----------------------------------------------------------------------
     # DPG HELPERS (ALL DPG calls handled by this class)
@@ -74,11 +72,11 @@ class GraphicsDpg:
         return dpg.get_text_size(text)
 
     def enqueue_dpg(
-        self,
-        op: DPGOp,
-        target_drawlist: str | int | None = None,
-        args: tuple[Any, ...] = (),
-        kwargs: dict[str, Any] | None = None,
+            self,
+            op: DPGOp,
+            target_drawlist: str | int | None = None,
+            args: tuple[Any, ...] = (),
+            kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Record a deferred DearPyGui operation.
 
@@ -222,28 +220,13 @@ class GraphicsDpg:
                 dpg.add_menu(*cmd.args, **cmd.kwargs)
 
             case DPGOp.ADD_MENU_ITEM:
-                label = cmd.kwargs["label"]
-                parent = cmd.kwargs["parent"]
-                tag = cmd.kwargs["tag"]
+                dpg.add_menu_item(*cmd.args, **cmd.kwargs)
 
-                dpg.add_menu_item(
-                    label=label,
-                    parent=parent,
-                    tag=tag,
-                    callback=self._dispatch_menu_click
-                )
+            case DPGOp.CONFIGURE_ITEM:
+                dpg.configure_item(*cmd.args, **cmd.kwargs)
 
-            case DPGOp.ADD_MENU_SEPARATOR:
-                dpg.add_separator(*cmd.args, **cmd.kwargs)
-
-            case DPGOp.SET_MENU_ITEM_CHECKED:
-                # DearPyGui uses configure_item(check=True/False)
-                menu_item_tag, checked = cmd.args
-                dpg.configure_item(menu_item_tag, check=checked)
-
-            case DPGOp.SET_MENU_ITEM_ENABLED:
-                menu_item_tag, enabled = cmd.args
-                dpg.configure_item(menu_item_tag, enabled=enabled)
+            case DPGOp.DELETE_ITEM:
+                dpg.delete_item(*cmd.args, **cmd.kwargs)
 
             # --------------------------------------------------
             # Item mutation
@@ -262,6 +245,9 @@ class GraphicsDpg:
 
             case DPGOp.DELETE_ITEM:
                 dpg.delete_item(*cmd.args)
+
+            case DPGOp.BIND_ITEM_FONT:
+                dpg.bind_item_font(*cmd.args)
 
             # --------------------------------------------------
             # Safety net
@@ -365,58 +351,3 @@ class GraphicsDpg:
             # Optional: fire XP callbacks here
 
             info._dirty_dpg_to_xp = False
-
-    def _init_menu_bar(self) -> None:
-        """Create the top-level X-Plane-style menu bar on the viewport."""
-
-        dpg_tag = "xp_menu_plugins"
-
-        # Create the viewport menu bar
-        dpg.add_viewport_menu_bar(tag="xp_menu_bar")
-
-        # File menu
-        dpg.add_menu(label="File", tag="xp_menu_file", parent="xp_menu_bar")
-        dpg.add_menu_item(
-            label="Quit",
-            tag="xp_menu_file_quit",
-            parent="xp_menu_file",
-            callback=lambda: self.fake_xp.simless_runner.end_run_loop()
-        )
-
-        # Plugins root menu
-        dpg.add_menu(
-            label="Plugins",
-            tag=dpg_tag,
-            parent="xp_menu_bar"
-        )
-
-        # Allocate XP menu ID
-        root_id = XPLMMenuID(self._next_menu_idx)
-        self._next_menu_idx += 1
-
-        self._root_plugins_menu = root_id
-
-        self._menus[root_id] = {
-            "name": "Plugins",
-            "parent": None,
-            "parent_item": None,
-            "handler": None,
-            "refcon": None,
-            "items": [],
-            "dpg_tag": dpg_tag,
-        }
-
-    def _dispatch_menu_click(self, sender, app_data):
-        tag = sender  # DPG gives us the authoritative tag
-
-        # Search all menus for this item tag
-        for menu_id, menu in self._menus.items():
-            for index, item in enumerate(menu["items"]):
-                if item.get("tag") == tag:
-                    handler = menu["handler"]
-                    if handler:
-                        handler(menu["refcon"], item["refcon"])
-                    return
-
-        # If we get here, the tag was not found — this is a real error
-        raise KeyError(f"[FakeXP] Menu item tag not found: {tag}")
