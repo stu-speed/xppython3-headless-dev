@@ -328,7 +328,9 @@ class FakeXPGraphics:
         digits_only = 0
         s = self.gm.dpg_get_text_size("L")
         if s is None:
-            return 6, 12, digits_only  # dpg not ready
+            if font_id == self.fake_xp.Font_Proportional:
+                return 6, 12, digits_only  # dpg not ready
+            return 7, 13, digits_only  # dpg not ready
         return int(s[0]), int(s[1]), digits_only
 
     def measureString(self, font_id: XPLMFontID, string: str) -> float:
@@ -336,5 +338,7 @@ class FakeXPGraphics:
         digits_only = 0
         s = self.gm.dpg_get_text_size(string)
         if s is None:
-            return 6 * len(string)  # dpg not ready
+            if font_id == self.fake_xp.Font_Proportional:
+                return 6 * len(string)  # dpg not ready
+            return 7 * len(string)  # dpg not ready
         return s[0]

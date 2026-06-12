@@ -82,15 +82,12 @@ import traceback
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from XPPython3.xp_typing import XPLMPluginID
-
-from simless.libs.dataref import DataRefManager, FakeDataRef
-from simless.libs.dataref_viewer import FakeXPDataRefViewerClient
+from XPPython3.xp_typing import XPLMMenuID, XPLMPluginID
+from simless.libs.dataref import DataRefManager
 from simless.libs.fake_xp_types import XPShutdown
 from simless.libs.plugin_loader import LoadedPlugin
 
 if TYPE_CHECKING:
-    import sshd_extensions.bridge_protocol as bridge_type
     from simless.libs.fake_xp import FakeXP
 
 
@@ -104,27 +101,23 @@ class SimlessRunner:
     DataRefManager.
     """
 
-    _bridge_client: bridge_type.XPBridgeClient | None
-    _dataref_viewer: FakeXPDataRefViewerClient | None
+    main_menu: XPLMMenuID | None
 
     def __init__(
-        self,
-        fake_xp: FakeXP,
-        enable_dataref_bridge: bool = False,
-        bridge_host: Optional[str] = None,
-        bridge_port: Optional[int] = None,
+            self,
+            fake_xp: FakeXP,
+            enable_dataref_bridge: bool = False,
+            bridge_host: Optional[str] = None,
+            bridge_port: Optional[int] = None,
     ) -> None:
+        self.fake_xp = fake_xp
+        self._enable_dataref_bridge: bool = enable_dataref_bridge
+
         # ------------------------------------------------------------------
         # Core state
         # ------------------------------------------------------------------
-        self.fake_xp = fake_xp
-
         self._running: bool = False
         self._sim_time = 0.0
-        self._bridge_connected: bool = False
-        self._bridge_last_error: str | None = None
-        self._bridge_client = None
-        self._dataref_viewer = None
 
         # ------------------------------------------------------------------
         # 1. Install synthetic XPPython3 runtime BEFORE importing plugin code
@@ -151,18 +144,11 @@ class SimlessRunner:
         # plugins/XPPython3/xp.py and crash on:
         #       import XPLMCamera
         #
-        import sshd_extensions.bridge_protocol as bridge_mod
-        self._bridge_mod = bridge_mod
+        from simless.libs.bridge_client import XPBridgeClient
+        from simless.libs.dataref_viewer import FakeXPDataRefViewerClient
 
-        # ------------------------------------------------------------------
-        # 3. Create the dataref bridge (optional)
-        # ------------------------------------------------------------------
-        if enable_dataref_bridge:
-            self._bridge_client = self._bridge_mod.XPBridgeClient(
-                host=bridge_host or self._bridge_mod.BRIDGE_HOST,
-                port=bridge_port or self._bridge_mod.BRIDGE_PORT,
-            )
-            self._attach_bridge_handle_callback()
+        self.dataref_viewer = FakeXPDataRefViewerClient(self.fake_xp)
+        self.bridge_client = XPBridgeClient(self.fake_xp, host=bridge_host, port=bridge_port)
 
         # ------------------------------------------------------------------
         # 4. Plugin loader (safe now that XPPython3 is synthetic)
@@ -247,128 +233,6 @@ class SimlessRunner:
         finally:
             self._current_plugin_id = prev
 
-    def get_bridge_status(self) -> tuple[bool, bool, str | None]:
-        """
-        Return bridge status as enabled, connected, last_error.
-        """
-        if self._bridge_client is None:
-            return False, False, "Bridge not enabled"
-        return True, self._bridge_client.is_connected, self._bridge_client.conn_status
-
-    # ----------------------------------------------------------------------
-    # Bridge registration callback wiring
-    # ----------------------------------------------------------------------
-    def _attach_bridge_handle_callback(self) -> None:
-        """Attach a handle‑created callback so DataRefs auto‑register with the bridge.
-
-        The DataRef subsystem emits discovery events; the runner decides
-        whether and how those paths are synchronized externally.
-        """
-        self.dm.attach_handle_callback(self._on_dataref_handle_created)
-
-    def _on_dataref_handle_created(self, ref: FakeDataRef) -> None:
-        """Called synchronously when FakeXPDataRef creates a handle."""
-        if not self._bridge_connected:
-            return
-        if self._bridge_client is None:
-            return
-
-        try:
-            self._bridge_client.add([ref.path])
-        except Exception as exc:
-            try:
-                self.fake_xp.log(f"[Runner] Bridge registration failed for {ref.path}: {exc}")
-            except Exception:
-                pass
-
-    def _register_all_datarefs_with_bridge(self) -> None:
-        """Register all known DataRef paths with the bridge.
-
-        Called once on initial bridge connection and again on reconnect.
-        """
-        if self._bridge_client is None:
-            return
-        all_handle_paths = self.dm.all_handle_paths()
-
-        try:
-            self._bridge_client.add(all_handle_paths)
-        except Exception:
-            try:
-                self.fake_xp.log(f"[Runner] Bridge registration failed for {all_handle_paths}")
-            except Exception:
-                pass
-
-    # ----------------------------------------------------------------------
-    # Bridge management
-    # ----------------------------------------------------------------------
-    # NOTE:
-    # is_dummy means both type and value are provisional.
-    # It flips to False only on the first provider‑originated UPDATE,
-    # never on META.
-    def _manage_bridged_datarefs(self) -> None:
-        """Poll bridge events and update DataRefManager state.
-
-        Connection management is handled entirely by XPBridgeClient.poll().
-        This method only:
-          • polls for inbound events,
-          • applies META/UPDATE changes,
-          • marks DataRefs dummy on disconnect,
-          • logs bridge errors.
-        """
-
-        try:
-            events: List[bridge_type.BridgeData] = self._bridge_client.poll_data()
-        except ConnectionResetError as exc:
-            self.fake_xp.log("[Runner] Bridge disconnected")
-            self._bridge_connected = False
-            self._bridge_last_error = f"connection reset: {exc}"
-            return
-
-        if not self._bridge_connected:
-            self._bridge_connected = True
-            self._bridge_last_error = None
-            self._register_all_datarefs_with_bridge()
-
-        for ev in events:
-            if not ev.path:
-                continue
-            if ev.type is self._bridge_mod.BridgeDataType.META:
-                ref = self.dm.get_handle(ev.path)
-                if not ref or not ev.dtype:
-                    continue
-
-                # Promote TYPE authority only
-                self.dm.promote_type(
-                    ref=ref,
-                    dtype=ev.dtype,
-                    writable=bool(ev.writable),
-                )
-
-            elif ev.type is self._bridge_mod.BridgeDataType.UPDATE:
-                ref = self.dm.get_handle(ev.path)
-                assert ref is not None, f"Unknown handle: {ev.path}"
-                value = ev.value
-
-                is_array = isinstance(value, (list, tuple, bytearray))
-                size = len(value) if is_array else 1
-
-                # Promote shape if needed (first time or shape change)
-                if (
-                    not ref.shape_known
-                    or ref.is_array != is_array
-                    or ref.size != size
-                ):
-                    self.dm.promote_shape_from_value(
-                        ref=ref,
-                        value=value,
-                    )
-                else:
-                    ref.value = value
-
-            elif ev.type is self._bridge_mod.BridgeDataType.ERROR:
-                self._bridge_last_error = ev.text
-                self.fake_xp.log(f"[Bridge] ERROR: {ev.text}")
-
     # ----------------------------------------------------------------------
     # Stop loop
     # ----------------------------------------------------------------------
@@ -396,10 +260,10 @@ class SimlessRunner:
         cycle = self._cycles
 
         # ------------------------------------------------------------
-        # 2) Bridge sync (if any)
+        # 2) Bridge sync
         # ------------------------------------------------------------
-        if self._bridge_client is not None:
-            self._manage_bridged_datarefs()
+        if self.bridge_client.ready_for_processing():
+            self.bridge_client.manage_bridged_datarefs()
 
         # ------------------------------------------------------------
         # 3) Run flightloops (under plugin context)
@@ -418,8 +282,8 @@ class SimlessRunner:
                 continue
 
         # 5. Dataref viewer
-        if self._dataref_viewer:
-            self._dataref_viewer.update()
+        if self.dataref_viewer.attached:
+            self.dataref_viewer.update()
 
         # ------------------------------------------------------------
         # 6) Graphics frame (draw callbacks, XP→DPG sync, DPG flush, render)
@@ -428,10 +292,9 @@ class SimlessRunner:
             xp.graphics_manager.draw_frame()
 
     def run_plugin_lifecycle(
-        self,
-        plugin_names: List[str],
-        enable_dataref_viewer: bool = False,
-        run_time: float = -1,
+            self,
+            plugin_names: List[str],
+            run_time: float = -1,
     ) -> None:
         """
         Full X‑Plane‑style plugin lifecycle runner.
@@ -452,6 +315,8 @@ class SimlessRunner:
             xp.log("[Runner] No plugins to run")
             return
 
+        self.bridge_client.set_enabled(self._enable_dataref_bridge)
+
         # ------------------------------------------------------------
         # 1. GUI Initialization (optional)
         # ------------------------------------------------------------
@@ -459,9 +324,7 @@ class SimlessRunner:
             xp.graphics_manager.init_graphics_root()
             xp.log("[Runner] GUI enabled (FakeXPGraphics manages DearPyGui)")
 
-            if enable_dataref_viewer:
-                self._dataref_viewer = FakeXPDataRefViewerClient(xp)
-                self._dataref_viewer.attach()
+            self.create_main_menu()
 
         # ------------------------------------------------------------
         # 2. XPluginStart (loader handles this)
@@ -496,7 +359,7 @@ class SimlessRunner:
         # ------------------------------------------------------------
         xp.log("[Runner] === Flight Loop ===")
         self._running = True
-        self._xplane_broadcast_sent = False
+        xplane_broadcast_sent = False
         start = time.monotonic()
         target_dt = 1.0 / 60.0
 
@@ -525,10 +388,10 @@ class SimlessRunner:
             if remaining > 0:
                 time.sleep(remaining)
 
-            if not self._xplane_broadcast_sent and time.monotonic() - start > 5:
+            if not xplane_broadcast_sent and time.monotonic() - start > 5:
                 xp.log("[Runner] === Send X-Plane Broadcasts ===")
                 self.send_initial_xplane_broadcasts()
-                self._xplane_broadcast_sent = True
+                xplane_broadcast_sent = True
 
         # ------------------------------------------------------------
         # 5. XPluginDisable
@@ -562,12 +425,10 @@ class SimlessRunner:
         # ------------------------------------------------------------
         # 7. GUI teardown
         # ------------------------------------------------------------
-        if self._dataref_viewer:
-            self._dataref_viewer.detach()
-            self._dataref_viewer = None
 
         if xp.enable_gui:
             xp.log("[Runner] === GUI Teardown ===")
+            self.dataref_viewer.detach()
 
     def broadcast_message(self, sender_id: int, msg: int, param) -> None:
         """Broadcast to all enabled plugins."""
@@ -606,3 +467,48 @@ class SimlessRunner:
         for msg in initial_msgs:
             # sender is X‑Plane itself
             self.broadcast_message(0, msg, xp.PLUGIN_XPLANE)
+
+    def create_main_menu(self) -> None:
+        self.main_menu = self.fake_xp.createMenu(name="FakeXP")
+
+        cmd_toggle_bridge = self.fake_xp.createCommand(
+            "FakeXP/Bridge/Toggle",
+            "Toggle the dataref bridge"
+        )
+        self.fake_xp.registerCommandHandler(
+            cmd_toggle_bridge,
+            self._cmd_toggle_bridge,
+            1,
+            None
+        )
+        self.fake_xp.appendMenuItemWithCommand(
+            self.main_menu,
+            self.bridge_client.menu_label,
+            cmd_toggle_bridge
+        )
+
+        cmd_toggle_viewer = self.fake_xp.createCommand(
+            "FakeXP/DatarefViewer/Toggle",
+            "Toggle Dataref Viewer window"
+        )
+        self.fake_xp.registerCommandHandler(
+            cmd_toggle_viewer,
+            self._cmd_toggle_viewer,
+            1,  # before
+            None
+        )
+        self.fake_xp.appendMenuItemWithCommand(self.main_menu, 'Dataref Viewer', cmd_toggle_viewer)
+
+    def _cmd_toggle_bridge(self, cmd, phase, refcon):
+        if phase == self.fake_xp.CommandBegin:
+            self.bridge_client.set_enabled(not self.bridge_client.enabled)
+            self.fake_xp.setMenuItemName(self.main_menu, 0, self.bridge_client.menu_label)
+        return 1
+
+    def _cmd_toggle_viewer(self, commandRef, phase, refCon):
+        if phase == self.fake_xp.CommandBegin:
+            if self.dataref_viewer.attached:
+                self.dataref_viewer.detach()
+            else:
+                self.dataref_viewer.attach()
+        return 1

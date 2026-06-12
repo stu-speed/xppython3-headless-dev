@@ -43,7 +43,9 @@ class PythonInterface:
 
     def XPluginEnable(self) -> int:
         # Create protocol server bound to real xp.* interface
-        self._bridge = XPBridgeServer(xp)
+        self._bridge = XPBridgeServer()
+        if self._bridge is None:
+            return 0
 
         # Register flight loop
         loop_id = xp.createFlightLoop(self._bridge.flightloop_cb)
@@ -61,7 +63,8 @@ class PythonInterface:
             self._loop_id = None
 
         # Drop server reference (closes sockets + resets session)
-        self._bridge = None
+        if self._bridge is not None:
+            self._bridge.close_server()
 
     def XPluginStop(self) -> None:
         # Nothing additional; disable handles teardown

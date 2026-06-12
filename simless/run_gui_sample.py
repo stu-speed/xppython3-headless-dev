@@ -9,7 +9,8 @@ from simless.libs.fake_xp import FakeXP
 
 
 def run_gui_sample() -> None:
-    xp = FakeXP()
+    # log to terminal instead of log files for IDE debugging
+    xp = FakeXP(terminal_logging=True)
 
     plugins = [
         "PI_HelloWorld1",

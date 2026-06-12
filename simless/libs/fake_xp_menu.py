@@ -141,7 +141,7 @@ class FakeXPMenu:
     def appendMenuItemWithCommand(
             self,
             menuID: Optional[XPLMMenuID] = None,
-            name: str = "Command",
+            name: str = "Item",
             commandRef: XPLMCommandRef | None = None,
     ) -> int:
         # Resolve and validate menu

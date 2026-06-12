@@ -49,7 +49,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast, Literal, Optional, TYPE_CHECKING
+from typing import Any, Literal, Optional, TYPE_CHECKING, cast
 
 from simless.libs.fake_xp_constants import lookup_constant_name
 from simless.libs.fake_xp_types import XPGeom, XPPoint, XPWidgetCallback
@@ -70,16 +70,16 @@ class FakeXPWidget:
         return self.fake_xp.widget_manager
 
     def createWidget(
-        self,
-        left: int,
-        top: int,
-        right: int,
-        bottom: int,
-        visible: int,
-        descriptor: str,
-        isRoot: int,
-        container: XPWidgetID | Literal[0],
-        widgetClass: XPWidgetClass,
+            self,
+            left: int,
+            top: int,
+            right: int,
+            bottom: int,
+            visible: int,
+            descriptor: str,
+            isRoot: int,
+            container: XPWidgetID | Literal[0],
+            widgetClass: XPWidgetClass,
     ) -> XPWidgetID:
 
         abs_geom = XPGeom(left, top, right, bottom)
@@ -224,12 +224,12 @@ class FakeXPWidget:
     # GEOMETRY
     # ------------------------------------------------------------------
     def setWidgetGeometry(
-        self,
-        wid: XPWidgetID,
-        left: int,
-        top: int,
-        right: int,
-        bottom: int,
+            self,
+            wid: XPWidgetID,
+            left: int,
+            top: int,
+            right: int,
+            bottom: int,
     ) -> None:
         """
         XPWidgets API: set widget geometry in global XP coordinates.
@@ -278,10 +278,10 @@ class FakeXPWidget:
     # PROPERTIES
     # ------------------------------------------------------------------
     def setWidgetProperty(
-        self,
-        wid: XPWidgetID,
-        prop: XPWidgetPropertyID | int,
-        value: Any,
+            self,
+            wid: XPWidgetID,
+            prop: XPWidgetPropertyID | int,
+            value: Any,
     ) -> None:
         """
         XPWidgets API: set a widget property.
@@ -292,7 +292,7 @@ class FakeXPWidget:
         info.window._dirty_xp_to_dpg = True
 
     def getWidgetProperty(
-        self, widgetID: XPWidgetID, propertyID: XPWidgetPropertyID | int, exists: Optional[int] = None
+            self, widgetID: XPWidgetID, propertyID: XPWidgetPropertyID | int, exists: Optional[int] = None
     ) -> Any:
         """
         XPWidgets API: get a widget property.
@@ -308,11 +308,11 @@ class FakeXPWidget:
             info.callbacks.append(callback)
 
     def sendMessageToWidget(
-        self,
-        wid: XPWidgetID,
-        msg: XPWidgetMessage,
-        param1: Any,
-        param2: Any,
+            self,
+            wid: XPWidgetID,
+            msg: XPWidgetMessage | int,
+            param1: Any,
+            param2: Any,
     ) -> None:
         """
         XPWidgets API: send a message to a widget.
@@ -321,11 +321,11 @@ class FakeXPWidget:
         self.wm.queue_msg(wid, msg, param1, param2)
 
     def broadcastMessageToWidget(
-        self,
-        wid: XPWidgetID,
-        msg: XPWidgetMessage,
-        param1: Any,
-        param2: Any,
+            self,
+            wid: XPWidgetID,
+            msg: XPWidgetMessage | int,
+            param1: Any,
+            param2: Any,
     ) -> None:
         """
         XPWidgets API: broadcast a message to a widget and all descendants.
@@ -359,11 +359,11 @@ class FakeXPWidget:
         return self.wm.require_info(wid).parent
 
     def getWidgetForLocation(
-        self,
-        wid: XPWidgetID,
-        x: int,
-        y: int,
-        recursive: int,
+            self,
+            wid: XPWidgetID,
+            x: int,
+            y: int,
+            recursive: int,
     ) -> Optional[XPWidgetID]:
         """
         XPWidgets API: return the topmost widget at (x, y) under the given root.

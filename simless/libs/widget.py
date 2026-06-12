@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, Iterable, Optional, TYPE_CHECKING
 
-from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo, XPGeom, LocalGeom, XPPoint
+from simless.libs.fake_xp_types import DPGOp, LocalGeom, WidgetInfo, WindowExInfo, XPGeom, XPPoint
 from simless.libs.widget_render import WidgetRender
 from xp_typing import XPWidgetClass, XPWidgetID, XPWidgetMessage
 
@@ -54,13 +54,13 @@ class WidgetManager(WidgetRender):
         return info
 
     def create_widget(
-        self,
-        widget_class: XPWidgetClass,
-        window: WindowExInfo,
-        abs_geom: XPGeom,
-        parent: Optional[XPWidgetID] = None,
-        descriptor: str = "",
-        visible: bool = True,
+            self,
+            widget_class: XPWidgetClass,
+            window: WindowExInfo,
+            abs_geom: XPGeom,
+            parent: Optional[XPWidgetID] = None,
+            descriptor: str = "",
+            visible: bool = True,
     ) -> WidgetInfo:
 
         wid = self.allocate_widget_id()
@@ -165,10 +165,10 @@ class WidgetManager(WidgetRender):
         )
 
     def hit_test(
-        self,
-        root_wid: XPWidgetID,
-        xp_pt: XPPoint,
-        recursive: bool = True,
+            self,
+            root_wid: XPWidgetID,
+            xp_pt: XPPoint,
+            recursive: bool = True,
     ) -> Optional[XPWidgetID]:
         """
         XPWidgets API: return the topmost widget at (x, y) under the given root.
@@ -210,11 +210,11 @@ class WidgetManager(WidgetRender):
                 stack.append(child)
 
     def queue_msg(
-        self,
-        wid: XPWidgetID,
-        msg: XPWidgetMessage,
-        p1: Any = None,
-        p2: Any = None,
+            self,
+            wid: XPWidgetID,
+            msg: XPWidgetMessage | int,
+            p1: Any = None,
+            p2: Any = None,
     ) -> None:
         self._msg_queue.append((wid, msg, p1, p2))
 
@@ -227,6 +227,29 @@ class WidgetManager(WidgetRender):
             else:
                 # API messages → direct dispatch
                 self._dispatch_message(wid, msg, p1, p2)
+
+    def handle_input_msg(self, info: WidgetInfo, msg: XPWidgetMessage | int, p1: Any = None, p2: Any = None,
+                         process_input_handler: Optional[Callable[..., None]] = None) -> bool:
+        """
+        Text editing is handled by DPG input field.  Allow callback on enter.
+        """
+        xp = self.fake_xp
+
+        # ---------------------------------------------------------
+        # TEXT FIELD DEFAULT KEY HANDLING (XP-authentic)
+        # ---------------------------------------------------------
+        if info.widget_class != xp.WidgetClass_TextField:
+            return False
+        if msg != xp.Msg_KeyPress:
+            return False
+
+        key, flags, vkey = p1
+
+        # Enter
+        if key == 13 and process_input_handler is not None:
+            process_input_handler()
+
+        return True
 
     # ------------------------------------------------------------------
     # DISPATCH PIPELINE (XP-authentic)
@@ -263,11 +286,11 @@ class WidgetManager(WidgetRender):
         return self._dispatch_message(root_id, msg, p1, p2)
 
     def _dispatch_message(
-        self,
-        wid: XPWidgetID,
-        msg: XPWidgetMessage | int,
-        p1: Any,
-        p2: Any,
+            self,
+            wid: XPWidgetID,
+            msg: XPWidgetMessage | int,
+            p1: Any,
+            p2: Any,
     ) -> int:
 
         info: WidgetInfo = self.require_info(wid)
@@ -322,53 +345,14 @@ class WidgetManager(WidgetRender):
         # ---------------------------------------------------------
         # TEXT FIELD DEFAULT KEY HANDLING (XP-authentic)
         # ---------------------------------------------------------
-        if info.widget_class == xp.WidgetClass_TextField:
-            if msg == xp.Msg_KeyPress:
-                key, flags, vkey = p1
-
-                text = info.descriptor or ""
-                cursor = int(info.properties.get(xp.Property_EditFieldSelStart, 0))
-                sel_end = int(info.properties.get(xp.Property_EditFieldSelEnd, cursor))
-
-                # Collapse selection
-                if sel_end != cursor:
-                    start = min(cursor, sel_end)
-                    end = max(cursor, sel_end)
-                    text = text[:start] + text[end:]
-                    cursor = start
-                    sel_end = start
-
-                # Backspace / Delete
-                if key in (8, 127):
-                    if cursor > 0:
-                        text = text[:cursor - 1] + text[cursor:]
-                        cursor -= 1
-
-                # Printable ASCII
-                elif 32 <= key <= 126:
-                    ch = chr(key)
-                    text = text[:cursor] + ch + text[cursor:]
-                    cursor += 1
-
-                # Clamp cursor
-                if cursor < 0:
-                    cursor = 0
-                if cursor > len(text):
-                    cursor = len(text)
-
-                # Write back
-                info.set_descriptor(text)
-                info.properties[xp.Property_EditFieldSelStart] = cursor
-                info.properties[xp.Property_EditFieldSelEnd] = cursor
-
-                return 1
-
+        if self.handle_input_msg(info, msg, p1, p2):
+            return 1
 
         # ---------------------------------------------------------
         # CLOSE BOX FALLBACK
         # ---------------------------------------------------------
         if msg == xp.Message_CloseButtonPushed:
-            info.window.widget_root.set_visible(False)
+            self.require_info(info.window.widget_root).set_visible(False)
             return 1
 
         return 0
@@ -452,3 +436,10 @@ class WidgetManager(WidgetRender):
         # ---------------------------------------------------------
         final_text = self.fake_xp.getWidgetDescriptor(info.wid)
         self.fake_xp.graphics_manager.dpg_set_value(info.dpg_id, final_text)
+
+        self._dispatch_message(
+            info.wid,
+            self.fake_xp.Msg_TextFieldChanged,
+            0,
+            0
+        )

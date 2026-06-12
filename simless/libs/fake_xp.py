@@ -53,6 +53,7 @@ from simless.libs.fake_xp_constants import bind_xp_constants
 from simless.libs.fake_xp_dataref import FakeXPDataRef
 from simless.libs.fake_xp_flightloop import FakeXPFlightLoop
 from simless.libs.fake_xp_graphics import FakeXPGraphics
+from simless.libs.fake_xp_menu import FakeXPMenu, MenuManager
 from simless.libs.fake_xp_utilities import FakeXPUtilities
 from simless.libs.fake_xp_widget import FakeXPWidget
 from simless.libs.graphics import GraphicsManager
@@ -60,7 +61,6 @@ from simless.libs.input import InputManager
 from simless.libs.plugin_runner import SimlessRunner
 from simless.libs.widget import WidgetManager
 from simless.libs.window import WindowManager
-from simless.libs.fake_xp_menu import FakeXPMenu, MenuManager
 from xp_typing import XPLMPluginID
 
 
@@ -95,9 +95,7 @@ class FakeXP(
         self.debug_logging = debug_logging
 
         self._xplane_root = Path(__file__).resolve().parents[2]
-        self._xpp_log = (
-                self._xplane_root / "Resources" / "plugins" / "XPPython3" / "XPPython3Log.txt"
-        )
+        self._xpp_log = self._xplane_root / "XPPython3Log.txt"
         self._sim_log = self._xplane_root / "Log.txt"
 
         if not self.terminal_logging:

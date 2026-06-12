@@ -64,59 +64,32 @@ class DataRefManager:
     # Default values for real xp.Type_* flags
     # ----------------------------------------------------------------------
     def default_value_for(self, dtype: int, size: int):
-        """
-        Return a default value appropriate for the given xp.Type_* dtype.
-        """
         fxp = self.fake_xp
 
-        if dtype == fxp.Type_FloatArray:
+        # Arrays
+        if dtype & fxp.Type_FloatArray:
             return [0.0] * size
-        if dtype == fxp.Type_IntArray:
+        if dtype & fxp.Type_IntArray:
             return [0] * size
-        if dtype == fxp.Type_Data:
+        if dtype & fxp.Type_Data:
             return bytearray(size)
-        if dtype in (fxp.Type_Float, fxp.Type_Double):
+
+        # Scalars
+        if dtype & fxp.Type_Float:
             return 0.0
-        if dtype == fxp.Type_Int:
+        if dtype & fxp.Type_Double:
+            return 0.0
+        if dtype & fxp.Type_Int:
             return 0
-        raise TypeError(f"Unsupported xp.Type_* dtype: {dtype}")
 
-    # ----------------------------------------------------------------------
-    # Convert dtype + shape → real XPLM bitmask
-    # ----------------------------------------------------------------------
-    def dtype_to_bitmask(self, ref: FakeDataRef) -> int:
-        """
-        Map a single concrete dtype to the XPLM type bitmask.
-        This mirrors X-Plane: the DataRef has one true type,
-        and the mask expresses API capabilities.
-        """
-        fxp = self.fake_xp
-        dtype = ref.type
-
-        # Scalar numeric types
-        if dtype == fxp.Type_Int:
-            return fxp.Type_Int
-        if dtype == fxp.Type_Float:
-            return fxp.Type_Float
-        if dtype == fxp.Type_Double:
-            return fxp.Type_Double
-
-        # Array types
-        if dtype == fxp.Type_IntArray:
-            return fxp.Type_IntArray
-        if dtype == fxp.Type_FloatArray:
-            return fxp.Type_FloatArray
-        if dtype == fxp.Type_Data:
-            return fxp.Type_Data
-
-        return fxp.Type_Unknown
+        return None  # or raise, depending on your design
 
     # ----------------------------------------------------------------------
     # Callback notification
     # ----------------------------------------------------------------------
     def notify_handle_created(self, ref: FakeDataRef) -> None:
         """
-        Notify the registered callback (if any) that a new handle was created.
+        Notify the registered callback (if any) that a handle was created or promoted.
         """
         with self._handles_lock:
             cb = self._handle_callback
@@ -203,10 +176,11 @@ class DataRefManager:
         Promote type authority for an existing handle.
 
         Semantics:
-          • Promotion is in-place.
-          • Scalar ↔ array transitions are allowed.
-          • Values are cast appropriately.
-          • Idempotent.
+          • dtype is a bitmask (X‑Plane authentic)
+          • Promotion is in-place
+          • Scalar ↔ array transitions allowed
+          • Values cast appropriately
+          • Idempotent
         """
         if ref is None:
             raise TypeError("invalid dataRef")
@@ -220,19 +194,25 @@ class DataRefManager:
             try:
                 v = ref.value
 
-                # --- ARRAY TARGET TYPES ---
-                if dtype in (fxp.Type_FloatArray, fxp.Type_IntArray, fxp.Type_Data):
+                # -------------------------
+                # ARRAY TARGET TYPES
+                # -------------------------
+                if dtype & (fxp.Type_FloatArray | fxp.Type_IntArray | fxp.Type_Data):
+
                     if isinstance(v, (list, bytearray)):
-                        if dtype == fxp.Type_FloatArray:
+                        # Already array → cast elements
+                        if dtype & fxp.Type_FloatArray:
                             newv = [float(x) for x in v]
-                        elif dtype == fxp.Type_IntArray:
+                        elif dtype & fxp.Type_IntArray:
                             newv = [int(x) for x in v]
                         else:
                             newv = bytearray(v)
+
                     else:
-                        if dtype == fxp.Type_FloatArray:
+                        # Scalar → wrap into array
+                        if dtype & fxp.Type_FloatArray:
                             newv = [float(v)]
-                        elif dtype == fxp.Type_IntArray:
+                        elif dtype & fxp.Type_IntArray:
                             newv = [int(v)]
                         else:
                             newv = bytearray([int(v) & 0xFF])
@@ -241,23 +221,21 @@ class DataRefManager:
                     ref.is_array = True
                     ref.size = len(newv)
 
-                # --- SCALAR TARGET TYPES ---
+                # -------------------------
+                # SCALAR TARGET TYPES
+                # -------------------------
                 else:
                     if isinstance(v, (list, bytearray)):
                         first = v[0] if len(v) else 0
-                        if dtype in (fxp.Type_Float, fxp.Type_Double):
-                            newv = float(first)
-                        elif dtype == fxp.Type_Int:
-                            newv = int(first)
-                        else:
-                            newv = self.default_value_for(dtype, 1)
                     else:
-                        if dtype in (fxp.Type_Float, fxp.Type_Double):
-                            newv = float(v)
-                        elif dtype == fxp.Type_Int:
-                            newv = int(v)
-                        else:
-                            newv = self.default_value_for(dtype, 1)
+                        first = v
+
+                    if dtype & (fxp.Type_Float | fxp.Type_Double):
+                        newv = float(first)
+                    elif dtype & fxp.Type_Int:
+                        newv = int(first)
+                    else:
+                        newv = self.default_value_for(dtype, 1)
 
                     ref.value = newv
                     ref.is_array = False
@@ -317,7 +295,8 @@ class DataRefManager:
     # ----------------------------------------------------------------------
     def conform_dummy_to_value(self, ref: FakeDataRef, value, offset: int = 0, count: int | None = None) -> None:
         """
-        Conform a dummy FakeDataRef to the shape and type implied by a write.
+        Conform a dummy FakeDataRef to the shape and provisional concrete type
+        implied by a write. This does NOT assign X‑Plane dtype bitmasks.
         """
         if ref is None:
             raise TypeError("invalid dataRef")
@@ -328,6 +307,7 @@ class DataRefManager:
 
         is_array_write = offset != 0 or isinstance(value, (list, tuple, bytearray))
 
+        # Normalize count and sample
         if isinstance(value, (list, tuple, bytearray)):
             if count is None or count < 0:
                 count = len(value)
@@ -336,7 +316,9 @@ class DataRefManager:
             count = 1
             sample = value
 
-        # Determine provisional dtype
+        # ------------------------------------------------------------
+        # Determine provisional *concrete* dtype (NOT bitmask)
+        # ------------------------------------------------------------
         if isinstance(sample, float):
             dtype = fxp.Type_FloatArray if is_array_write else fxp.Type_Float
         elif isinstance(sample, int):
@@ -347,16 +329,21 @@ class DataRefManager:
         else:
             raise TypeError(f"unsupported DataRef value type: {type(sample)}")
 
+        # Assign provisional concrete dtype
         ref.type = dtype
 
+        # ------------------------------------------------------------
         # Scalar write
+        # ------------------------------------------------------------
         if not is_array_write:
             ref.is_array = False
             ref.size = 1
             ref.value = float(value) if dtype == fxp.Type_Float else int(value)
             return
 
+        # ------------------------------------------------------------
         # Array write
+        # ------------------------------------------------------------
         needed = offset + count
         ref.is_array = True
         ref.size = max(ref.size or 0, needed)

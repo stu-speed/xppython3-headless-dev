@@ -21,7 +21,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, cast, List, MutableSequence, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import Any, Callable, List, MutableSequence, Optional, Sequence, TYPE_CHECKING, Tuple, cast
 
 from simless.libs.dataref import DataRefManager
 from simless.libs.fake_xp_types import FakeDataRef
@@ -71,14 +71,13 @@ class FakeXPDataRef:
     # Introspection
     # ------------------------------------------------------------------
     def getDataRefTypes(self, dataRef: FakeDataRef) -> int:
-        ref = self._resolve_ref(dataRef)
-        return self.dm.dtype_to_bitmask(ref)
+        return self._resolve_ref(dataRef).type
 
     def getDataRefInfo(self, dataRef: FakeDataRef) -> XPLMDataRefInfo_t:
         ref = self._resolve_ref(dataRef)
         info = XPLMDataRefInfo_t(
             name=ref.path,
-            type=self.dm.dtype_to_bitmask(ref),
+            type=ref.type,
             writable=bool(ref.writable),
             owner=0,
         )
@@ -103,8 +102,8 @@ class FakeXPDataRef:
         if not isinstance(dataRef, FakeDataRef):
             raise TypeError("invalid dataRef")
         ref = self.dm.get_handle(dataRef.path)
-        if ref is None or ref is not dataRef:
-            raise TypeError("invalid dataRef")
+        if ref is None or not isinstance(ref, FakeDataRef):
+            raise TypeError("invalid FakeXP dataRef")
         return ref
 
     # ------------------------------------------------------------------
@@ -197,14 +196,14 @@ class FakeXPDataRef:
     # Array helpers
     # ------------------------------------------------------------------
     def _array_get_common(
-        self,
-        *,
-        ref: FakeDataRef,
-        values: Optional[MutableSequence[Any]],
-        offset: int,
-        count: int,
-        read_cb: Optional[Callable[[Any, MutableSequence[Any], int, int], int]],
-        refcon: Any,
+            self,
+            *,
+            ref: FakeDataRef,
+            values: Optional[MutableSequence[Any]],
+            offset: int,
+            count: int,
+            read_cb: Optional[Callable[[Any, MutableSequence[Any], int, int], int]],
+            refcon: Any,
     ) -> int:
         self.dm.require_array(ref, "_array_get_common")
         arr = ref.value
@@ -454,25 +453,25 @@ class FakeXPDataRef:
     # Registration / publishing
     # -------------------------
     def registerDataAccessor(
-        self,
-        name: str,
-        *,
-        dataType: int = 0,
-        writable: int = -1,
-        readInt: Optional[Callable[[Any], int]] = None,
-        writeInt: Optional[Callable[[Any, int], None]] = None,
-        readFloat: Optional[Callable[[Any], float]] = None,
-        writeFloat: Optional[Callable[[Any, float], None]] = None,
-        readDouble: Optional[Callable[[Any], float]] = None,
-        writeDouble: Optional[Callable[[Any, float], None]] = None,
-        readIntArray: Optional[Callable[[Any, MutableSequence[int], int, int], int]] = None,
-        writeIntArray: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
-        readFloatArray: Optional[Callable[[Any, MutableSequence[float], int, int], int]] = None,
-        writeFloatArray: Optional[Callable[[Any, Sequence[float], int, int], None]] = None,
-        readData: Optional[Callable[[Any, bytearray, int, int], int]] = None,
-        writeData: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
-        readRefCon: Optional[Any] = None,
-        writeRefCon: Optional[Any] = None,
+            self,
+            name: str,
+            *,
+            dataType: int = 0,
+            writable: int = -1,
+            readInt: Optional[Callable[[Any], int]] = None,
+            writeInt: Optional[Callable[[Any, int], None]] = None,
+            readFloat: Optional[Callable[[Any], float]] = None,
+            writeFloat: Optional[Callable[[Any, float], None]] = None,
+            readDouble: Optional[Callable[[Any], float]] = None,
+            writeDouble: Optional[Callable[[Any, float], None]] = None,
+            readIntArray: Optional[Callable[[Any, MutableSequence[int], int, int], int]] = None,
+            writeIntArray: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
+            readFloatArray: Optional[Callable[[Any, MutableSequence[float], int, int], int]] = None,
+            writeFloatArray: Optional[Callable[[Any, Sequence[float], int, int], None]] = None,
+            readData: Optional[Callable[[Any, bytearray, int, int], int]] = None,
+            writeData: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
+            readRefCon: Optional[Any] = None,
+            writeRefCon: Optional[Any] = None,
     ) -> FakeDataRef:
         """
         Register callbacks and return a dataref handle. Signature mirrors XPLMRegisterDataAccessor.

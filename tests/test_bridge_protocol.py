@@ -1,7 +1,7 @@
 import pytest
 
 from sshd_extensions.bridge_protocol import (
-    Add, BridgeMsg, BridgeMsgType, ErrorMsg, Meta, Ping, Pong, Reset, Update, UpdateEntry
+    MT_Add, BridgeMsg, BridgeMsgType, MT_ErrorMsg, MT_Meta, MT_Ping, MT_Pong, MT_Reset, MT_Update, MT_UpdateEntry
 )
 
 
@@ -27,14 +27,14 @@ def batch_roundtrip(msgs):
 # ---------------------------------------------------------------------------
 
 def test_meta_roundtrip():
-    m = BridgeMsg(BridgeMsgType.META, Meta(1, "sim/foo", 5, False, 0))
+    m = BridgeMsg(BridgeMsgType.META, MT_Meta(1, "sim/foo", 5, False, 0))
     out = roundtrip(m)
     assert out.type is BridgeMsgType.META
     assert out.value == m.value
 
 
 def test_update_roundtrip():
-    u = Update([UpdateEntry(3, 42.0), UpdateEntry(7, [1, 2, 3])])
+    u = MT_Update([MT_UpdateEntry(3, 42.0), MT_UpdateEntry(7, [1, 2, 3])])
     m = BridgeMsg(BridgeMsgType.UPDATE, u)
     out = roundtrip(m)
     assert out.type is BridgeMsgType.UPDATE
@@ -42,25 +42,25 @@ def test_update_roundtrip():
 
 
 def test_add_roundtrip():
-    m = BridgeMsg(BridgeMsgType.ADD, Add(paths=["a", "b", "c"]))
+    m = BridgeMsg(BridgeMsgType.ADD, MT_Add(paths=["a", "b", "c"]))
     out = roundtrip(m)
     assert out.type is BridgeMsgType.ADD
     assert out.value.paths == ["a", "b", "c"]
 
 
 def test_reset_roundtrip():
-    m = BridgeMsg(BridgeMsgType.RESET, Reset())
+    m = BridgeMsg(BridgeMsgType.RESET, MT_Reset())
     out = roundtrip(m)
     assert out.type is BridgeMsgType.RESET
 
 
 def test_ping_pong_roundtrip():
-    assert roundtrip(BridgeMsg(BridgeMsgType.PING, Ping())).type is BridgeMsgType.PING
-    assert roundtrip(BridgeMsg(BridgeMsgType.PONG, Pong())).type is BridgeMsgType.PONG
+    assert roundtrip(BridgeMsg(BridgeMsgType.PING, MT_Ping())).type is BridgeMsgType.PING
+    assert roundtrip(BridgeMsg(BridgeMsgType.PONG, MT_Pong())).type is BridgeMsgType.PONG
 
 
 def test_error_roundtrip():
-    m = BridgeMsg(BridgeMsgType.ERROR, ErrorMsg("bad thing"))
+    m = BridgeMsg(BridgeMsgType.ERROR, MT_ErrorMsg("bad thing"))
     out = roundtrip(m)
     assert out.type is BridgeMsgType.ERROR
     assert out.value.text == "bad thing"
@@ -72,9 +72,9 @@ def test_error_roundtrip():
 
 def test_batch_roundtrip():
     msgs = [
-        BridgeMsg(BridgeMsgType.PING, Ping()),
-        BridgeMsg(BridgeMsgType.ADD, Add(paths=["x"])),
-        BridgeMsg(BridgeMsgType.ERROR, ErrorMsg("oops")),
+        BridgeMsg(BridgeMsgType.PING, MT_Ping()),
+        BridgeMsg(BridgeMsgType.ADD, MT_Add(paths=["x"])),
+        BridgeMsg(BridgeMsgType.ERROR, MT_ErrorMsg("oops")),
     ]
     out = batch_roundtrip(msgs)
     assert len(out) == 3
@@ -88,7 +88,7 @@ def test_batch_roundtrip():
 # ---------------------------------------------------------------------------
 
 def test_to_dict_meta():
-    m = BridgeMsg(BridgeMsgType.META, Meta(1, "sim/foo", 5, False, 0))
+    m = BridgeMsg(BridgeMsgType.META, MT_Meta(1, "sim/foo", 5, False, 0))
     d = m.to_dict()
     assert d == {
         "type": "meta",
@@ -103,7 +103,7 @@ def test_to_dict_meta():
 
 
 def test_to_dict_update():
-    u = Update([UpdateEntry(3, 99)])
+    u = MT_Update([MT_UpdateEntry(3, 99)])
     m = BridgeMsg(BridgeMsgType.UPDATE, u)
     d = m.to_dict()
     assert d == {

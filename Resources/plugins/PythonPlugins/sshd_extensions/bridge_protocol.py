@@ -39,19 +39,17 @@ import os
 import socket
 import time
 from collections import namedtuple
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, TextIO, Tuple, Union
 
 import select
 
-from PythonPlugins.sshd_extensions.dataref_manager import DataRefManager, DataRefSpec
+from sshd_extensions.dataref_manager import DataRefManager, DataRefSpec
 from XPPython3 import xp
 from XPPython3.xp_typing import XPLMFlightLoopID
 
 EPSILON: float = float(os.getenv("XPBRIDGE_EPSILON", "0.001"))
-RECONNECT_INTERVAL: float = float(os.getenv("XPBRIDGE_RECONNECT_INTERVAL", "10.0"))
-HEARTBEAT_TIMEOUT: float = float(os.getenv("XPBRIDGE_HEARTBEAT_TIMEOUT", "10.0"))
+HEARTBEAT_TIMEOUT: float = 10
 
 BRIDGE_HOST: str = os.getenv("XPBRIDGE_HOST", "127.0.0.1")
 BRIDGE_PORT: int = int(os.getenv("XPBRIDGE_PORT", "49099"))
@@ -87,16 +85,16 @@ class BridgeMsgType(str, Enum):
     PONG = "pong"
 
 
-Meta = namedtuple("Meta", "idx name type writable array_size")
-UpdateEntry = namedtuple("UpdateEntry", "idx value")
-Update = namedtuple("Update", "entries")  # entries: List[UpdateEntry]
-Add = namedtuple("Add", "paths")  # paths: List[str]
-Reset = namedtuple("Reset", "")  # no fields
-Ping = namedtuple("Ping", "")  # no fields
-Pong = namedtuple("Pong", "")  # no fields
-ErrorMsg = namedtuple("ErrorMsg", "text")  # text: str
+MT_Meta = namedtuple("Meta", "idx name type writable array_size")
+MT_UpdateEntry = namedtuple("UpdateEntry", "idx value")
+MT_Update = namedtuple("Update", "entries")  # entries: List[UpdateEntry]
+MT_Add = namedtuple("Add", "paths")  # paths: List[str]
+MT_Reset = namedtuple("Reset", "")  # no fields
+MT_Ping = namedtuple("Ping", "")  # no fields
+MT_Pong = namedtuple("Pong", "")  # no fields
+MT_ErrorMsg = namedtuple("ErrorMsg", "text")  # text: str
 
-BridgeMsgValue = Union[Meta, Update, Add, Reset, Ping, Pong, ErrorMsg]
+BridgeMsgValue = Union[MT_Meta, MT_Update, MT_Add, MT_Reset, MT_Ping, MT_Pong, MT_ErrorMsg]
 
 
 class BridgeMsg:
@@ -283,80 +281,80 @@ class BridgeMsg:
 # -----------------------------------------------------------------------
 
 @BridgeMsg.register(BridgeMsgType.META)
-class _Meta(Meta):
+class _Meta(MT_Meta):
     @staticmethod
-    def _encode(v: Meta):
+    def _encode(v: MT_Meta):
         return list(v)
 
     @staticmethod
     def _decode(raw):
-        return Meta(*raw)
+        return MT_Meta(*raw)
 
 
 @BridgeMsg.register(BridgeMsgType.UPDATE)
-class _Update(Update):
+class _Update(MT_Update):
     @staticmethod
-    def _encode(v: Update):
+    def _encode(v: MT_Update):
         return [[e.idx, e.value] for e in v.entries]
 
     @staticmethod
     def _decode(raw):
-        return Update([UpdateEntry(idx=e[0], value=e[1]) for e in raw])
+        return MT_Update([MT_UpdateEntry(idx=e[0], value=e[1]) for e in raw])
 
 
 @BridgeMsg.register(BridgeMsgType.ADD)
-class _Add(Add):
+class _Add(MT_Add):
     @staticmethod
-    def _encode(v: Add):
+    def _encode(v: MT_Add):
         return list(v.paths)
 
     @staticmethod
     def _decode(raw):
-        return Add(paths=list(raw))
+        return MT_Add(paths=list(raw))
 
 
 @BridgeMsg.register(BridgeMsgType.RESET)
-class _Reset(Reset):
+class _Reset(MT_Reset):
     @staticmethod
-    def _encode(v: Reset):
+    def _encode(v: MT_Reset):
         return None
 
     @staticmethod
     def _decode(raw):
-        return Reset()
+        return MT_Reset()
 
 
 @BridgeMsg.register(BridgeMsgType.PING)
-class _Ping(Ping):
+class _Ping(MT_Ping):
     @staticmethod
-    def _encode(v: Ping):
+    def _encode(v: MT_Ping):
         return None
 
     @staticmethod
     def _decode(raw):
-        return Ping()
+        return MT_Ping()
 
 
 @BridgeMsg.register(BridgeMsgType.PONG)
-class _Pong(Pong):
+class _Pong(MT_Pong):
     @staticmethod
-    def _encode(v: Pong):
+    def _encode(v: MT_Pong):
         return None
 
     @staticmethod
     def _decode(raw):
-        return Pong()
+        return MT_Pong()
 
 
 @BridgeMsg.register(BridgeMsgType.ERROR)
-class _Error(ErrorMsg):
+class _Error(MT_ErrorMsg):
     @staticmethod
-    def _encode(v: ErrorMsg):
+    def _encode(v: MT_ErrorMsg):
         return v.text
 
     @staticmethod
     def _decode(raw):
-        return ErrorMsg(text=raw)
+        return MT_ErrorMsg(text=raw)
 
 
 # =======================================================================
@@ -376,8 +374,8 @@ class XPBridgeServer:
     """
 
     def __init__(
-        self,
-        rate: float = 0.05,
+            self,
+            rate: float = 0.05,
     ) -> None:
         """Initialize the bridge server.
 
@@ -411,14 +409,14 @@ class XPBridgeServer:
         # Heartbeat (server-driven)
         self._last_activity: float = time.time()
 
-        self._open_server()
+        self.open_server()
 
     # ------------------------------------------------------------------
     # TCP server lifecycle
     # ------------------------------------------------------------------
-    def _open_server(self) -> None:
+    def open_server(self) -> None:
         """Create and bind the listening TCP socket."""
-        self._close_server()
+        self.close_server()
 
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -430,7 +428,7 @@ class XPBridgeServer:
         self.server_sock = srv
         xp.log(f"[Bridge] listening on {bind_host}:{BRIDGE_PORT}")
 
-    def _close_server(self) -> None:
+    def close_server(self) -> None:
         """Close the listening socket if open."""
         if self.server_sock:
             xp.log("[Bridge] closing server socket")
@@ -492,8 +490,8 @@ class XPBridgeServer:
         if not self.client_sock or not msgs:
             return
 
-        data = BridgeMsg.encode_batch(msgs)
         try:
+            data = BridgeMsg.encode_batch(msgs)
             self.client_sock.sendall(data)
             self._last_activity = time.time()
         except Exception as exc:
@@ -502,17 +500,17 @@ class XPBridgeServer:
 
     def _send_error(self, text: str) -> None:
         """Send an ERROR message to the client."""
-        self._send_batch([BridgeMsg(BridgeMsgType.ERROR, ErrorMsg(text=text))])
+        self._send_batch([BridgeMsg(BridgeMsgType.ERROR, MT_ErrorMsg(text=text))])
 
     # ------------------------------------------------------------------
     # Flightloop callback
     # ------------------------------------------------------------------
     def flightloop_cb(
-        self,
-        elapsed_since_last_call: float,
-        elapsed_time_since_last_flightloop: float,
-        counter: int,
-        refcon: XPLMFlightLoopID,
+            self,
+            elapsed_since_last_call: float,
+            elapsed_time_since_last_flightloop: float,
+            counter: int,
+            refcon: XPLMFlightLoopID,
     ) -> float:
         """Main server loop executed by X‑Plane.
 
@@ -532,26 +530,24 @@ class XPBridgeServer:
             try:
                 client, addr = self.server_sock.accept()
             except BlockingIOError:
-                client = None
-                addr = None
+                return 1.0  # No connections pending
             except Exception as exc:
                 xp.log(f"[Bridge] accept() failed: {exc!r}")
-                client = None
-                addr = None
+                xp.log(f"[Bridge] Disable- not able to accept and process connections")
+                return 0.0
 
-            if client:
-                client.setblocking(False)
-                self.client_sock = client
-                self.client_file = client.makefile("r", encoding="utf-8", newline="\n")
-                self._reset_session_full()
-                xp.log(f"[Bridge] client connected from {addr}")
-                self._last_activity = now
-
-        if not self.client_sock or not self.client_file:
-            return -1.0
+            client.setblocking(False)
+            self.client_sock = client
+            self.client_file = client.makefile("r", encoding="utf-8", newline="\n")
+            self._reset_session_full()
+            xp.log(f"[Bridge] client connected from {addr}")
+            self._last_activity = now
 
         # Non-blocking read
         sock = self.client_sock
+        if not sock:
+            return 1.0
+        assert self.client_file is not None
         rlist, _, _ = select.select([sock], [], [], 0.0)
         if rlist:
             try:
@@ -559,12 +555,12 @@ class XPBridgeServer:
             except Exception as exc:
                 xp.log(f"[Bridge] read failed: {exc!r}")
                 self._close_client()
-                return -1.0
+                return 1.0
 
             if line == "":
                 xp.log("[Bridge] client disconnected (EOF)")
                 self._close_client()
-                return -1.0
+                return 1.0
 
             stripped = line.strip()
             if stripped:
@@ -584,7 +580,7 @@ class XPBridgeServer:
             outbound.append(update_msg)
         else:
             if now - self._last_activity > (HEARTBEAT_TIMEOUT / 2.0):
-                outbound.append(BridgeMsg(BridgeMsgType.PING, Ping()))
+                outbound.append(BridgeMsg(BridgeMsgType.PING, MT_Ping()))
 
         if outbound:
             self._send_batch(outbound)
@@ -593,7 +589,7 @@ class XPBridgeServer:
         if now - self._last_activity > HEARTBEAT_TIMEOUT:
             xp.log("[Bridge] heartbeat timeout — closing client and full reset")
             self._close_client()
-            return -1.0
+            return 1.0
 
         return self.rate
 
@@ -678,7 +674,7 @@ class XPBridgeServer:
 
         idx = self._next_index_for_path(path)
 
-        meta = Meta(
+        meta = MT_Meta(
             idx=idx,
             name=path,
             type=info.type,
@@ -707,7 +703,7 @@ class XPBridgeServer:
         if not self.manager.ready():
             return None
 
-        entries: List[UpdateEntry] = []
+        entries: List[MT_UpdateEntry] = []
         changed = False
 
         for path in self.manager.all_paths():
@@ -722,321 +718,10 @@ class XPBridgeServer:
             last = self.last_sent.get(idx)
             if last is None or _changed(value, last):
                 changed = True
-                entries.append(UpdateEntry(idx=idx, value=copy.deepcopy(value)))
+                entries.append(MT_UpdateEntry(idx=idx, value=copy.deepcopy(value)))
                 self.last_sent[idx] = copy.deepcopy(value)
 
         if changed and entries:
-            return BridgeMsg(BridgeMsgType.UPDATE, Update(entries=entries))
+            return BridgeMsg(BridgeMsgType.UPDATE, MT_Update(entries=entries))
 
         return None
-
-
-# =======================================================================
-# User-friendly client-side event model
-# =======================================================================
-
-class BridgeDataType(str, Enum):
-    """Enumeration of high-level bridge event types.
-
-    These values represent the user-facing, path-based event categories
-    produced by XPBridgeClient.poll_data(). They abstract away the
-    low-level wire-format message types.
-    """
-    META = "meta"
-    UPDATE = "update"
-    ERROR = "error"
-
-
-@dataclass(slots=True)
-class BridgeData:
-    """User-friendly, path-based representation of bridge events.
-
-    This dataclass is produced by XPBridgeClient.poll_data() and is
-    consumed by the simless runner and DataRefManager. It hides all
-    wire-format details (idx, NamedTuples, raw JSON) and exposes only
-    the information needed for deterministic DataRef synchronization.
-
-    Attributes:
-        type (BridgeDataType):
-            The high-level event type (META, UPDATE, or ERROR).
-
-        path (Optional[str]):
-            The DataRef path associated with the event. META and UPDATE
-            events always include a path; ERROR events do not.
-
-        dtype (Optional[int]):
-            The X-Plane data type (int-encoded) for META events. None
-            for UPDATE and ERROR events.
-
-        writable (Optional[bool]):
-            Whether the DataRef is writable. Only present for META
-            events.
-
-        array_size (Optional[int]):
-            Size of the DataRef array for array types. Only present for
-            META events; zero or None for scalar types.
-
-        value (Any):
-            The updated DataRef value for UPDATE events. None for META
-            and ERROR events.
-
-        text (Optional[str]):
-            Error message text for ERROR events. None for META and
-            UPDATE events.
-    """
-    type: BridgeDataType
-    path: Optional[str]  # None for errors
-    dtype: Optional[int]  # Only for META
-    writable: Optional[bool]  # Only for META
-    array_size: Optional[int]  # Only for META
-    value: Any  # Only for UPDATE
-    text: Optional[str]  # Only for ERROR
-
-
-# =======================================================================
-# XPBridgeClient — simless runner side
-# =======================================================================
-class XPBridgeClient:
-    """
-    Lightweight TCP client for the XP DataRef bridge.
-
-    The client uses the protocol-level constants BRIDGE_HOST and
-    BRIDGE_PORT as its authoritative connection target. FakeXP may
-    override these attributes after construction for local development.
-    """
-
-    def __init__(
-        self,
-        host: str = BRIDGE_HOST,
-        port: int = BRIDGE_PORT,
-    ) -> None:
-        # Production defaults (may be overridden by FakeXP)
-        self.host: str = host
-        self.port: int = port
-
-        # TCP connection state
-        self.sock: Optional[socket.socket] = None
-        self.file: Optional[TextIO] = None
-
-        # Heartbeat: client enforces timeout based on inbound activity
-        self._last_activity: float = 0.0
-
-        # Client-side idx → path mapping (for user-friendly BridgeData events)
-        self._idx_to_path: Dict[int, str] = {}
-
-        self._conn_status: str = "Initialized"
-        self._prev_conn_status: str = ""
-
-    # ------------------------------------------------------------------
-    # Connection lifecycle
-    # ------------------------------------------------------------------
-    @property
-    def is_connected(self) -> bool:
-        return self.sock is not None
-
-    @property
-    def conn_status(self) -> str:
-        return self._conn_status
-
-    def set_conn_status(self, status: str) -> None:
-        self._conn_status = status
-        if self._conn_status != self._prev_conn_status:
-            xp.log(f"[Bridge] {self._conn_status}")
-
-    def connect(self) -> None:
-        self.disconnect()
-
-        self.set_conn_status(f"Connecting to {self.host}:{self.port}")
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1.0)
-        sock.connect((self.host, self.port))
-
-        self.sock = sock
-        self.file = sock.makefile("r", encoding="utf-8", newline="\n")
-        self._last_activity = time.time()
-
-    def disconnect(self) -> None:
-        if self.file:
-            try:
-                self.file.close()
-            except Exception:
-                pass
-            self.file = None
-
-        if self.sock:
-            try:
-                self.sock.close()
-            except Exception:
-                pass
-            self.sock = None
-
-        self._last_activity = time.time()
-        self._idx_to_path.clear()
-
-    # ------------------------------------------------------------------
-    # Unified send path — ONLY place that calls sock.sendall()
-    # ------------------------------------------------------------------
-    def _send_batch(self, msgs: List[BridgeMsg]) -> None:
-        if not self.sock:
-            raise RuntimeError("Client not connected")
-
-        data = BridgeMsg.encode_batch(msgs)
-        self.sock.sendall(data)
-        self._last_activity = time.time()
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-    def add(self, paths: List[str]) -> None:
-        """Request tracking of one or more DataRefs."""
-        self._send_batch([BridgeMsg(BridgeMsgType.ADD, Add(paths=paths))])
-
-    def reset(self) -> None:
-        """Explicit full reset request; both sides should rebuild state."""
-        self._send_batch([BridgeMsg(BridgeMsgType.RESET, Reset())])
-
-    def get_path_for_idx(self, idx: int) -> Optional[str]:
-        return self._idx_to_path.get(idx)
-
-    # ------------------------------------------------------------------
-    # Poll for inbound messages (wire format)
-    # ------------------------------------------------------------------
-    RECONNECT_INTERVAL = 30.0  # seconds
-
-    def poll_wire(self) -> List[BridgeMsg]:
-        """
-        Poll for inbound bridge messages.
-
-        Returns:
-            List[BridgeMsg]: Zero or more decoded bridge messages.
-
-        Raises:
-            ConnectionResetError: If the server closes the connection or the
-                heartbeat timeout is exceeded while connected.
-            Exception: Any protocol or socket error encountered while connected.
-        """
-        now = time.time()
-
-        # --------------------------------------------------------------
-        # 1. If disconnected, retry connection every RECONNECT_INTERVAL
-        # --------------------------------------------------------------
-        if not self.is_connected:
-            if now - self._last_activity < RECONNECT_INTERVAL:
-                return []
-            try:
-                self.connect()
-            except Exception as exc:
-                self.set_conn_status(f"Connect failed to host {BRIDGE_HOST}: {exc}")
-                self._last_activity = now
-                return []
-            self.set_conn_status(f"Processing bridge messages")
-
-        # --------------------------------------------------------------
-        # 2. Connected: heartbeat timeout → disconnect + raise
-        # --------------------------------------------------------------
-        if now - self._last_activity > HEARTBEAT_TIMEOUT:
-            self.disconnect()
-            self.set_conn_status(f"Heartbeat timeout after {HEARTBEAT_TIMEOUT} seconds")
-            raise ConnectionResetError(self.conn_status)
-
-        # --------------------------------------------------------------
-        # 3. Check for inbound data (raise on select errors)
-        # --------------------------------------------------------------
-        rlist, _, _ = select.select([self.sock], [], [], 0)
-        if not rlist:
-            return []
-
-        # --------------------------------------------------------------
-        # 4. Read one line (raise on server close)
-        # --------------------------------------------------------------
-        line = self.file.readline()
-        if line == "":
-            self.disconnect()
-            self.set_conn_status("Server closed connection")
-            raise ConnectionResetError(self.conn_status)
-
-        self._last_activity = now
-
-        stripped = line.strip()
-        if not stripped:
-            return []
-
-        # --------------------------------------------------------------
-        # 5. Decode batch (raise on protocol errors)
-        # --------------------------------------------------------------
-        msgs = BridgeMsg.decode_batch(stripped)
-
-        # --------------------------------------------------------------
-        # 6. Maintain idx → path mapping
-        # --------------------------------------------------------------
-        for m in msgs:
-            if m.type == BridgeMsgType.META:
-                v = m.value
-                self._idx_to_path[v.idx] = v.name
-
-        # --------------------------------------------------------------
-        # 7. Respond to PING (raise if send fails)
-        # --------------------------------------------------------------
-        if any(m.type == BridgeMsgType.PING for m in msgs):
-            self._send_batch([BridgeMsg(BridgeMsgType.PONG, Pong())])
-
-        return msgs
-
-    # ------------------------------------------------------------------
-    # Poll for inbound messages (user-friendly, path-based)
-    # ------------------------------------------------------------------
-    def poll_data(self) -> List[BridgeData]:
-        """
-        Poll for inbound messages and return a user-friendly, path-based
-        representation suitable for the simless runner and DataRefManager.
-        """
-        wire_msgs = self.poll_wire()
-        out: List[BridgeData] = []
-
-        for m in wire_msgs:
-            t = m.type
-            v = m.value
-
-            if t == BridgeMsgType.META:
-                path = self._idx_to_path.get(v.idx)
-                out.append(
-                    BridgeData(
-                        type=BridgeDataType.META,
-                        path=path,
-                        dtype=v.type,
-                        writable=v.writable,
-                        array_size=v.array_size,
-                        value=None,
-                        text=None,
-                    )
-                )
-
-            elif t == BridgeMsgType.UPDATE:
-                for entry in v.entries:
-                    path = self._idx_to_path.get(entry.idx)
-                    out.append(
-                        BridgeData(
-                            type=BridgeDataType.UPDATE,
-                            path=path,
-                            dtype=None,
-                            writable=None,
-                            array_size=None,
-                            value=entry.value,
-                            text=None,
-                        )
-                    )
-
-            elif t == BridgeMsgType.ERROR:
-                out.append(
-                    BridgeData(
-                        type=BridgeDataType.ERROR,
-                        path=None,
-                        dtype=None,
-                        writable=None,
-                        array_size=None,
-                        value=None,
-                        text=v.text,
-                    )
-                )
-
-        return out

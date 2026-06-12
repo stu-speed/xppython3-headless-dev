@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 class WidgetRender:
     _widgets: Dict[XPWidgetID, WidgetInfo]
     _next_widget_id: int
-    _msg_queue: list[tuple[XPWidgetID, XPWidgetMessage, Any, Any]]
+    _msg_queue: list[tuple[XPWidgetID, XPWidgetMessage | int, Any, Any]]
 
     @property
     def mgr(self) -> WidgetManager:
@@ -68,6 +68,8 @@ class WidgetRender:
 
         # Only root widgets should receive draw callbacks
         if info.window.widget_root != wid:
+            return
+        if not info.visible:
             return
 
         for cb in info.callbacks:

@@ -6,12 +6,12 @@ from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from simless.libs.fake_xp_constants import lookup_constant_name, Menu_Unchecked
+from simless.libs.fake_xp_constants import lookup_constant_name
 from xp_typing import (XPLMCommandPhase, XPLMCommandRef, XPLMCursorStatus, XPLMMenuCheck, XPLMMenuID, XPLMMouseStatus,
-                       XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer, XPWidgetClass, XPWidgetID,
+                       XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer, XPWidgetClass, XPWidgetID, XPWidgetMessage,
                        XPWidgetPropertyID)
 
-XPWidgetCallback = Callable[[int, int, Any, Any], int]
+XPWidgetCallback = Callable[[XPWidgetMessage | int, XPWidgetID, Any, Any], int]
 
 
 class XPShutdown(Exception):
