@@ -228,16 +228,20 @@ class WidgetManager(WidgetRender):
                 # API messages → direct dispatch
                 self._dispatch_message(wid, msg, p1, p2)
 
-    def handle_input_msg(self, info: WidgetInfo, msg: XPWidgetMessage | int, p1: Any = None, p2: Any = None,
-                         process_input_handler: Optional[Callable[..., None]] = None) -> bool:
+    def handle_input_msg(
+            self,
+            info: WidgetInfo,
+            msg: XPWidgetMessage | int,
+            p1: Any = None,
+            p2: Any = None,
+            process_input_handler: Optional[Callable[..., None]] = None
+    ) -> bool:
         """
-        Text editing is handled by DPG input field.  Allow callback on enter.
+        Suitable handler for default and any input widget.  Allows for callback handling on ENTER
         """
         xp = self.fake_xp
 
-        # ---------------------------------------------------------
-        # TEXT FIELD DEFAULT KEY HANDLING (XP-authentic)
-        # ---------------------------------------------------------
+        # Only text fields handle text input
         if info.widget_class != xp.WidgetClass_TextField:
             return False
         if msg != xp.Msg_KeyPress:
@@ -245,11 +249,41 @@ class WidgetManager(WidgetRender):
 
         key, flags, vkey = p1
 
-        # Enter
+        text = info.descriptor
+
+        # ---------------------------------------------------------
+        # ENTER → commit callback
+        # ---------------------------------------------------------
         if key == 13 and process_input_handler is not None:
             process_input_handler()
+            return True
 
-        return True
+        # ---------------------------------------------------------
+        # ESC → lose focus
+        # ---------------------------------------------------------
+        if key == 27:
+            xp.loseKeyboardFocus(info.wid)
+            return True
+
+        # ---------------------------------------------------------
+        # BACKSPACE
+        # ---------------------------------------------------------
+        if key == 8:
+            if text:
+                info.set_descriptor(text[:-1])
+            return True
+
+        # ---------------------------------------------------------
+        # Printable ASCII characters
+        # ---------------------------------------------------------
+        if 32 <= key <= 126:
+            info.set_descriptor(text + chr(key))
+            return True
+
+        # ---------------------------------------------------------
+        # All other keys → let XPWidgets or plugins handle
+        # ---------------------------------------------------------
+        return False
 
     # ------------------------------------------------------------------
     # DISPATCH PIPELINE (XP-authentic)

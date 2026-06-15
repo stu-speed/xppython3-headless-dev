@@ -200,6 +200,8 @@ def test_example_gui(inline_plugin):
                 xp.WidgetClass_Button
             )
 
+            xp.commandOnce(xp.simless_runner.cmd_show_viewer)
+
             return 1
 
         def XPluginDisable(self):
@@ -312,7 +314,8 @@ def test_bridge_promote_dataref(inline_plugin, monkeypatch):
     h = xp.findDataRef("sim/test/bridge_value")
     assert h is not None
     assert xp.getDataf(h) == 123.45
-    assert not h.is_dummy
+    ref = xp.dataref_manager.require_handle(h)
+    assert not ref.dummy
 
     info = xp.getDataRefInfo(h)
     assert info.type == xp.Type_Float

@@ -44,9 +44,9 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, TextIO, Tuple,
 
 import select
 
-from sshd_extensions.dataref_manager import DataRefManager, DataRefSpec
 from XPPython3 import xp
 from XPPython3.xp_typing import XPLMFlightLoopID
+from sshd_extensions.dataref_manager import DataRefManager, DataRefSpec
 
 EPSILON: float = float(os.getenv("XPBRIDGE_EPSILON", "0.001"))
 HEARTBEAT_TIMEOUT: float = 10
@@ -643,7 +643,7 @@ class XPBridgeServer:
             xp.log(f"[Bridge] ADD failed: DataRef info unavailable: handle={handle}")
             self._send_error(f"DataRef info unavailable: handle={handle}")
             return
-        xp.log(f"[Bridge] INFO: {info} type={info.type}")
+        xp.log(f"[Bridge] INFO: {info}")
 
         # Determine array size
         t = info.type
@@ -720,6 +720,9 @@ class XPBridgeServer:
                 changed = True
                 entries.append(MT_UpdateEntry(idx=idx, value=copy.deepcopy(value)))
                 self.last_sent[idx] = copy.deepcopy(value)
+
+            if last is not None:
+                xp.log(f"[Bridge] VALUE for {path}: value={value}")
 
         if changed and entries:
             return BridgeMsg(BridgeMsgType.UPDATE, MT_Update(entries=entries))

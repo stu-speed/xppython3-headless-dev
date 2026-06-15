@@ -6,47 +6,14 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any, Dict, Optional, Pattern, TYPE_CHECKING
+import time
+from typing import Any, Optional, Pattern, TYPE_CHECKING
 
-from simless.libs.dataref import DataRefManager
-from simless.libs.fake_xp_types import FakeDataRef
 from xp_typing import XPWidgetID, XPWidgetMessage
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
 
-
-# ============================================================
-# Viewer state model
-# ============================================================
-
-@dataclass
-class RefMeta:
-    idx: int
-    name: str
-    type: int
-    writable: bool
-    array_size: int
-    is_dummy: bool
-
-
-@dataclass
-class RefState:
-    meta: RefMeta
-    value: Any = None
-    last_value: Any = None
-    changed: bool = False
-
-
-class ViewerState:
-    def __init__(self) -> None:
-        self.refs: Dict[str, RefState] = {}
-
-
-# ============================================================
-# Widget viewer window
-# ============================================================
 
 class DataRefViewer:
     LOG_PREFIX = "[FakeXPDataRefViewer]"
@@ -60,9 +27,10 @@ class DataRefViewer:
     def __init__(self, xp: FakeXP) -> None:
         self.fake_xp = xp
 
-        self.state = ViewerState()
         self._next_idx: int = 1
         self._dirty: bool = False
+        self._bridge_status: str = ""
+        self._last_dataref_render = time.monotonic()
 
         self._window: Optional[XPWidgetID] = None
         self._filter_regex: Optional[Pattern[str]] = None
@@ -163,11 +131,6 @@ class DataRefViewer:
             self._apply_filter()
             return 1
 
-        if msg == self.fake_xp.Message_CloseButtonPushed:
-            if self.fake_xp.simless_runner.dataref_viewer.attached:
-                self.fake_xp.simless_runner.dataref_viewer.detach()
-            return 1
-
         return 0
 
     def _input_handler(
@@ -182,13 +145,28 @@ class DataRefViewer:
 
     # --------------------------------------------------------
 
+    def menu_cmd(self, cmd, phase, refcon):
+        if phase == self.fake_xp.CommandBegin:
+            if not self.is_created:
+                self.create()
+            elif not self.fake_xp.isWidgetVisible(self.window):
+                self.fake_xp.showWidget(self.window)
+                self.fake_xp.setKeyboardFocus(self.filter_field)
+
     def refresh(self) -> None:
+        if not self.is_created:
+            return
+        if not self.fake_xp.isWidgetVisible(self.window):
+            return
+        if self.fake_xp.dataref_manager.last_updated > self._last_dataref_render:
+            self._dirty = True
         if not self._dirty:
             return
 
         self._render_status()
-        self._render_datarefs()
-        self._dirty = False
+        recent_changes = self._render_datarefs()
+        if not recent_changes:
+            self._dirty = False
 
     # --------------------------------------------------------
 
@@ -196,25 +174,28 @@ class DataRefViewer:
         status = self.fake_xp.simless_runner.bridge_client.conn_status
         self.fake_xp.setWidgetDescriptor(self.status_caption, status)
 
-    def _render_datarefs(self) -> None:
-        lines: list[str] = []
-        lines.append("  D IDX  NAME                                                         W VALUE")
-        lines.append("  - ---- ------------------------------------------------------------ - -----")
+    def _render_datarefs(self) -> bool:
+        lines: list[str] = ["  D IDX  NAME                                                         W VALUE",
+                            "  - ---- ------------------------------------------------------------ - -----"]
 
-        for ref in sorted(self.state.refs.values(), key=lambda r: r.meta.idx):
-            meta = ref.meta
-
-            if self._filter_regex and not self._filter_regex.search(meta.name):
+        recent = False
+        for ref in self.fake_xp.dataref_manager.all_handles():
+            if self._filter_regex and not self._filter_regex.search(ref.path):
                 continue
 
-            mark = "*" if ref.changed else " "
-            dummy = "D" if meta.is_dummy else " "
+            now = time.monotonic()
+            mark = " "
+            if now - ref.last_modified <= 10:
+                mark = "*"
+                recent = True
+            dummy = "D" if ref.dummy else " "
             lines.append(
-                f"{mark} {dummy} {meta.idx:4d} {meta.name:60s} "
-                f"{'W' if meta.writable else '-'} {ref.value}"
+                f"{mark} {dummy} {ref.df_id:4d} {ref.path:60s} "
+                f"{'W' if ref.writable else ' '} {ref.value}"
             )
 
         self.fake_xp.setWidgetDescriptor(self.data_caption, "\n".join(lines))
+        return recent
 
     def _apply_filter(self) -> None:
         text = self.fake_xp.getWidgetDescriptor(self.filter_field)
@@ -225,126 +206,3 @@ class DataRefViewer:
             self._filter_regex = re.compile(re.escape(text))
 
         self._dirty = True
-
-
-# ============================================================
-# Viewer client (runner-owned)
-# ============================================================
-
-class FakeXPDataRefViewerClient:
-    def __init__(self, xp: FakeXP):
-        self.fake_xp = xp
-        self.viewer_widget = DataRefViewer(xp)
-        self._attached = False
-
-    @property
-    def dm(self) -> DataRefManager:
-        return self.fake_xp.dataref_manager
-
-    @property
-    def attached(self) -> bool:
-        return self._attached
-
-    def attach(self) -> None:
-        if self._attached:
-            return
-        self._attached = True
-
-        for ref in self.dm.all_handles():
-            self._add_ref(ref)
-
-        self.dm.attach_handle_callback(self._on_new_handle)
-
-        if not self.viewer_widget.is_created:
-            self.viewer_widget.create()
-        self.fake_xp.showWidget(self.viewer_widget.window)
-
-    def detach(self) -> None:
-        if not self._attached:
-            return
-        self._attached = False
-
-        self.dm.detach_handle_callback()
-
-        self.viewer_widget.state.refs.clear()
-        self.fake_xp.hideWidget(self.viewer_widget.window)
-
-    def update(self) -> None:
-        for state in self.viewer_widget.state.refs.values():
-            self._update_value(state)
-        self.viewer_widget.refresh()
-
-    def _on_new_handle(self, ref: FakeDataRef) -> None:
-        self._add_ref(ref)
-
-    def _add_ref(self, ref: FakeDataRef) -> None:
-        if ref.path in self.viewer_widget.state.refs:
-            return
-
-        value = self._read_value(ref)
-
-        meta = RefMeta(
-            idx=self.viewer_widget._next_idx,
-            name=ref.path,
-            type=ref.type,
-            writable=ref.writable,
-            array_size=ref.size,
-            is_dummy=not ref.shape_known and not ref.type_known,
-        )
-
-        self.viewer_widget.state.refs[ref.path] = RefState(
-            meta=meta,
-            value=value,
-            changed=True,
-        )
-
-        self.viewer_widget._next_idx += 1
-        self.viewer_widget._dirty = True
-
-    def _update_value(self, state: RefState) -> None:
-        ref = self.dm.get_handle(state.meta.name)
-        if ref is None:
-            return
-
-        new_value = self._read_value(ref)
-
-        state.last_value = state.value
-        state.value = new_value
-        state.changed = (state.last_value != state.value)
-        if state.changed:
-            self.viewer_widget._dirty = True
-
-    def _read_value(self, ref: FakeDataRef) -> Any:
-        """
-        Read the current value of a FakeDataRef using its xp.Type_* dtype.
-        """
-        fxp = self.fake_xp
-        t = ref.type
-
-        # --- Scalars ---
-        if t & fxp.Type_Float:
-            return fxp.getDataf(ref)
-
-        if t & fxp.Type_Int:
-            return fxp.getDatai(ref)
-
-        if t & fxp.Type_Double:
-            return fxp.getDatad(ref)
-
-        # --- Arrays ---
-        if t & fxp.Type_FloatArray:
-            buf = [0.0] * ref.size
-            fxp.getDatavf(ref, buf, 0, ref.size)
-            return buf
-
-        if t & fxp.Type_IntArray:
-            buf = [0] * ref.size
-            fxp.getDatavi(ref, buf, 0, ref.size)
-            return buf
-
-        if t & fxp.Type_Data:
-            buf = bytearray(ref.size)
-            fxp.getDatab(ref, buf, 0, ref.size)
-            return buf
-
-        return None

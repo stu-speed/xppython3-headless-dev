@@ -2,21 +2,29 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, MutableSequence, Optional, Sequence, Tuple
 
-from simless.libs.fake_xp_constants import lookup_constant_name
-from xp_typing import (XPLMCommandPhase, XPLMCommandRef, XPLMCursorStatus, XPLMMenuCheck, XPLMMenuID, XPLMMouseStatus,
-                       XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer, XPWidgetClass, XPWidgetID, XPWidgetMessage,
-                       XPWidgetPropertyID)
+from simless.libs.fake_xp_constants import lookup_constant_name, Type_Data, Type_IntArray, Type_FloatArray
+from xp_typing import (XPLMCommandPhase, XPLMCommandRef, XPLMCursorStatus, XPLMDataRef, XPLMDataTypeID, XPLMMenuCheck,
+                       XPLMMenuID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer, XPWidgetClass,
+                       XPWidgetID, XPWidgetMessage, XPWidgetPropertyID)
 
 XPWidgetCallback = Callable[[XPWidgetMessage | int, XPWidgetID, Any, Any], int]
+
+# Scalar callbacks
+ReadScalar = Callable[[Any], float | int]
+WriteScalar = Callable[[Any, float | int], None]
+
+# Array callbacks
+ReadArray = Callable[[Any, MutableSequence[Any], int, int], int]
+WriteArray = Callable[[Any, Sequence[Any], int, int], None]
 
 
 class XPShutdown(Exception):
     """Raised when DearPyGui is no longer running (viewport closed)."""
-
     pass
 
 
@@ -39,61 +47,107 @@ class FakeXPCommandRef:
 @dataclass(slots=True)
 class FakeDataRef:
     """
-    In-memory representation of an X-Plane-style DataRef.
+    Unified in‑memory representation of an X‑Plane DataRef.
 
-    A FakeDataRef progresses through multiple authority phases over its lifetime.
-    Type and shape authority are established independently and may arrive in
-    different orders (e.g., META before UPDATE).
+    A FakeDataRef models the lifecycle and provider semantics of a real DataRef.
+    It supports three phases, derived from attributes:
 
-    Fields:
-      path:
-        Fully-qualified DataRef path (e.g. "sim/flightmodel/position/latitude").
+        D — Dummy
+            Created with minimal information. Type and value are provisional
+            until promotion.
 
-      type:
-        Declared numeric storage type for the DataRef. This reflects the
-        authoritative numeric type once `type_known` is True.
+        A — Accessor
+            Backed by registerDataAccessor callbacks. Reads/writes are delegated
+            to provider functions.
 
-      writable:
-        Whether the DataRef is writable by plugins once type authority is known.
-
-      size:
-        Storage size of the DataRef. Meaningful only when `shape_known` is True.
-        Scalars use size == 1; arrays use size == element count.
-
-      value:
-        Current stored value. Prior to shape promotion, this may contain
-        provisional (dummy) data written by plugins.
-
-      is_array:
-        Shape indicator once known.
-          • None  → shape not yet known
-          • False → scalar DataRef
-          • True  → array DataRef
-        This field MUST NOT be consulted unless `shape_known` is True.
-
-      type_known:
-        Indicates that authoritative type metadata has been received (META).
-        When False, the DataRef's numeric type is provisional.
-
-      shape_known:
-        Indicates that authoritative shape information has been established
-        from a real provider value (UPDATE). When False, scalar vs array and
-        size are unknown and must not be inferred.
+        X — Canonical
+            Backed by authoritative metadata (e.g., bridge META). Type, size,
+            and storage are fixed and fully known.
     """
 
+    # -------------------------
+    # Identity
+    # -------------------------
     path: str
-    type: int
+    df_id: XPLMDataRef
+
+    # -------------------------
+    # Type & shape (authoritative)
+    # -------------------------
+    type: XPLMDataTypeID | int  # xp.Type_Float, xp.Type_Int, xp.Type_FloatArray, etc.
     writable: bool
-    size: int
-    value: Any
-    is_array: bool = False
-    type_known: bool = False
-    shape_known: bool = False
+    size: int  # scalar=1, array=N
+
+    # -------------------------
+    # Storage
+    # -------------------------
+    value: Any  # scalar (float) or array (list/bytearray)
+
+    # -------------------------
+    # Accessor callbacks (A-phase)
+    # -------------------------
+    read_scalar: Optional[ReadScalar]
+    write_scalar: Optional[WriteScalar]
+    read_array: Optional[ReadArray]
+    write_array: Optional[WriteArray]
+
+    read_refcon: Any
+    write_refcon: Any
+
+    # -------------------------
+    # Dummy flag
+    # -------------------------
+    dummy: bool
+
+    last_modified: float = field(default_factory=time.monotonic)
+
+    # ============================================================
+    # Derived properties
+    # ============================================================
 
     @property
-    def is_dummy(self) -> bool:
-        """Return True if this DataRef does not yet have authoritative type and shape."""
-        return not self.type_known or not self.shape_known
+    def is_array(self) -> bool:
+        """
+        True for array-typed refs (including 1-element arrays).
+
+        Scalar vs array is determined by dtype, NOT by size.
+        """
+        return bool(self.type & (Type_FloatArray | Type_IntArray | Type_Data))
+
+    @property
+    def dynamic_array(self) -> bool:
+        """
+        True if the dataref's array length is not fixed.
+
+        • DATA → always dynamic
+        • Accessor-backed arrays → dynamic
+        • Numeric arrays with size==0 → dynamic (rare)
+        • Everything else → fixed
+        """
+        if Type_Data:
+            return True
+
+        if self.read_array is not None or self.write_array is not None:
+            return True
+
+        if (Type_FloatArray | Type_IntArray) and self.size == 0:
+            return True
+
+        return False
+
+    @property
+    def phase(self) -> str:
+        """
+        Derived lifecycle phase:
+          D = Dummy      (dummy=True)
+          A = Accessor   (dummy=False and callbacks present)
+          X = Canonical  (dummy=False and no callbacks)
+        """
+        if self.dummy:
+            return "D"
+        if self.read_scalar or self.read_array:
+            return "A"
+        return "X"
 
 
 # ---------------------------------------------------------------------------

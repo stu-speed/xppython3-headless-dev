@@ -82,7 +82,7 @@ import traceback
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from XPPython3.xp_typing import XPLMMenuID, XPLMPluginID
+from XPPython3.xp_typing import XPLMMenuID, XPLMPluginID, XPLMCommandRef
 from simless.libs.dataref import DataRefManager
 from simless.libs.fake_xp_types import XPShutdown
 from simless.libs.plugin_loader import LoadedPlugin
@@ -101,7 +101,8 @@ class SimlessRunner:
     DataRefManager.
     """
 
-    main_menu: XPLMMenuID | None
+    main_menu: XPLMMenuID
+    cmd_show_viewer: XPLMCommandRef
 
     def __init__(
             self,
@@ -145,9 +146,9 @@ class SimlessRunner:
         #       import XPLMCamera
         #
         from simless.libs.bridge_client import XPBridgeClient
-        from simless.libs.dataref_viewer import FakeXPDataRefViewerClient
+        from simless.libs.dataref_viewer import DataRefViewer
 
-        self.dataref_viewer = FakeXPDataRefViewerClient(self.fake_xp)
+        self.dataref_viewer = DataRefViewer(self.fake_xp)
         self.bridge_client = XPBridgeClient(self.fake_xp, host=bridge_host, port=bridge_port)
 
         # ------------------------------------------------------------------
@@ -163,6 +164,7 @@ class SimlessRunner:
         self._flightloops: Dict[int, Dict[str, Any]] = {}
         self._sim_time: float = 0.0
         self._cycles: int = 0
+        self._next_view_cycle: int = 0
         # No plugin executing by default
         self._current_plugin_id: XPLMPluginID | None = None
 
@@ -282,8 +284,9 @@ class SimlessRunner:
                 continue
 
         # 5. Dataref viewer
-        if self.dataref_viewer.attached:
-            self.dataref_viewer.update()
+        if cycle > self._next_view_cycle:
+            self.dataref_viewer.refresh()
+            self._next_view_cycle = cycle + 20
 
         # ------------------------------------------------------------
         # 6) Graphics frame (draw callbacks, XP→DPG sync, DPG flush, render)
@@ -378,7 +381,8 @@ class SimlessRunner:
                 break
 
             # Optional timed exit
-            if 0 <= run_time <= (time.time() - start):
+            duration = time.monotonic() - start
+            if 0 < run_time < duration:
                 xp.log("[Runner] Flight loop exit: run_time reached")
                 break
 
@@ -425,10 +429,10 @@ class SimlessRunner:
         # ------------------------------------------------------------
         # 7. GUI teardown
         # ------------------------------------------------------------
-
         if xp.enable_gui:
             xp.log("[Runner] === GUI Teardown ===")
-            self.dataref_viewer.detach()
+            if self.dataref_viewer.is_created:
+                self.fake_xp.destroyWidget(self.dataref_viewer.window)
 
     def broadcast_message(self, sender_id: int, msg: int, param) -> None:
         """Broadcast to all enabled plugins."""
@@ -469,7 +473,9 @@ class SimlessRunner:
             self.broadcast_message(0, msg, xp.PLUGIN_XPLANE)
 
     def create_main_menu(self) -> None:
-        self.main_menu = self.fake_xp.createMenu(name="FakeXP")
+        main_menu = self.fake_xp.createMenu(name="FakeXP")
+        assert main_menu is not None
+        self.main_menu = main_menu
 
         cmd_toggle_bridge = self.fake_xp.createCommand(
             "FakeXP/Bridge/Toggle",
@@ -487,28 +493,20 @@ class SimlessRunner:
             cmd_toggle_bridge
         )
 
-        cmd_toggle_viewer = self.fake_xp.createCommand(
-            "FakeXP/DatarefViewer/Toggle",
-            "Toggle Dataref Viewer window"
+        self.cmd_show_viewer = self.fake_xp.createCommand(
+            "FakeXP/DatarefViewer",
+            "Show Dataref Viewer window"
         )
         self.fake_xp.registerCommandHandler(
-            cmd_toggle_viewer,
-            self._cmd_toggle_viewer,
+            self.cmd_show_viewer,
+            self.fake_xp.simless_runner.dataref_viewer.menu_cmd,
             1,  # before
             None
         )
-        self.fake_xp.appendMenuItemWithCommand(self.main_menu, 'Dataref Viewer', cmd_toggle_viewer)
+        self.fake_xp.appendMenuItemWithCommand(self.main_menu, 'Dataref Viewer', self.cmd_show_viewer)
 
     def _cmd_toggle_bridge(self, cmd, phase, refcon):
         if phase == self.fake_xp.CommandBegin:
             self.bridge_client.set_enabled(not self.bridge_client.enabled)
             self.fake_xp.setMenuItemName(self.main_menu, 0, self.bridge_client.menu_label)
-        return 1
-
-    def _cmd_toggle_viewer(self, commandRef, phase, refCon):
-        if phase == self.fake_xp.CommandBegin:
-            if self.dataref_viewer.attached:
-                self.dataref_viewer.detach()
-            else:
-                self.dataref_viewer.attach()
         return 1

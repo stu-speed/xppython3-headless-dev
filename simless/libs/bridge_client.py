@@ -221,19 +221,17 @@ class XPBridgeClient:
         if enable:
             xp.log(f"[Bridge] Enable connection")
             self._enabled = True
-            self.fake_xp.dataref_manager.attach_handle_callback(self._on_dataref_handle_created)
             self._last_activity = time.time() - 100  # connect right away
         else:
             xp.log(f"[Bridge] Disable connection")
             self._enabled = False
-            self.fake_xp.dataref_manager.detach_handle_callback()
             self.disconnect()
-        self.fake_xp.simless_runner.dataref_viewer.viewer_widget.bridge_status = self.conn_status
+        self.fake_xp.simless_runner.dataref_viewer.bridge_status = self.conn_status
 
     def set_conn_status(self, status: str) -> None:
         self._conn_status = status
         xp.log(f"[Bridge] {self._conn_status}")
-        self.fake_xp.simless_runner.dataref_viewer.viewer_widget.bridge_status = self.conn_status
+        self.fake_xp.simless_runner.dataref_viewer.bridge_status = self.conn_status
 
     def connect(self) -> None:
         self.disconnect()
@@ -378,7 +376,7 @@ class XPBridgeClient:
             self.set_conn_status("Server closed connection")
             raise ConnectionResetError(self.conn_status)
 
-        self._last_activity = time.time()
+        self._last_activity = time.monotonic()
 
         stripped = line.strip()
         if not stripped:
@@ -528,33 +526,19 @@ class XPBridgeClient:
                 if not ref or not ev.dtype:
                     continue
 
-                # Promote TYPE authority only
-                self.fake_xp.dataref_manager.promote_type(
+                # Promote authoritative type
+                self.fake_xp.dataref_manager.promote(
                     ref=ref,
                     dtype=ev.dtype,
                     writable=bool(ev.writable),
+                    array_size=ev.array_size or 1,
                 )
 
             elif ev.type is BridgeDataType.UPDATE:
                 ref = self.fake_xp.dataref_manager.get_handle(ev.path)
                 assert ref is not None, f"Unknown handle: {ev.path}"
-                value = ev.value
 
-                is_array = isinstance(value, (list, tuple, bytearray))
-                size = len(value) if is_array else 1
-
-                # Promote shape if needed (first time or shape change)
-                if (
-                        not ref.shape_known
-                        or ref.is_array != is_array
-                        or ref.size != size
-                ):
-                    self.fake_xp.dataref_manager.promote_shape_from_value(
-                        ref=ref,
-                        value=value,
-                    )
-                else:
-                    ref.value = value
+                self.fake_xp.dataref_manager.update_value(ref=ref, value=ev.value)
 
             elif ev.type is BridgeDataType.ERROR:
                 self.fake_xp.log(f"[Bridge] ERROR: {ev.text}")

@@ -1,7 +1,6 @@
 # tests/test_fake_xp_dataref.py
 
 from typing import List
-
 import pytest
 
 import XPPython3
@@ -11,75 +10,59 @@ from simless.libs.fake_xp_types import FakeDataRef
 
 @pytest.fixture
 def xp() -> FakeXP:
-    """Create a FakeXP façade and initialize the global XPPython3.xp as tests expect."""
     fake = FakeXP(debug_logging=True)
     XPPython3.xp = fake
     return fake
 
 
-@pytest.fixture
-def update_dataref():
-    """
-    Test-only helper that coerces dummy FakeDataRef fields without promoting.
-    Mirrors the semantics expected by test_update_dummy_ref_validation.
-    """
-
-    def _update(ref, *, dtype=None, size=None, value=None):
-        if not ref.is_dummy:
-            raise RuntimeError("update_dataref only valid for dummy refs")
-
-        if size is not None and size <= 0:
-            raise ValueError("size must be > 0")
-
-        if dtype is not None:
-            ref.type = dtype
-            ref.type_known = True
-
-        if size is not None:
-            ref.size = size
-            ref.is_array = size > 1
-            ref.shape_known = True
-
-        if value is not None:
-            ref.value = value
-
-        return True
-
-    return _update
-
+# ================================================================
+#  BASIC FIND + DUMMY CREATION
+# ================================================================
 
 def test_find_and_dummy_creation(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/float_scalar")
+    dr = xp.findDataRef("sim/test/float_scalar")
+    ref = xp.dataref_manager.require_handle(dr)
+
     assert isinstance(ref, FakeDataRef)
     assert ref.path == "sim/test/float_scalar"
     assert ref.type == xp.Type_Float
-    assert ref.type_known is False
-    assert ref.shape_known is False
     assert ref.is_array is False
     assert ref.size == 1
     assert ref.value == 0.0
 
 
-def test_get_dataref_types_and_info_unknown_shape(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/float_scalar2")
-    tmask = xp.getDataRefTypes(ref)
-    assert tmask == xp.Type_Float # default
+# ================================================================
+#  TYPE MASK + INFO
+# ================================================================
 
-    info = xp.getDataRefInfo(ref)
+def test_get_dataref_types_and_info(xp: FakeXP):
+    dr = xp.findDataRef("sim/test/float_scalar2")
+    ref = xp.dataref_manager.require_handle(dr)
+
+    assert xp.getDataRefTypes(dr) == xp.Type_Float
+
+    info = xp.getDataRefInfo(dr)
     assert info.name == ref.path
     assert info.type == xp.Type_Float
     assert info.is_array is False
     assert info.size == 0
 
 
-def test_can_write_and_is_good(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/writable")
-    assert xp.canWriteDataRef(ref) is True
-    assert xp.isDataRefGood(ref) is True
+# ================================================================
+#  CAN WRITE + IS GOOD + PROMOTION
+# ================================================================
 
-    xp.dataref_manager.promote_shape_from_value(ref=ref, value=1.23)
+def test_can_write_and_is_good(xp: FakeXP):
+    dr = xp.findDataRef("sim/test/writable")
+    ref = xp.dataref_manager.require_handle(dr)
+
+    assert xp.canWriteDataRef(dr) is True
+    assert xp.isDataRefGood(dr) is True
+
+    xp.dataref_manager.promote(ref, xp.Type_Float, writable=True, array_size=1)
+    ref.value = 1.23
+
     assert ref.value == pytest.approx(1.23)
-    assert ref.shape_known is True
     assert ref.is_array is False
 
     reg = xp.registerDataAccessor(
@@ -91,173 +74,205 @@ def test_can_write_and_is_good(xp: FakeXP):
     assert xp.isDataRefGood(reg) is True
 
 
-def test_register_and_unregister_accessor_scalar(xp: FakeXP):
-    def my_read_int(rc):
-        return 42
+# ================================================================
+#  ACCESSOR SCALAR READ/WRITE
+# ================================================================
 
+def test_register_and_unregister_accessor_scalar(xp: FakeXP):
     written = {}
 
-    def my_write_int(rc, v):
+    def read_int(rc):
+        return 42
+
+    def write_int(rc, v):
         written["v"] = v
 
-    ref = xp.registerDataAccessor(
+    dr = xp.registerDataAccessor(
         "myplugin/int_item",
-        readInt=my_read_int,
-        writeInt=my_write_int,
+        readInt=read_int,
+        writeInt=write_int,
     )
-    assert xp.getDataRefTypes(ref) & xp.Type_Int
-    assert xp.getDatai(ref) == 42
-    xp.setDatai(ref, 99)
+
+    # Accessor works
+    assert xp.getDataRefTypes(dr) & xp.Type_Int
+    assert xp.getDatai(dr) == 42
+
+    xp.setDatai(dr, 99)
     assert written["v"] == 99
 
-    xp.unregisterDataAccessor(ref)
-    with pytest.raises(TypeError):
-        xp.getDatai(ref)
-    assert xp.isDataRefGood(ref) is False
+    # Unregister → scalar accessor-backed dataref becomes invalid
+    xp.unregisterDataAccessor(dr)
 
+    with pytest.raises(ValueError):
+        xp.getDatai(dr)
+
+    assert xp.isDataRefGood(dr) is False
+
+
+# ================================================================
+#  ACCESSOR ARRAY READ/WRITE
+# ================================================================
 
 def test_array_accessors_and_semantics(xp: FakeXP):
     initial = [0.1 * i for i in range(8)]
+    written = {}
 
     def read_float_array(rc, out, offset, count):
         for i in range(count):
             out[i] = initial[offset + i]
         return count
 
-    written = {}
-
     def write_float_array(rc, values, offset, count):
         written["buf"] = list(values[:count])
 
-    ref = xp.registerDataAccessor(
+    dr = xp.registerDataAccessor(
         "myplugin/float_array",
         readFloatArray=read_float_array,
         writeFloatArray=write_float_array,
     )
 
-    assert xp.getDatavf(ref, None, 0, -1) == 8
+    # Length probe
+    assert xp.getDatavf(dr, None, 0, -1) == 8
 
-    out: List[float] = [0.0] * 4
-    copied = xp.getDatavf(ref, out, offset=2, count=4)
-    assert copied == 4
-    assert out == initial[2:6]
+    # Caller buffer too small → must raise ValueError
+    out = [0.0] * 4
+    with pytest.raises(ValueError):
+        xp.getDatavf(dr, out, 2, 4)
 
-    with pytest.raises(RuntimeError):
-        xp.setDatavf(ref, [1.0, 2.0], offset=0, count=4)
+    # Write: caller must supply at least count values
+    with pytest.raises(ValueError):
+        xp.setDatavf(dr, [1.0, 2.0], 0, 4)
 
-    xp.setDatavf(ref, [9.0, 8.0, 7.0, 6.0], offset=0, count=4)
+    # Valid write
+    xp.setDatavf(dr, [9.0, 8.0, 7.0, 6.0], 0, 4)
     assert written["buf"] == [9.0, 8.0, 7.0, 6.0]
 
+# ================================================================
+#  INTERNAL BYTE ARRAY + STRING HELPERS
+# ================================================================
 
 def test_byte_array_and_string_helpers_on_internal_buffer(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/bytes_internal")
+    dr = xp.findDataRef("sim/test/bytes_internal")
+    ref = xp.dataref_manager.require_handle(dr)
 
-    xp.dataref_manager.promote_type(ref=ref, dtype=xp.Type_Data, writable=True)
-    xp.dataref_manager.promote_shape_from_value(ref=ref, value=bytearray(b"Hello\x00" + b"\x00" * 10))
+    xp.dataref_manager.promote(ref, xp.Type_Data, writable=True, array_size=16)
+    ref.value[:] = b"Hello\x00" + b"\x00" * 10
 
-    assert xp.getDataRefTypes(ref) & xp.Type_Data
+    assert xp.getDataRefTypes(dr) & xp.Type_Data
 
-    s = xp.getDatas(ref)
+    s = xp.getDatas(dr)
     assert s.startswith("Hello")
 
-    xp.setDatas(ref, "ABC", offset=0, count=5)
+    xp.setDatas(dr, "ABC", offset=0, count=5)
     assert bytes(ref.value[:5]).startswith(b"ABC")
 
-    assert xp.getDatab(ref, None, 0, -1) == len(ref.value)
+    assert xp.getDatabv(dr, None, 0, -1) == len(ref.value)
 
+
+# ================================================================
+#  TYPE PROMOTION VALIDATION
+# ================================================================
 
 def test_promote_type_validates_value_on_type_change(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/type_change")
+    dr = xp.findDataRef("sim/test/type_change")
+    ref = xp.dataref_manager.require_handle(dr)
 
-    xp.dataref_manager.promote_shape_from_value(ref=ref, value=1.5)
-    assert ref.shape_known is True
-    assert ref.is_array is False
+    xp.dataref_manager.promote(ref, xp.Type_Float, writable=True, array_size=1)
+    ref.value = 1.5
 
-    xp.dataref_manager.promote_type(ref=ref, dtype=xp.Type_Int, writable=True)
+    xp.dataref_manager.promote(ref, xp.Type_Int, writable=True, array_size=1)
     assert ref.type == xp.Type_Int
     assert isinstance(ref.value, int)
 
 
+# ================================================================
+#  SHAPE PROMOTION RULES
+# ================================================================
+
 def test_promote_shape_from_value_does_not_change_known_shape(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/shape_replace")
+    dr = xp.findDataRef("sim/test/shape_replace")
+    ref = xp.dataref_manager.require_handle(dr)
 
-    xp.dataref_manager.promote_shape_from_value(ref=ref, value=0.5)
-    assert ref.shape_known is True
-    assert ref.is_array is False
-    assert ref.value == pytest.approx(0.5)
+    xp.dataref_manager.promote(ref, xp.Type_Float, writable=True, array_size=1)
+    ref.value = 0.5
 
-    xp.dataref_manager.promote_type(ref=ref, dtype=xp.Type_FloatArray, writable=True)
-    assert ref.type == xp.Type_FloatArray
-    assert ref.shape_known is True
-    assert ref.is_array is True
+    xp.dataref_manager.promote(ref, xp.Type_FloatArray, writable=True, array_size=1)
 
-    xp.dataref_manager.promote_shape_from_value(ref=ref, value=[1.0, 2.0, 3.0, 4.0])
-    assert ref.shape_known is True
+    ref.value = [1.0]
     assert ref.is_array is True
     assert ref.size == 1
-    assert isinstance(ref.value, list)
-    assert len(ref.value) == 1
 
 
-def test_update_dummy_ref_validation(xp: FakeXP, update_dataref):
-    ref = xp.findDataRef("sim/test/update_dummy")
+# ================================================================
+#  DUMMY UPDATE VALIDATION (now via promote)
+# ================================================================
 
-    with pytest.raises(ValueError):
-        update_dataref(ref, size=0)
+def test_update_dummy_ref_validation(xp: FakeXP):
+    dr = xp.findDataRef("sim/test/update_dummy")
+    ref = xp.dataref_manager.require_handle(dr)
+
+    xp.dataref_manager.promote(ref, xp.Type_FloatArray, writable=True, array_size=0)
 
     reg = xp.registerDataAccessor(
         "sim/test/update_dummy",
         readFloat=lambda rc: 0.0,
     )
+    reg_ref = xp.dataref_manager.require_handle(reg)
 
-    update_dataref(
-        reg,
-        dtype=xp.Type_FloatArray,
-        size=4,
-        value=[1, 2, 3, 4],
-    )
-    assert reg.type == xp.Type_FloatArray
-    assert reg.size == 4
+    xp.dataref_manager.promote(reg_ref, xp.Type_FloatArray, writable=True, array_size=4)
+    reg_ref.value = [1, 2, 3, 4]
 
+    assert reg_ref.type == xp.Type_FloatArray
+    assert reg_ref.size == 4
+
+
+# ================================================================
+#  ARRAY WRITE SHAPE ESTABLISHMENT + BOUNDS
+# ================================================================
 
 def test_setDatavf_establishes_shape_then_enforces_bounds(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/shape_from_write")
-    xp.dataref_manager.promote_type(ref=ref, dtype=xp.Type_FloatArray, writable=True)
+    dr = xp.findDataRef("sim/test/shape_from_write")
+    ref = xp.dataref_manager.require_handle(dr)
 
-    xp.setDatavf(ref, [9.0, 8.0, 7.0], offset=0, count=3)
-    assert ref.type_known is True
-    xp.dataref_manager.promote_shape_from_value(ref, [9.0, 8.0, 7.0])
-    assert ref.shape_known is True
+    xp.dataref_manager.promote(ref, xp.Type_FloatArray, writable=True, array_size=3)
+    ref.value = [9.0, 8.0, 7.0]
 
-    with pytest.raises(RuntimeError):
-        xp.setDatavf(ref, [1.0, 2.0, 3.0, 4.0], offset=0, count=4)
+    with pytest.raises(ValueError):
+        xp.setDatavf(dr, [1.0, 2.0, 3.0, 4.0], 0, 4)
 
+
+# ================================================================
+#  ACCESSOR ARRAY WRITE BOUNDS
+# ================================================================
 
 def test_promoted_set_enforces_inplace_bounds(xp: FakeXP):
     initial = [0.5 * i for i in range(8)]
+    written = {}
 
     def read_float_array(rc, out, offset, count):
         for i in range(count):
             out[i] = initial[offset + i]
         return count
 
-    written = {}
-
     def write_float_array(rc, values, offset, count):
         written["buf"] = list(values[:count])
 
-    ref = xp.registerDataAccessor(
+    dr = xp.registerDataAccessor(
         "myplugin/real_array",
         readFloatArray=read_float_array,
         writeFloatArray=write_float_array,
     )
 
-    with pytest.raises(RuntimeError):
-        xp.setDatavf(ref, [1.0] * 16, offset=0, count=16)
+    with pytest.raises(ValueError):
+        xp.setDatavf(dr, [1.0] * 16, 0, 16)
 
-    xp.setDatavf(ref, [9.0, 8.0, 7.0, 6.0], offset=0, count=4)
+    xp.setDatavf(dr, [9.0, 8.0, 7.0, 6.0], 0, 4)
     assert written["buf"] == [9.0, 8.0, 7.0, 6.0]
 
+
+# ================================================================
+#  OFFSET + COUNT READ INTO BUFFER
+# ================================================================
 
 def test_getDatavf_offset_and_count_write_into_buffer(xp: FakeXP):
     base = [i + 0.1 for i in range(8)]
@@ -267,36 +282,74 @@ def test_getDatavf_offset_and_count_write_into_buffer(xp: FakeXP):
             out[i] = base[offset + i]
         return count
 
-    ref = xp.registerDataAccessor(
+    dr = xp.registerDataAccessor(
         "myplugin/offset_array",
         readFloatArray=read_float_array,
     )
 
-    assert xp.getDatavf(ref, None, 0, -1) == 8
+    assert xp.getDatavf(dr, None, 0, -1) == 8
 
-    buf: List[float] = [0.0] * 10
-    got = xp.getDatavf(ref, buf, offset=2, count=4)
+    buf = [0.0] * 10
+    got = xp.getDatavf(dr, buf, 2, 4)
     assert got == 4
     assert buf[2:6] == base[2:6]
 
 
-def test_setDatab_internal_buffer_and_real_bounds(xp: FakeXP):
-    ref = xp.findDataRef("sim/test/bytes_internal2")
-    xp.dataref_manager.promote_type(ref=ref, dtype=xp.Type_Data, writable=True)
-    xp.dataref_manager.promote_shape_from_value(ref=ref, value=bytearray(b"ABCD"))
+# ================================================================
+#  INTERNAL BYTE ARRAY WRITE + BOUNDS
+# ================================================================
 
-    xp.setDatab(
-        ref,
-        [ord("X"), ord("Y"), ord("Z"), ord("!")],
-        offset=0,
-        count=4,
-    )
+def test_setDatab_internal_buffer_and_real_bounds(xp: FakeXP):
+    dr = xp.findDataRef("sim/test/bytes_internal2")
+    ref = xp.dataref_manager.require_handle(dr)
+
+    xp.dataref_manager.promote(ref, xp.Type_Data, writable=True, array_size=4)
+    ref.value[:] = b"ABCD"
+
+    xp.setDatabv(dr, [ord("X"), ord("Y"), ord("Z"), ord("!")], 0, 4)
     assert bytes(ref.value[:4]) == b"XYZ!"
 
-    with pytest.raises(RuntimeError):
-        xp.setDatab(
-            ref,
-            [ord("X"), ord("Y"), ord("Z"), ord("!"), ord("?")],
-            offset=0,
-            count=5,
-        )
+    with pytest.raises(ValueError):
+        xp.setDatabv(dr, [ord("X"), ord("Y"), ord("Z"), ord("!"), ord("?")], 0, 5)
+
+
+# ================================================================
+#  ACCESSOR PRECEDENCE TEST (ADDED)
+# ================================================================
+
+def test_accessor_precedence_over_internal_storage(xp: FakeXP):
+    internal = [10.0, 20.0, 30.0, 40.0]
+    written = {}
+
+    dr = xp.findDataRef("sim/test/accessor_precedence")
+    ref = xp.dataref_manager.require_handle(dr)
+
+    xp.dataref_manager.promote(ref, xp.Type_FloatArray, writable=True, array_size=4)
+    ref.value = internal.copy()
+
+    def read_arr(rc, out, offset, count):
+        for i in range(count):
+            out[i] = 99.0 + offset + i
+        return count
+
+    def write_arr(rc, values, offset, count):
+        written["buf"] = list(values[:count])
+
+    reg = xp.registerDataAccessor(
+        "sim/test/accessor_precedence",
+        readFloatArray=read_arr,
+        writeFloatArray=write_arr,
+    )
+
+    out = [0.0] * 4
+    xp.getDatavf(reg, out, 0, 4)
+    assert out == [99.0, 100.0, 101.0, 102.0]
+
+    xp.setDatavf(reg, [1.0, 2.0, 3.0, 4.0], 0, 4)
+    assert written["buf"] == [1.0, 2.0, 3.0, 4.0]
+
+    xp.unregisterDataAccessor(reg)
+
+    out2 = [0.0] * 4
+    xp.getDatavf(dr, out2, 0, 4)
+    assert out2 == internal

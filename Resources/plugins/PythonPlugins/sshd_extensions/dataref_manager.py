@@ -87,12 +87,12 @@ class DataRefSpec:
 
     @classmethod
     def from_info(
-        cls,
-        path: str,
-        info: XPLMDataRefInfo_t,
-        required: bool,
-        default: Any,
-        handle: XPLMDataRef,
+            cls,
+            path: str,
+            info: XPLMDataRefInfo_t,
+            required: bool,
+            default: Any,
+            handle: XPLMDataRef,
     ) -> "DataRefSpec":
         raw_mask = int(getattr(info, "type", 0))
         dtype = cls._mask_to_dtype(raw_mask)
@@ -184,10 +184,10 @@ class DataRefManager:
     """
 
     def __init__(
-        self,
-        xp: Any,
-        datarefs: Optional[Dict[str, Dict[str, Any]]] = None,
-        timeout_seconds: float = 10.0,
+            self,
+            xp: Any,
+            datarefs: Optional[Dict[str, Dict[str, Any]]] = None,
+            timeout_seconds: float = 10.0,
     ) -> None:
         self.xp = xp
         self.specs: Dict[str, DataRefSpec] = {}
@@ -216,13 +216,13 @@ class DataRefManager:
         self.specs[path] = spec
         self._ready = False
 
-    def get_spec(self, path: str) -> Optional[DataRefSpec]:
-        return self.specs.get(path)
+    def require_spec(self, path: str) -> DataRefSpec:
+        if path not in self.specs:
+            raise KeyError("Invalid spec path '%s'" % path)
+        return self.specs[path]
 
     def get_value(self, path: str) -> Any:
-        spec = self.specs.get(path)
-        if spec is None:
-            return None
+        spec = self.require_spec(path)
 
         if spec.handle is None:
             if spec.required:
@@ -233,31 +233,49 @@ class DataRefManager:
         h = spec.handle
         t = spec.type
 
-        if t == xp.Type_Float:
+        # -------------------------
+        # Scalar types
+        # -------------------------
+        if t & xp_mod.Type_Float:
             return xp_mod.getDataf(h)
-        if t == xp.Type_Int:
-            return xp_mod.getDatai(h)
-        if t == xp.Type_Double:
-            return xp_mod.getDatad(h)
-        if t == xp.Type_FloatArray:
-            out: list[float] = [0.0] * 8
-            got = xp_mod.getDatavf(h, out, 0, len(out))
-            return out if got is None else out[:int(got)]
-        if t == xp.Type_IntArray:
-            out: list[int] = [0] * 8
-            got = xp_mod.getDatavi(h, out, 0, len(out))
-            return out if got is None else out[:int(got)]
-        if t == xp.Type_Data:
-            outb = bytearray(8)
-            got = xp_mod.getDatab(h, outb, 0, len(outb))
-            return outb if got is None else outb[:int(got)]
 
-        raise TypeError(f"Unsupported dtype {t} for '{path}'")
+        if t & xp_mod.Type_Int:
+            return xp_mod.getDatai(h)
+
+        if t & xp_mod.Type_Double:
+            return xp_mod.getDatad(h)
+
+        # -------------------------
+        # Float array
+        # -------------------------
+        if t & xp_mod.Type_FloatArray:
+            size = xp_mod.getDatavf(h, None, 0, -1)
+            out = [0.0] * size
+            xp_mod.getDatavf(h, out, 0, size)
+            return out
+
+        # -------------------------
+        # Int array
+        # -------------------------
+        if t & xp_mod.Type_IntArray:
+            size = xp_mod.getDatavi(h, None, 0, -1)
+            out = [0] * size
+            xp_mod.getDatavi(h, out, 0, size)
+            return out
+
+        # -------------------------
+        # Byte array (Type_Data)
+        # -------------------------
+        if t & xp_mod.Type_Data:
+            size = xp_mod.getDatab(h, None, 0, -1)
+            out = bytearray(size)
+            xp_mod.getDatab(h, out, 0, size)
+            return out
+
+        raise TypeError(f"Unsupported dtype mask {t} for '{path}'")
 
     def set_value(self, path: str, value: Any) -> None:
-        spec = self.specs.get(path)
-        if spec is None:
-            raise KeyError(f"Unknown DataRef '{path}'")
+        spec = self.require_spec(path)
 
         if spec.handle is None:
             spec.default = value
