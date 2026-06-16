@@ -188,9 +188,8 @@ class DataRefViewer:
             if now - ref.last_modified <= 10:
                 mark = "*"
                 recent = True
-            dummy = "D" if ref.dummy else " "
             lines.append(
-                f"{mark} {dummy} {ref.df_id:4d} {ref.path:60s} "
+                f"{mark} {ref.phase} {ref.df_id:4d} {ref.path:60s} "
                 f"{'W' if ref.writable else ' '} {ref.value}"
             )
 

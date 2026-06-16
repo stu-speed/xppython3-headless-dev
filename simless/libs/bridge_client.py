@@ -525,6 +525,8 @@ class XPBridgeClient:
                 ref = self.fake_xp.dataref_manager.get_handle(ev.path)
                 if not ref or not ev.dtype:
                     continue
+                if not ref.dummy:
+                    continue
 
                 # Promote authoritative type
                 self.fake_xp.dataref_manager.promote(
@@ -538,7 +540,7 @@ class XPBridgeClient:
                 ref = self.fake_xp.dataref_manager.get_handle(ev.path)
                 assert ref is not None, f"Unknown handle: {ev.path}"
 
-                self.fake_xp.dataref_manager.update_value(ref=ref, value=ev.value)
+                self.fake_xp.dataref_manager.update_value(ref.df_id, ref.type, value=ev.value)
 
             elif ev.type is BridgeDataType.ERROR:
                 self.fake_xp.log(f"[Bridge] ERROR: {ev.text}")

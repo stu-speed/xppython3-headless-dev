@@ -95,233 +95,17 @@ class FakeXPDataRef:
             return False
 
     # ================================================================
-    #  INTERNAL CANONICAL HELPERS (strongly typed, prod-spec)
-    # ================================================================
-    def _get_scalar(
-            self,
-            dr: XPLMDataRef,
-            expected_type: XPLMDataTypeID | int,
-    ) -> float | int:
-        """
-        Canonical scalar getter:
-          • resolve handle
-          • if accessor: use read_scalar(ref.read_refcon)
-          • else: dummy-shape and return internal value
-        """
-        ref = self.dm.require_handle(dr)
-
-        # Accessor-backed scalar
-        if ref.read_scalar is not None:
-            return ref.read_scalar(ref.read_refcon)
-
-        # Internal scalar
-        if ref.dummy:
-            self.dm.shape_dummy(ref, expected_type)
-
-        return self.dm.get_value(ref)
-
-    def _set_scalar(
-            self,
-            dr: XPLMDataRef,
-            expected_type: XPLMDataTypeID | int,
-            value: float | int,
-    ) -> None:
-        """
-        Canonical scalar setter:
-          • resolve handle
-          • if accessor: use write_scalar(ref.write_refcon, value)
-          • else: dummy-shape and update internal value
-        """
-        ref = self.dm.require_handle(dr)
-
-        # Accessor-backed scalar
-        if ref.write_scalar is not None:
-            ref.write_scalar(ref.write_refcon, value)
-            return
-
-        # Internal scalar
-        if ref.dummy:
-            self.dm.shape_dummy(ref, expected_type, value=value)
-            return
-
-        self.dm.update_value(ref, value)
-
-    def _get_array(
-            self,
-            dr: XPLMDataRef,
-            expected_type: XPLMDataTypeID | int,
-            out: Optional[MutableSequence[float | int]],
-            offset: int,
-            count: int,
-    ) -> int:
-        """
-        Canonical array getter (prod-spec):
-
-          ACCESSOR-BACKED ARRAYS:
-            • out=None → return length
-            • out!=None → plugin read into temp buffer, then copy into out[offset+i]
-            • negative count → read to end
-            • never pass caller's buffer directly to plugin
-
-          INTERNAL ARRAYS:
-            • out=None → return size
-            • out!=None → copy into out[offset+i]
-            • negative count → read to end
-        """
-        ref = self.dm.require_handle(dr)
-
-        # ACCESSOR-BACKED ARRAY
-        if ref.read_array is not None:
-
-            # Normalize count BEFORE calling accessor
-            if count < 0:
-                if ref.size:
-                    count = ref.size - offset
-                else:
-                    probe = [0.0] * 4096
-                    try:
-                        n = ref.read_array(ref.read_refcon, probe, offset, 4096)
-                    except Exception as exc:
-                        raise ValueError(f"{ref.path}: accessor array read failed") from exc
-                    count = max(0, n - offset)
-
-            # out=None → return length
-            if out is None:
-                tmp = [0.0] * count
-                try:
-                    n = ref.read_array(ref.read_refcon, tmp, offset, count)
-                except Exception as exc:
-                    raise ValueError(f"{ref.path}: accessor array read failed") from exc
-                return n
-
-            # --- STRICT: caller buffer must be large enough ---
-            if offset + count > len(out):
-                raise ValueError(
-                    f"{ref.path}: accessor array read would write past end of caller buffer"
-                )
-
-            # Read into temp buffer
-            tmp = [0.0] * count
-            try:
-                n = ref.read_array(ref.read_refcon, tmp, offset, count)
-            except Exception as exc:
-                raise ValueError(f"{ref.path}: accessor array read failed") from exc
-
-            # Copy into caller buffer at offset
-            for i in range(n):
-                out[offset + i] = tmp[i]
-
-            return n
-
-        # ------------------------------------------------------------
-        # INTERNAL ARRAY
-        # ------------------------------------------------------------
-        if ref.dummy:
-            self.dm.shape_dummy(ref, expected_type)
-
-        if out is None:
-            return ref.size
-
-        if count < 0:
-            count = ref.size - offset
-
-        vals = self.dm.get_value(ref, offset=offset, count=count)
-        n = len(vals)
-
-        if offset + n > len(out):
-            raise ValueError("array read past end of caller buffer")
-
-        # Write into out[offset + i]
-        for i in range(n):
-            out[offset + i] = vals[i]
-
-        return n
-
-    def _set_array(
-            self,
-            dr: XPLMDataRef,
-            expected_type: int,
-            values: Sequence[float | int],
-            offset: int,
-            count: int,
-    ) -> None:
-        """
-        Canonical array setter (XPPython3 semantics):
-
-        ACCESSOR-BACKED ARRAYS (dynamic):
-            • Caller must supply at least `count` values.
-            • FakeXP does NOT bounds-check using the plugin's read accessor.
-            • Any exception raised by the plugin's read/write accessors MUST be
-              normalized to ValueError (never leak IndexError, TypeError, etc.).
-            • If plugin read/write fails → ValueError.
-
-        INTERNAL ARRAYS (fixed-size):
-            • Bounds are enforced strictly.
-            • Writing past end → RuntimeError.
-            • Dummy refs: shape is established on first write.
-
-        This matches XPPython3 behavior exactly.
-        """
-
-        ref = self.dm.require_handle(dr)
-
-        # ------------------------------------------------------------
-        # ACCESSOR-BACKED ARRAY (dynamic)
-        # ------------------------------------------------------------
-        if ref.write_array is not None:
-
-            # Caller must supply at least `count` values
-            if len(values) < count:
-                raise ValueError(
-                    f"{ref.path}: accessor array write requires at least {count} values"
-                )
-
-            try:
-                # Optional read: plugin may enforce its own bounds
-                if ref.read_array is not None:
-                    probe = [0.0] * count
-                    ref.read_array(ref.read_refcon, probe, offset, count)
-
-                # Actual write
-                ref.write_array(ref.write_refcon, values, offset, count)
-
-            except Exception as exc:
-                # Normalize ANY plugin exception to ValueError
-                raise ValueError(
-                    f"{ref.path}: accessor array write failed"
-                ) from exc
-
-            return
-
-        # ------------------------------------------------------------
-        # INTERNAL ARRAY (fixed-size)
-        # ------------------------------------------------------------
-        if ref.dummy:
-            self.dm.shape_dummy(ref, expected_type, value=list(values))
-            return
-
-        if offset + count > ref.size:
-            raise ValueError(f"{ref.path}: setDatavf would write past end of dataRef")
-
-        buf = ref.value
-        for i in range(count):
-            buf[offset + i] = values[i]
-
-    # ================================================================
     #  SCALAR GETTERS (thin wrappers)
     # ================================================================
 
     def getDatai(self, dr: XPLMDataRef) -> int:
-        return int(self._get_scalar(dr, self.fake_xp.Type_Int))
+        return int(self.dm.get_value(dr, self.fake_xp.Type_Int))
 
     def getDataf(self, dr: XPLMDataRef) -> float:
-        return float(self._get_scalar(dr, self.fake_xp.Type_Float))
+        return float(self.dm.get_value(dr, self.fake_xp.Type_Float))
 
     def getDatad(self, dr: XPLMDataRef) -> float:
         return self.getDataf(dr)
-
-    def getDatab(self, dr: XPLMDataRef) -> int:
-        return int(self._get_scalar(dr, self.fake_xp.Type_Data))
 
     # ================================================================
     #  ARRAY GETTERS (thin wrappers)
@@ -330,36 +114,42 @@ class FakeXPDataRef:
     def getDatavi(
             self,
             dr: XPLMDataRef,
-            out: Optional[List[int]],
-            offset: int,
-            count: int,
+            values: Optional[List[int]] = None,
+            offset: int = 0,
+            count: int = -1
     ) -> int:
-        return self._get_array(dr, self.fake_xp.Type_IntArray, out, offset, count)
+        return self.dm.get_value(dr, self.fake_xp.Type_IntArray, offset, count, values)
 
     def getDatavf(
             self,
             dr: XPLMDataRef,
-            out: Optional[List[float]],
-            offset: int,
-            count: int,
+            values: Optional[List[float]] = None,
+            offset: int = 0,
+            count: int = -1
     ) -> int:
-        return self._get_array(dr, self.fake_xp.Type_FloatArray, out, offset, count)
+        return self.dm.get_value(dr, self.fake_xp.Type_FloatArray, offset, count, values)
+
+    def getDatab(
+            self,
+            dr: XPLMDataRef,
+            values: Optional[List[int]] = None,
+            offset: int = 0,
+            count: int = -1
+    ) -> int:
+        return self.dm.get_value(dr, self.fake_xp.Type_Data, offset, count, values)
 
     # ================================================================
     #  SCALAR SETTERS (thin wrappers)
     # ================================================================
 
     def setDatai(self, dr: XPLMDataRef, v: int) -> None:
-        self._set_scalar(dr, self.fake_xp.Type_Int, v)
+        self.dm.update_value(dr, self.fake_xp.Type_Int, v)
 
     def setDataf(self, dr: XPLMDataRef, v: float) -> None:
-        self._set_scalar(dr, self.fake_xp.Type_Float, v)
+        self.dm.update_value(dr, self.fake_xp.Type_Float, v)
 
     def setDatad(self, dr: XPLMDataRef, v: float) -> None:
         self.setDataf(dr, v)
-
-    def setDatab(self, dr: XPLMDataRef, v: int) -> None:
-        self._set_scalar(dr, self.fake_xp.Type_Data, v & 0xFF)
 
     # ================================================================
     #  ARRAY SETTERS (thin wrappers)
@@ -369,148 +159,35 @@ class FakeXPDataRef:
             self,
             dr: XPLMDataRef,
             values: Sequence[int],
-            offset: int,
-            count: int,
-    ) -> None:
-        self._set_array(dr, self.fake_xp.Type_IntArray, values, offset, count)
+            offset: int = 0,
+            count: int = -1
+    ) -> int:
+        written = self.dm.update_value(dr, self.fake_xp.Type_IntArray, values, offset, count)
+        assert written is not None
+        return written
 
     def setDatavf(
             self,
             dr: XPLMDataRef,
             values: Sequence[float],
-            offset: int,
-            count: int,
-    ) -> None:
-        self._set_array(dr, self.fake_xp.Type_FloatArray, values, offset, count)
-
-    # ============================================================
-    # DATA BYTE-ARRAY GETTER (getDatabv)
-    # ============================================================
-    def getDatabv(
-            self,
-            dr: XPLMDataRef,
-            out: list[int] | None,
-            offset: int,
-            count: int
+            offset: int = 0,
+            count: int = -1
     ) -> int:
-        """
-        Strongly typed DATA byte-array getter.
+        written = self.dm.update_value(dr, self.fake_xp.Type_FloatArray, values, offset, count)
+        assert written is not None
+        return written
 
-        • Accessor-backed:
-              - count < 0 → full length (probe)
-              - out=None  → return length
-              - out!=None → read into caller buffer
-        • Internal:
-              - out=None  → return len(ref.value)
-              - count < 0 → read to end
-              - out!=None → copy bytes
-        """
-        ref = self.fake_xp.dataref_manager.require_handle(dr)
-
-        # -------------------------
-        # Accessor-backed DATA
-        # -------------------------
-        if ref.read_array is not None:
-            # Normalize count
-            if count < 0:
-                probe = [0] * 4096
-                n = ref.read_array(ref.read_refcon, probe, offset, 4096)
-                count = max(0, n - offset)
-
-            if out is None:
-                tmp = [0] * count
-                n = ref.read_array(ref.read_refcon, tmp, offset, count)
-                return n
-
-            return ref.read_array(ref.read_refcon, out, offset, count)
-
-        # -------------------------
-        # Internal DATA
-        # -------------------------
-        if ref.dummy:
-            self.fake_xp.dataref_manager.shape_dummy(ref, self.fake_xp.Type_Data)
-
-        buf: bytearray = ref.value
-        total = len(buf)
-
-        if out is None:
-            return total
-
-        if offset < 0 or offset > total:
-            raise ValueError("invalid offset for getDatabv")
-
-        if count < 0:
-            count = total - offset
-
-        end = min(offset + count, total)
-        n = end - offset
-
-        if n > len(out):
-            raise ValueError("array read past end of caller buffer")
-
-        for i in range(n):
-            out[i] = buf[offset + i]
-
-        return n
-
-    # ============================================================
-    # DATA BYTE-ARRAY SETTER (setDatabv)
-    # ============================================================
-    def setDatabv(
+    def setDatab(
             self,
             dr: XPLMDataRef,
-            values: list[int],
-            offset: int,
-            count: int
-    ) -> None:
-        """
-        Strongly typed DATA byte-array setter.
+            values: Sequence[int],
+            offset: int = 0,
+            count: int = -1
+    ) -> int:
+        written = self.dm.update_value(dr, self.fake_xp.Type_Data, values, offset, count)
+        assert written is not None
+        return written
 
-        • Accessor-backed:
-              - len(values) >= count or ValueError
-              - write_array(refcon, values, offset, count)
-        • Internal:
-              - count < 0 → count = len(values)
-              - Bounds checked against len(ref.value)
-              - Writes go through update_value()
-        """
-        ref = self.fake_xp.dataref_manager.require_handle(dr)
-
-        # -------------------------
-        # Accessor-backed DATA
-        # -------------------------
-        if ref.write_array is not None:
-            if count < 0:
-                count = len(values)
-            if len(values) < count:
-                raise ValueError(f"{ref.path}: accessor DATA write requires {count} bytes")
-            ref.write_array(ref.write_refcon, values, offset, count)
-            return
-
-        # -------------------------
-        # Internal DATA
-        # -------------------------
-        if ref.dummy:
-            self.fake_xp.dataref_manager.shape_dummy(ref, self.fake_xp.Type_Data)
-
-        buf: bytearray = ref.value
-        total = len(buf)
-
-        if count < 0:
-            count = len(values)
-
-        if offset < 0 or offset > total:
-            raise ValueError("invalid offset for setDatabv")
-
-        if offset + count > total:
-            raise ValueError("setDatabv would write past end of DATA buffer")
-
-        # update_value handles canonical write + timestamp
-        self.fake_xp.dataref_manager.update_value(ref, values, offset=offset, count=count)
-
-    # ============================================================
-    # STRING GETTER (getDatas)
-    # ============================================================
     def getDatas(
             self,
             dr: XPLMDataRef,
@@ -520,49 +197,30 @@ class FakeXPDataRef:
         """
         Strongly typed DATA string getter.
 
+        • Uses universal get_value() with a buffer
+        • Accessor-backed DATA arrays bypass clipping
+        • Canonical DATA arrays clip
+        • Stops at first NUL
         • Returns UTF‑8 decoded string
-        • Stops at first NUL byte
-        • Uses accessor if present
         """
-        ref = self.fake_xp.dataref_manager.require_handle(dr)
+        buf: list[int] = []
 
-        # Accessor-backed
-        if ref.read_array is not None:
-            if count < 0:
-                probe = [0] * 4096
-                n = ref.read_array(ref.read_refcon, probe, offset, 4096)
-                count = max(0, n - offset)
+        n = self.fake_xp.dataref_manager.get_value(
+            dr,
+            expected_type=self.fake_xp.Type_Data,
+            offset=offset,
+            count=count,
+            values=buf,
+        )
 
-            tmp = [0] * count
-            n = ref.read_array(ref.read_refcon, tmp, offset, count)
-            raw = bytes(tmp[:n])
+        raw = bytes(buf[:n])
 
-        else:
-            # Internal
-            if ref.dummy:
-                self.fake_xp.dataref_manager.shape_dummy(ref, self.fake_xp.Type_Data)
-
-            buf: bytearray = ref.value
-            total = len(buf)
-
-            if offset < 0 or offset > total:
-                raise ValueError("invalid offset for getDatas")
-
-            if count < 0:
-                raw = bytes(buf[offset:])
-            else:
-                raw = bytes(buf[offset:offset + count])
-
-        # Null-terminate
         nul = raw.find(b"\x00")
         if nul >= 0:
             raw = raw[:nul]
 
         return raw.decode("utf-8", errors="ignore")
 
-    # ============================================================
-    # STRING SETTER (setDatas)
-    # ============================================================
     def setDatas(
             self,
             dr: XPLMDataRef,
@@ -574,38 +232,19 @@ class FakeXPDataRef:
         Strongly typed DATA string setter.
 
         • Encodes string as UTF‑8
-        • Writes bytes into DATA buffer
-        • Uses accessor if present
+        • Uses universal update_value()
+        • Accessor-backed DATA arrays bypass canonical logic
+        • Canonical DATA arrays clip and cast via update_value()
         """
-        ref = self.fake_xp.dataref_manager.require_handle(dr)
         encoded = value.encode("utf-8")
 
-        # Accessor-backed
-        if ref.write_array is not None:
-            if count < 0:
-                count = len(encoded)
-            if len(encoded) < count:
-                raise ValueError(f"{ref.path}: accessor DATA write requires {count} bytes")
-            ref.write_array(ref.write_refcon, encoded, offset, count)
-            return
-
-        # Internal
-        if ref.dummy:
-            self.fake_xp.dataref_manager.shape_dummy(ref, self.fake_xp.Type_Data)
-
-        buf: bytearray = ref.value
-        total = len(buf)
-
-        if offset < 0 or offset > total:
-            raise ValueError("invalid offset for setDatas")
-
-        if count < 0:
-            count = total - offset
-
-        if offset + count > total:
-            raise ValueError("setDatas would write past end of DATA buffer")
-
-        self.fake_xp.dataref_manager.update_value(ref, encoded, offset=offset, count=count)
+        self.fake_xp.dataref_manager.update_value(
+            dr=dr,
+            expected_type=self.fake_xp.Type_Data,
+            value=encoded,
+            offset=offset,
+            count=count,
+        )
 
     # -------------------------
     # Registration / publishing

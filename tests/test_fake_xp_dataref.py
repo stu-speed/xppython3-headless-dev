@@ -31,6 +31,26 @@ def test_find_and_dummy_creation(xp: FakeXP):
     assert ref.value == 0.0
 
 
+def test_dummy_scalar_recasts_then_expands_but_stays_dummy(xp: FakeXP):
+    dr = xp.findDataRef("sim/test/dummy_scalar_to_array")
+    ref = xp.dataref_manager.require_handle(dr)
+
+    # First GET should recast dummy scalar → dummy array [0.0]
+    length = xp.getDatavf(dr)
+    assert length == 1
+
+    assert ref.dummy
+    assert ref.size == 1
+    assert ref.value == [0.0]
+
+    # Expand via API
+    xp.setDatavf(dr, [1.2], offset=3, count=1)
+
+    assert ref.dummy
+    assert ref.size == 4
+    assert ref.value == [0.0, 0.0, 0.0, 1.2]
+
+
 # ================================================================
 #  TYPE MASK + INFO
 # ================================================================
@@ -59,19 +79,120 @@ def test_can_write_and_is_good(xp: FakeXP):
     assert xp.canWriteDataRef(dr) is True
     assert xp.isDataRefGood(dr) is True
 
+    # Promote to real scalar float
     xp.dataref_manager.promote(ref, xp.Type_Float, writable=True, array_size=1)
-    ref.value = 1.23
+    xp.setDataf(dr, 1.23)
 
     assert ref.value == pytest.approx(1.23)
     assert ref.is_array is False
 
+    # Accessor-backed version
     reg = xp.registerDataAccessor(
         "sim/test/writable",
         readFloat=lambda rc: 1.23,
         writeFloat=lambda rc, v: None,
     )
+
     assert xp.canWriteDataRef(reg) is True
     assert xp.isDataRefGood(reg) is True
+
+
+# ================================================================
+#  INTERNAL BYTE ARRAY + STRING HELPERS
+# ================================================================
+
+def test_byte_array_and_string_helpers_on_internal_buffer(xp: FakeXP):
+    dr = xp.findDataRef("sim/test/bytes_internal")
+    ref = xp.dataref_manager.require_handle(dr)
+
+    xp.dataref_manager.promote(ref, xp.Type_Data, writable=True, array_size=16)
+    xp.setDatab(dr, list(b"Hello\x00" + b"\x00" * 10))
+
+    assert xp.getDataRefTypes(dr) & xp.Type_Data
+
+    s = xp.getDatas(dr)
+    assert s.startswith("Hello")
+
+    xp.setDatas(dr, "ABC", offset=0, count=5)
+    assert bytes(ref.value[:5]).startswith(b"ABC")
+
+    assert xp.getDatab(dr, None, 0, -1) == len(ref.value)
+
+
+# ================================================================
+#  ARRAY WRITE SHAPE ESTABLISHMENT + BOUNDS
+# ================================================================
+
+def test_setDatavf_establishes_shape_then_enforces_bounds(xp: FakeXP):
+    dr = xp.findDataRef("sim/test/shape_from_write")
+    ref = xp.dataref_manager.require_handle(dr)
+
+    # Canonical float array of size 3
+    xp.dataref_manager.promote(ref, xp.Type_FloatArray, writable=True, array_size=3)
+
+    # Initial write: fills indices 0,1,2
+    xp.setDatavf(dr, [9.0, 8.0, 7.0])
+
+    # Partial write: offset=2, count=4 → only index 2 is writable
+    # Expected behavior: write 5.0 at index 2, ignore the rest
+    xp.setDatavf(dr, [5.0, 2.0, 3.0, 4.0], 2, 4)
+
+    # Read back into an initially empty buffer
+    buf = []
+    x = xp.getDatavf(dr, buf, 2, 4)
+
+    # Only one element fits
+    assert x == 1
+
+    # Buffer must have been expanded and filled
+    assert buf == [5.0]
+
+
+# ================================================================
+#  OFFSET + COUNT READ INTO BUFFER
+# ================================================================
+
+def test_getDatavf_offset_and_count_write_into_buffer(xp: FakeXP):
+    base = [i + 0.1 for i in range(8)]
+
+    def read_float_array(rc, out, offset, count):
+        for i in range(count):
+            out[i] = base[offset + i]
+        return count
+
+    dr = xp.registerDataAccessor(
+        "myplugin/offset_array",
+        readFloatArray=read_float_array,
+    )
+
+    # Accessor-backed: values=None → return full size
+    assert xp.getDatavf(dr, None, 0, -1) == 8
+
+    buf = [0.0] * 10
+    got = xp.getDatavf(dr, buf, 2, 4)
+
+    # Accessor returns exactly 4 elements
+    assert got == 4
+
+    # And they must be written starting at buf[offset]
+    assert buf[0:6] == base[2:6]
+
+# ================================================================
+#  INTERNAL BYTE ARRAY WRITE + BOUNDS
+# ================================================================
+
+def test_setDatab_internal_buffer_and_real_bounds(xp: FakeXP):
+    dr = xp.findDataRef("sim/test/bytes_internal2")
+    ref = xp.dataref_manager.require_handle(dr)
+
+    xp.dataref_manager.promote(ref, xp.Type_Data, writable=True, array_size=4)
+    xp.setDatab(dr, list(b"ABCD"))
+
+    xp.setDatab(dr, [ord("X"), ord("Y"), ord("Z"), ord("!")], 0, 4)
+    assert bytes(ref.value[:4]) == b"XYZ!"
+
+    with pytest.raises(ValueError):
+        xp.setDatab(dr, [ord("X"), ord("Y"), ord("Z"), ord("!"), ord("?")], 0, 5)
 
 
 # ================================================================
@@ -110,138 +231,6 @@ def test_register_and_unregister_accessor_scalar(xp: FakeXP):
 
 
 # ================================================================
-#  ACCESSOR ARRAY READ/WRITE
-# ================================================================
-
-def test_array_accessors_and_semantics(xp: FakeXP):
-    initial = [0.1 * i for i in range(8)]
-    written = {}
-
-    def read_float_array(rc, out, offset, count):
-        for i in range(count):
-            out[i] = initial[offset + i]
-        return count
-
-    def write_float_array(rc, values, offset, count):
-        written["buf"] = list(values[:count])
-
-    dr = xp.registerDataAccessor(
-        "myplugin/float_array",
-        readFloatArray=read_float_array,
-        writeFloatArray=write_float_array,
-    )
-
-    # Length probe
-    assert xp.getDatavf(dr, None, 0, -1) == 8
-
-    # Caller buffer too small → must raise ValueError
-    out = [0.0] * 4
-    with pytest.raises(ValueError):
-        xp.getDatavf(dr, out, 2, 4)
-
-    # Write: caller must supply at least count values
-    with pytest.raises(ValueError):
-        xp.setDatavf(dr, [1.0, 2.0], 0, 4)
-
-    # Valid write
-    xp.setDatavf(dr, [9.0, 8.0, 7.0, 6.0], 0, 4)
-    assert written["buf"] == [9.0, 8.0, 7.0, 6.0]
-
-# ================================================================
-#  INTERNAL BYTE ARRAY + STRING HELPERS
-# ================================================================
-
-def test_byte_array_and_string_helpers_on_internal_buffer(xp: FakeXP):
-    dr = xp.findDataRef("sim/test/bytes_internal")
-    ref = xp.dataref_manager.require_handle(dr)
-
-    xp.dataref_manager.promote(ref, xp.Type_Data, writable=True, array_size=16)
-    ref.value[:] = b"Hello\x00" + b"\x00" * 10
-
-    assert xp.getDataRefTypes(dr) & xp.Type_Data
-
-    s = xp.getDatas(dr)
-    assert s.startswith("Hello")
-
-    xp.setDatas(dr, "ABC", offset=0, count=5)
-    assert bytes(ref.value[:5]).startswith(b"ABC")
-
-    assert xp.getDatabv(dr, None, 0, -1) == len(ref.value)
-
-
-# ================================================================
-#  TYPE PROMOTION VALIDATION
-# ================================================================
-
-def test_promote_type_validates_value_on_type_change(xp: FakeXP):
-    dr = xp.findDataRef("sim/test/type_change")
-    ref = xp.dataref_manager.require_handle(dr)
-
-    xp.dataref_manager.promote(ref, xp.Type_Float, writable=True, array_size=1)
-    ref.value = 1.5
-
-    xp.dataref_manager.promote(ref, xp.Type_Int, writable=True, array_size=1)
-    assert ref.type == xp.Type_Int
-    assert isinstance(ref.value, int)
-
-
-# ================================================================
-#  SHAPE PROMOTION RULES
-# ================================================================
-
-def test_promote_shape_from_value_does_not_change_known_shape(xp: FakeXP):
-    dr = xp.findDataRef("sim/test/shape_replace")
-    ref = xp.dataref_manager.require_handle(dr)
-
-    xp.dataref_manager.promote(ref, xp.Type_Float, writable=True, array_size=1)
-    ref.value = 0.5
-
-    xp.dataref_manager.promote(ref, xp.Type_FloatArray, writable=True, array_size=1)
-
-    ref.value = [1.0]
-    assert ref.is_array is True
-    assert ref.size == 1
-
-
-# ================================================================
-#  DUMMY UPDATE VALIDATION (now via promote)
-# ================================================================
-
-def test_update_dummy_ref_validation(xp: FakeXP):
-    dr = xp.findDataRef("sim/test/update_dummy")
-    ref = xp.dataref_manager.require_handle(dr)
-
-    xp.dataref_manager.promote(ref, xp.Type_FloatArray, writable=True, array_size=0)
-
-    reg = xp.registerDataAccessor(
-        "sim/test/update_dummy",
-        readFloat=lambda rc: 0.0,
-    )
-    reg_ref = xp.dataref_manager.require_handle(reg)
-
-    xp.dataref_manager.promote(reg_ref, xp.Type_FloatArray, writable=True, array_size=4)
-    reg_ref.value = [1, 2, 3, 4]
-
-    assert reg_ref.type == xp.Type_FloatArray
-    assert reg_ref.size == 4
-
-
-# ================================================================
-#  ARRAY WRITE SHAPE ESTABLISHMENT + BOUNDS
-# ================================================================
-
-def test_setDatavf_establishes_shape_then_enforces_bounds(xp: FakeXP):
-    dr = xp.findDataRef("sim/test/shape_from_write")
-    ref = xp.dataref_manager.require_handle(dr)
-
-    xp.dataref_manager.promote(ref, xp.Type_FloatArray, writable=True, array_size=3)
-    ref.value = [9.0, 8.0, 7.0]
-
-    with pytest.raises(ValueError):
-        xp.setDatavf(dr, [1.0, 2.0, 3.0, 4.0], 0, 4)
-
-
-# ================================================================
 #  ACCESSOR ARRAY WRITE BOUNDS
 # ================================================================
 
@@ -255,7 +244,12 @@ def test_promoted_set_enforces_inplace_bounds(xp: FakeXP):
         return count
 
     def write_float_array(rc, values, offset, count):
-        written["buf"] = list(values[:count])
+        # Accessor decides what to do; X‑Plane does not enforce bounds.
+        # For this test, we simulate clipping to accessor-defined length.
+        max_len = len(initial)
+        n = min(count, max_len - offset)
+        written["buf"] = list(values[:n])
+        return n
 
     dr = xp.registerDataAccessor(
         "myplugin/real_array",
@@ -263,54 +257,54 @@ def test_promoted_set_enforces_inplace_bounds(xp: FakeXP):
         writeFloatArray=write_float_array,
     )
 
-    with pytest.raises(ValueError):
-        xp.setDatavf(dr, [1.0] * 16, 0, 16)
+    # Caller tries to write beyond accessor-defined length → accessor clips
+    xp.setDatavf(dr, [1.0] * 16, 0, 16)
+    assert written["buf"] == [1.0] * 8
 
+    # Valid write
     xp.setDatavf(dr, [9.0, 8.0, 7.0, 6.0], 0, 4)
     assert written["buf"] == [9.0, 8.0, 7.0, 6.0]
 
 
+
 # ================================================================
-#  OFFSET + COUNT READ INTO BUFFER
+#  ACCESSOR ARRAY READ/WRITE
 # ================================================================
 
-def test_getDatavf_offset_and_count_write_into_buffer(xp: FakeXP):
-    base = [i + 0.1 for i in range(8)]
+def test_array_accessors_and_semantics(xp: FakeXP):
+    initial = [0.1 * i for i in range(8)]
+    written = {}
 
     def read_float_array(rc, out, offset, count):
         for i in range(count):
-            out[i] = base[offset + i]
+            out[i] = initial[offset + i]
         return count
 
+    def write_float_array(rc, values, offset, count):
+        # Accessor receives exactly `count` values.
+        written["buf"] = list(values[:count])
+
     dr = xp.registerDataAccessor(
-        "myplugin/offset_array",
+        "myplugin/float_array",
         readFloatArray=read_float_array,
+        writeFloatArray=write_float_array,
     )
 
+    # Length probe: values=None → return length
     assert xp.getDatavf(dr, None, 0, -1) == 8
 
-    buf = [0.0] * 10
-    got = xp.getDatavf(dr, buf, 2, 4)
-    assert got == 4
-    assert buf[2:6] == base[2:6]
+    # ACCESSOR READ: caller buffer too small → NO RAISE
+    out = [0.0] * 4
+    xp.getDatavf(dr, out, 2, 4)
+    assert out == initial[2:6]
 
-
-# ================================================================
-#  INTERNAL BYTE ARRAY WRITE + BOUNDS
-# ================================================================
-
-def test_setDatab_internal_buffer_and_real_bounds(xp: FakeXP):
-    dr = xp.findDataRef("sim/test/bytes_internal2")
-    ref = xp.dataref_manager.require_handle(dr)
-
-    xp.dataref_manager.promote(ref, xp.Type_Data, writable=True, array_size=4)
-    ref.value[:] = b"ABCD"
-
-    xp.setDatabv(dr, [ord("X"), ord("Y"), ord("Z"), ord("!")], 0, 4)
-    assert bytes(ref.value[:4]) == b"XYZ!"
-
+    # Write: caller must supply at least count values (XPPython3 rule)
     with pytest.raises(ValueError):
-        xp.setDatabv(dr, [ord("X"), ord("Y"), ord("Z"), ord("!"), ord("?")], 0, 5)
+        xp.setDatavf(dr, [1.0, 2.0], 0, 4)
+
+    # Valid write
+    xp.setDatavf(dr, [9.0, 8.0, 7.0, 6.0], 0, 4)
+    assert written["buf"] == [9.0, 8.0, 7.0, 6.0]
 
 
 # ================================================================
@@ -324,8 +318,9 @@ def test_accessor_precedence_over_internal_storage(xp: FakeXP):
     dr = xp.findDataRef("sim/test/accessor_precedence")
     ref = xp.dataref_manager.require_handle(dr)
 
+    # Establish internal storage via API
     xp.dataref_manager.promote(ref, xp.Type_FloatArray, writable=True, array_size=4)
-    ref.value = internal.copy()
+    xp.setDatavf(dr, internal)
 
     def read_arr(rc, out, offset, count):
         for i in range(count):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast, Dict, TYPE_CHECKING
+from typing import Any, Dict, TYPE_CHECKING, cast
 
 from simless.libs.fake_xp_types import DPGOp, WidgetInfo, WindowExInfo
 from xp_typing import XPWidgetID, XPWidgetMessage
@@ -161,8 +161,8 @@ class WidgetRender:
                     height=10,
 
                     # Critical flags:
-                    no_scrollbar=True, # XPWidgets do not scroll unless explicitly a scroll widget
-                    border=False,      # XPWidgets do not draw borders for controls
+                    no_scrollbar=True,  # XPWidgets do not scroll unless explicitly a scroll widget
+                    border=False,  # XPWidgets do not draw borders for controls
                     autosize_x=False,  # XPWidgets use fixed geometry
                     autosize_y=False,  # XPWidgets use fixed geometry
                 ),
@@ -675,9 +675,9 @@ class WidgetRender:
         # TEXT‑BASED WIDGETS (caption, textfield, button)
         # ---------------------------------------------------------
         if wc in (
-            self.mgr.fake_xp.WidgetClass_Caption,
-            self.mgr.fake_xp.WidgetClass_TextField,
-            self.mgr.fake_xp.WidgetClass_Button,
+                self.mgr.fake_xp.WidgetClass_Caption,
+                self.mgr.fake_xp.WidgetClass_TextField,
+                self.mgr.fake_xp.WidgetClass_Button,
         ):
             w, h = self.mgr.fake_xp.graphics_manager.dpg_get_text_size(text)
             w, h = int(w), int(h)
@@ -686,4 +686,3 @@ class WidgetRender:
             info.local_geom.width = max(info.local_geom.width, w + spacing)
             info.local_geom.height = max(info.local_geom.height, h)
             return
-

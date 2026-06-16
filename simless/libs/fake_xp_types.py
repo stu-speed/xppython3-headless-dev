@@ -7,20 +7,24 @@ from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from typing import Any, Callable, Dict, List, MutableSequence, Optional, Sequence, Tuple
 
-from simless.libs.fake_xp_constants import lookup_constant_name, Type_Data, Type_IntArray, Type_FloatArray
+from simless.libs.fake_xp_constants import Type_Data, Type_FloatArray, Type_IntArray, lookup_constant_name
 from xp_typing import (XPLMCommandPhase, XPLMCommandRef, XPLMCursorStatus, XPLMDataRef, XPLMDataTypeID, XPLMMenuCheck,
                        XPLMMenuID, XPLMMouseStatus, XPLMWindowDecoration, XPLMWindowID, XPLMWindowLayer, XPWidgetClass,
                        XPWidgetID, XPWidgetMessage, XPWidgetPropertyID)
 
 XPWidgetCallback = Callable[[XPWidgetMessage | int, XPWidgetID, Any, Any], int]
 
-# Scalar callbacks
 ReadScalar = Callable[[Any], float | int]
 WriteScalar = Callable[[Any, float | int], None]
+ReadArray = Callable[
+    [Any, Optional[MutableSequence[int | float]], int, int],
+    int
+]
+WriteArray = Callable[
+    [Any, Sequence[int | float], int, int],
+    None
+]
 
-# Array callbacks
-ReadArray = Callable[[Any, MutableSequence[Any], int, int], int]
-WriteArray = Callable[[Any, Sequence[Any], int, int], None]
 
 
 class XPShutdown(Exception):
