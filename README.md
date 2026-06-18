@@ -114,13 +114,13 @@ Development workflow features:
 • Debug plugins in the IDE debugger using a simless runner  
 • Run with live X‑Plane DataRefs through a dataref bridge  
 
-See PYCHARM_CONFIGURATION.md for full setup instructions.
+See [PYCHARM_CONFIGURATION.md](docs/PYCHARM_CONFIGURATION.md) for full setup instructions.
 
-See DEVELOPER_NOTES.md for special considerations for running Python in X‑Plane.
+See [DEVELOPER_NOTES.md](docs/DEVELOPER_NOTES.md) for special considerations for running Python in X‑Plane.
 
-See AI_CODING_GUIDE.md for generating AI code within this project structure.
+See [AI_CODING_GUIDE.md](docs/AI_CODING_GUIDE.md) for generating AI code within this project structure.
 
-See GUI_EMULATION.md for special considerations for GUI usage.
+See [GUI_EMULATION.md](docs/GUI_EMULATION.md) for special considerations for GUI usage.
 
 ---------------------------------------------------------------------
 
