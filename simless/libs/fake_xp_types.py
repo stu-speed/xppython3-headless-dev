@@ -102,6 +102,7 @@ class FakeDataRef:
     # Dummy flag
     # -------------------------
     dummy: bool
+    cached: bool
 
     last_modified: float = field(default_factory=time.monotonic)
 
@@ -145,10 +146,13 @@ class FakeDataRef:
         Derived lifecycle phase:
           D = Dummy      (dummy=True)
           A = Accessor   (dummy=False and callbacks present)
+          C = Cached from a prev bridge connection
           X = Canonical  (dummy=False and no callbacks)
         """
         if self.dummy:
             return "D"
+        if self.cached:
+            return "C"
         if self.read_scalar or self.read_array:
             return "A"
         return "X"

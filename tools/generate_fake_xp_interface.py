@@ -308,6 +308,7 @@ def generate_fake_xp_pyi():
     out.append("    widget_manager: WidgetManager")
     out.append("    dataref_manager: DataRefManager")
     out.append("    menu_manager: MenuManager")
+    out.append("    dataref_cache: DataRefCache")
     out.append("")
 
     # Explicit constructor so PyCharm knows FakeXP accepts these arguments
@@ -324,6 +325,7 @@ def generate_fake_xp_pyi():
     out.append("    _xplane_root: Path")
     out.append("    _sim_log: Path")
     out.append("    _xpp_log: Path")
+    out.append("    _dataref_cache_path: Path")
 
     out.append("    def _init_flightloop(self) -> None: ...")
     out.append("    def _init_utilities(self) -> None: ...")

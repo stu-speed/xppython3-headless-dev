@@ -1,0 +1,40 @@
+{"path": "sim/version/xplane_internal_version", "type": 1, "size": 1, "writable": true, "value": 124201}
+{"path": "sim/flightmodel/position/latitude", "type": 6, "size": 1, "writable": true, "value": 45.596402334229495}
+{"path": "sim/flightmodel/position/longitude", "type": 6, "size": 1, "writable": true, "value": -122.59975918233474}
+{"path": "sim/flightmodel/position/elevation", "type": 6, "size": 1, "writable": true, "value": 7.170826253701023}
+{"path": "sim/flightmodel/position/groundspeed", "type": 2, "size": 1, "writable": true, "value": 9.046561899594963e-05}
+{"path": "sim/flightmodel/position/hpath", "type": 2, "size": 1, "writable": true, "value": 315.4249267578125}
+{"path": "sim/flightmodel2/gear/on_ground", "type": 16, "size": 10, "writable": true, "value": [1, 1, 1, 0, 0, 0, 0, 0, 0, 0]}
+{"path": "sim/weather/region/wind_altitude_msl_m", "type": 8, "size": 13, "writable": true, "value": [0.0, 540.1055908203125, 988.4664306640625, 1948.2816162109375, 3010.814453125, 4206.544921875, 5572.048828125, 7182.30712890625, 9160.154296875, 10362.8955078125, 11887.2001953125, 13594.080078125, 16179.3935546875]}
+{"path": "sim/weather/region/wind_direction_degt", "type": 8, "size": 13, "writable": true, "value": [353.8232421875, 344.9146423339844, 337.9875793457031, 347.23699951171875, 336.9518127441406, 321.6321716308594, 309.5375061035156, 306.4455261230469, 293.47998046875, 284.997802734375, 283.1709899902344, 269.90203857421875, 306.3099365234375]}
+{"path": "sim/weather/region/wind_speed_msc", "type": 8, "size": 13, "writable": true, "value": [2.0486438274383545, 4.586353778839111, 5.045718669891357, 9.11207389831543, 15.843381881713867, 23.425058364868164, 19.659481048583984, 21.26607322692871, 26.457563400268555, 25.523860931396484, 22.964580535888672, 13.732514381408691, 6.093407154083252]}
+{"path": "sim/weather/region/shear_direction_degt", "type": 8, "size": 13, "writable": true, "value": [2.0064055919647217, 2.244675397872925, 2.3160972595214844, 2.442728042602539, 2.496500253677368, 2.5298361778259277, 2.5294125080108643, 2.5062737464904785, 2.470588445663452, 2.4241514205932617, 2.332836627960205, 2.313534736633301, 0.0]}
+{"path": "sim/weather/region/shear_speed_msc", "type": 8, "size": 13, "writable": true, "value": [0.44655898213386536, 0.713771402835846, 0.7943356037139893, 0.8377653360366821, 0.8562071323394775, 0.8676401376724243, 0.8674948215484619, 0.8595591187477112, 0.8473203778266907, 0.8313941955566406, 0.8000765442848206, 0.7934567332267761, 0.0]}
+{"path": "sim/weather/region/turbulence", "type": 8, "size": 13, "writable": true, "value": [0.023380953818559647, 0.024353088811039925, 0.025734413415193558, 0.027141423895955086, 0.027738891541957855, 0.028109289705753326, 0.02810458280146122, 0.02784748561680317, 0.027450982481241226, 0.026935014873743057, 0.025920405983924866, 0.025705941021442413, 0.0]}
+{"path": "sim/weather/region/temperatures_aloft_deg_c", "type": 8, "size": 13, "writable": true, "value": [23.996450424194336, 16.570722579956055, 12.263544082641602, 9.6688232421875, 7.378365516662598, 2.9985361099243164, -6.740474700927734, -19.798276901245117, -35.05610275268555, -45.20567321777344, -55.85163879394531, -59.8211669921875, -64.76631164550781]}
+{"path": "sim/weather/region/dewpoint_deg_c", "type": 8, "size": 13, "writable": true, "value": [6.676093578338623, 4.177309513092041, 1.1672945022583008, -13.66796588897705, -29.4033145904541, -29.043174743652344, -26.3685302734375, -33.312232971191406, -44.10325622558594, -51.49300003051758, -61.42879867553711, -75.90608215332031, -83.68627166748047]}
+{"path": "sim/weather/region/cloud_tops_msl_m", "type": 8, "size": 3, "writable": true, "value": [4251.9306640625, 0.0, 0.0]}
+{"path": "sim/weather/region/cloud_base_msl_m", "type": 8, "size": 3, "writable": true, "value": [866.2987670898438, 0.0, 0.0]}
+{"path": "sim/weather/region/cloud_coverage_percent", "type": 8, "size": 3, "writable": true, "value": [0.2448703646659851, 0.0, 0.0]}
+{"path": "sim/weather/region/cloud_type", "type": 8, "size": 3, "writable": true, "value": [2.0425145626068115, 0.0, 0.0]}
+{"path": "sim/time/local_time_sec", "type": 2, "size": 1, "writable": true, "value": 25176.8984375}
+{"path": "sim/weather/region/weather_source", "type": 1, "size": 1, "writable": true, "value": 1}
+{"path": "sim/weather/region/sealevel_temperature_c", "type": 2, "size": 1, "writable": true, "value": 19.18328857421875}
+{"path": "sim/weather/aircraft/temperature_ambient_deg_c", "type": 2, "size": 1, "writable": true, "value": 19.118364334106445}
+{"path": "sim/weather/aircraft/visibility_reported_sm", "type": 2, "size": 1, "writable": true, "value": 29.86687469482422}
+{"path": "sim/weather/region/qnh_pas", "type": 2, "size": 1, "writable": true, "value": 101731.2109375}
+{"path": "sim/weather/aircraft/wind_now_direction_degt", "type": 2, "size": 1, "writable": true, "value": 327.1424560546875}
+{"path": "sim/weather/aircraft/wind_now_speed_msc", "type": 2, "size": 1, "writable": true, "value": 1.5819480419158936}
+{"path": "sim/weather/region/rain_percent", "type": 2, "size": 1, "writable": true, "value": 0.0}
+{"path": "sim/weather/region/runway_friction", "type": 2, "size": 1, "writable": true, "value": 0.0}
+{"path": "sim/weather/region/thermal_rate_ms", "type": 2, "size": 1, "writable": true, "value": 0.0}
+{"path": "sim/flightmodel/position/magnetic_variation", "type": 2, "size": 1, "writable": true, "value": -14.459287643432617}
+{"path": "sim/flightmodel/position/local_vy", "type": 2, "size": 1, "writable": true, "value": 2.374596533627482e-06}
+{"path": "sim/private/controls/weather/allow_initial_snow_coverage", "type": 2, "size": 1, "writable": true, "value": 1.0}
+{"path": "sim/private/controls/wxr/snow_now", "type": 2, "size": 1, "writable": true, "value": 0.0}
+{"path": "sim/private/controls/snow/luma_b", "type": 2, "size": 1, "writable": true, "value": 0.0}
+{"path": "sim/private/controls/twxr/snow_area_width", "type": 2, "size": 1, "writable": true, "value": 0.25}
+{"path": "sim/private/controls/twxr/snow_area_scale", "type": 2, "size": 1, "writable": true, "value": 500.0}
+{"path": "sim/private/controls/twxr/snow/noise_depth", "type": 2, "size": 1, "writable": true, "value": 0.03999999910593033}
+{"path": "sim/private/controls/wxr/puddles_now", "type": 2, "size": 1, "writable": true, "value": 0.0}
+{"path": "sim/private/controls/wxr/ice_now", "type": 2, "size": 1, "writable": true, "value": 0.0}

@@ -30,7 +30,7 @@ from threading import RLock
 from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING
 
 from simless.libs.fake_xp_types import FakeDataRef, ReadArray, ReadScalar, WriteArray, WriteScalar
-from xp_typing import XPLMDataRef
+from xp_typing import XPLMDataRef, XPLMDataTypeID
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
@@ -106,10 +106,20 @@ class DataRefManager:
         """Register a new FakeDataRef handle."""
 
         ref = self._create_dummy(name)
+
         with self._handles_lock:
             self._handles[str(name)] = ref
             self._df_id_to_path[ref.df_id] = name
         self._last_updated = time.monotonic()
+
+        cache_info = self.fake_xp.dataref_cache.get_cached_info(ref.path)
+        if cache_info is not None:
+            self.promote(ref, dtype=cache_info.type, writable=cache_info.writable, array_size=cache_info.size,
+                         cached=True)
+            self.update_value(ref.df_id, ref.type, cache_info.value)
+        if cache_info is None:
+            print("hello")
+
         return ref
 
     def del_handle(self, ref_id: XPLMDataRef) -> None:
@@ -159,6 +169,7 @@ class DataRefManager:
             write_refcon=None,
 
             dummy=True,
+            cached=False,
             last_modified=now
         )
         self._next_df_id += 1
@@ -169,7 +180,8 @@ class DataRefManager:
             ref: FakeDataRef,
             dtype: int,
             writable: bool,
-            array_size: Optional[int],
+            cached: bool = False,
+            array_size: Optional[int] = None,
             read_scalar: Optional[ReadScalar] = None,
             write_scalar: Optional[WriteScalar] = None,
             read_array: Optional[ReadArray] = None,
@@ -235,33 +247,16 @@ class DataRefManager:
             ref.writable = writable
             ref.size = new_size
             ref.dummy = False
+            ref.cached = cached
 
     def get_value(
             self,
             dr: XPLMDataRef,
-            expected_type: int,
+            desired_type: XPLMDataTypeID | int,
             offset: int = 0,
             count: int = -1,
             values: Optional[list] = None,
     ):
-        """
-        Universal XPPython3‑accurate read path.
-
-        Return semantics:
-          • Scalar:
-                values is None → return scalar value
-                values is list → write 1 element, return 1
-
-          • Array:
-                values is None → return Python list slice
-                values is list → clear+fill list, return number of elements written
-
-        Additional behavior:
-          • Dummy refs are shaped using expected_type
-          • Promoted refs must match expected_type or raise
-          • Accessor arrays bypass clipping
-          • Canonical arrays clip instead of raising
-        """
         fxp = self.fake_xp
 
         # ------------------------------------------------------------
@@ -275,42 +270,54 @@ class DataRefManager:
         if ref.dummy:
             self.shape_dummy(
                 ref,
-                expected_type,
+                desired_type,
                 value=values,
                 offset=offset,
                 count=count,
             )
         else:
-            if ref.type != expected_type:
+            if not self._is_compatible(ref.type, desired_type):
                 raise TypeError(
-                    f"{ref.path}: expected type {expected_type}, "
+                    f"{ref.path}: expected type {desired_type}, "
                     f"but DataRef is promoted as {ref.type}"
                 )
 
-        dtype = ref.type
+        ref_type = ref.type
 
-        # ------------------------------------------------------------
-        # 2. SCALAR READ
-        # ------------------------------------------------------------
-        if not ref.is_array:
-            # Accessor-backed scalar
-            if ref.read_scalar:
-                try:
-                    v = ref.read_scalar(ref.read_refcon)
-                except Exception as e:
-                    raise TypeError(f"{ref.path}: accessor read failed") from e
+        # ============================================================
+        # 2. SCALAR REQUEST (desired_type is scalar)
+        # ============================================================
+        if desired_type in (fxp.Type_Float, fxp.Type_Int, fxp.Type_Double):
+
+            # Underlying scalar
+            if not ref.is_array:
+                if ref.read_scalar:
+                    try:
+                        v = ref.read_scalar(ref.read_refcon)
+                    except Exception as e:
+                        raise TypeError(f"{ref.path}: accessor read failed") from e
+                else:
+                    v = ref.value
+
+            # Underlying array → take element 0
             else:
-                v = ref.value
+                if ref.read_array:
+                    tmp = [0]
+                    try:
+                        ref.read_array(ref.read_refcon, tmp, 0, 1)
+                    except Exception as e:
+                        raise TypeError(f"{ref.path}: accessor array read failed") from e
+                    v = tmp[0]
+                else:
+                    v = ref.value[0]
 
-            # Normalize scalar type
-            if dtype & fxp.Type_Data:
-                v = int(v[0])
-            elif dtype & (fxp.Type_Float | fxp.Type_Double):
+            # Normalize scalar to desired type
+            if desired_type == fxp.Type_Float:
                 v = float(v)
-            elif dtype & fxp.Type_Int:
+            elif desired_type == fxp.Type_Int:
                 v = int(v)
-            else:
-                raise TypeError(f"{ref.path}: unsupported scalar dtype {dtype}")
+            elif desired_type == fxp.Type_Double:
+                v = float(v)
 
             # Write into caller buffer?
             if values is not None:
@@ -320,23 +327,44 @@ class DataRefManager:
 
             return v
 
-        # ------------------------------------------------------------
-        # 3. ARRAY READ
-        # ------------------------------------------------------------
+        # ============================================================
+        # 3. ARRAY REQUEST (desired_type is array)
+        # ============================================================
+
+        # Scalar → array conversion
+        if not ref.is_array:
+            if ref.read_scalar:
+                try:
+                    v = ref.read_scalar(ref.read_refcon)
+                except Exception as e:
+                    raise TypeError(f"{ref.path}: accessor read failed") from e
+            else:
+                v = ref.value
+
+            # Convert scalar → array of length 1
+            if desired_type == fxp.Type_FloatArray:
+                arr = [float(v)]
+            elif desired_type == fxp.Type_IntArray:
+                arr = [int(v)]
+            else:
+                raise TypeError(f"{ref.path}: unsupported array desired_type {desired_type}")
+
+            if values is not None:
+                values.clear()
+                values.extend(arr)
+            return 1
+
+        # Underlying is array
         arr = ref.value
         size = len(arr)
 
-        # Normalize offset
+        # Normalize offset/count
         if offset < 0:
             offset = 0
-
-        # Normalize count
-        if count  < 0:
+        if count < 0:
             count = size - offset
 
-        # ------------------------------------------------------------
-        # ACCESSOR-BACKED ARRAY (NO CLIPPING)
-        # ------------------------------------------------------------
+        # Accessor-backed array
         if ref.read_array:
             tmp = [0] * count
             try:
@@ -350,27 +378,23 @@ class DataRefManager:
 
             return got
 
-        # ------------------------------------------------------------
-        # CANONICAL ARRAY (CLIP LIKE XPPYTHON3)
-        # ------------------------------------------------------------
+        # Canonical array
         if offset >= size:
             if values is not None:
                 values.clear()
             return 0
 
         count = min(count, size - offset)
+        slice_ = arr[offset: offset + count]
 
-        # Slice canonical data
-        if dtype & fxp.Type_FloatArray:
-            result = [float(x) for x in arr[offset: offset + count]]
-        elif dtype & fxp.Type_IntArray:
-            result = [int(x) for x in arr[offset: offset + count]]
-        elif dtype & fxp.Type_Data:
-            result = arr[offset: offset + count]
+        # Normalize array to desired type
+        if desired_type == fxp.Type_FloatArray:
+            result = [float(x) for x in slice_]
+        elif desired_type == fxp.Type_IntArray:
+            result = [int(x) for x in slice_]
         else:
-            raise TypeError(f"{ref.path}: unsupported array dtype {dtype}")
+            result = slice_
 
-        # Write into caller buffer?
         if values is not None:
             values.clear()
             values.extend(result)
@@ -524,6 +548,69 @@ class DataRefManager:
 
         return n
 
+    def shape_dummy(
+            self,
+            ref: FakeDataRef,
+            dtype: int,
+            value: Optional[Any] = None,
+            offset: int = 0,
+            count: int = -1,
+    ) -> None:
+        """
+        Infer dummy shape/type from dtype and optional value (from setData)
+        Dummy arrays expand dynamically based on offset + count.
+        Existing values are preserved; new slots are filled with defaults.
+        """
+
+        if not ref.dummy:
+            raise ValueError("Cannot shape a canonical dataref")
+
+        if ref.type != dtype:
+            ref.value = self.default_value_for(dtype, 1)
+
+        dv = ref.value if value is None else value
+
+        new_size = 1
+        if isinstance(dv, (list, tuple, bytearray)):
+            if count < 1:
+                count = len(dv)
+            new_size = max(offset + count, ref.size)
+
+        # If same shape, do nothing
+        if ref.type == dtype and ref.size == new_size:
+            return
+
+        # ------------------------------------------------------------
+        # 3. Recast type + size and expand array if needed
+        # ------------------------------------------------------------
+        with self._handles_lock:
+            ref.type = dtype
+            ref.size = new_size
+
+            # Get default for array type (list)
+            default_list = self.default_value_for(dtype, 1)
+
+            # Extract scalar element for expansion
+            if isinstance(default_list, (list, tuple, bytearray)):
+                default = default_list[0] if default_list else 0
+            else:
+                default = default_list
+
+            if ref.is_array:
+                # Expand array while preserving existing values
+                if isinstance(ref.value, list):
+                    while len(ref.value) < new_size:
+                        ref.value.append(default)
+                else:
+                    # Convert scalar dummy to array
+                    ref.value = [default] * new_size
+            else:
+                # SCALAR: ensure value is scalar
+                if isinstance(ref.value, list):
+                    ref.value = ref.value[0] if ref.value else default
+
+            self.mark_modified(ref)
+
     def _canonical_scalar_write(self, ref, dtype, value) -> None:
         fxp = self.fake_xp
 
@@ -603,68 +690,52 @@ class DataRefManager:
 
         return n
 
-    def shape_dummy(
-            self,
-            ref: FakeDataRef,
-            dtype: int,
-            value: Optional[Any] = None,
-            offset: int = 0,
-            count: int = -1,
-    ) -> None:
-        """
-        Infer dummy shape/type from dtype and optional value (from setData)
-        Dummy arrays expand dynamically based on offset + count.
-        Existing values are preserved; new slots are filled with defaults.
-        """
-
-        if not ref.dummy:
-            raise ValueError("Cannot shape a canonical dataref")
-
-        if ref.type != dtype:
-            ref.value = self.default_value_for(dtype, 1)
-
-        dv = ref.value if value is None else value
-
-        new_size = 1
-        if isinstance(dv, (list, tuple, bytearray)):
-            if count < 1:
-                count = len(dv)
-            new_size = max(offset + count, ref.size)
-
-        # If same shape, do nothing
-        if ref.type == dtype and ref.size == new_size:
-            return
+    def _is_compatible(self, ref_type: int, desired_type: int) -> bool:
+        fxp = self.fake_xp
 
         # ------------------------------------------------------------
-        # 3. Recast type + size and expand array if needed
+        # 1. Direct bitmask compatibility
         # ------------------------------------------------------------
-        with self._handles_lock:
-            ref.type = dtype
-            ref.size = new_size
+        if (ref_type & desired_type) != 0:
+            return True
 
-            # Get default for array type (list)
-            default_list = self.default_value_for(dtype, 1)
+        # ------------------------------------------------------------
+        # 2. Array → scalar (FloatArray→Float, IntArray→Int)
+        # ------------------------------------------------------------
+        if (ref_type & fxp.Type_FloatArray) and (desired_type & fxp.Type_Float):
+            return True
+        if (ref_type & fxp.Type_IntArray) and (desired_type & fxp.Type_Int):
+            return True
 
-            # Extract scalar element for expansion
-            if isinstance(default_list, (list, tuple, bytearray)):
-                default = default_list[0] if default_list else 0
-            else:
-                default = default_list
+        # ------------------------------------------------------------
+        # 3. Array → scalar (cross‑type)
+        #    FloatArray → Int
+        #    IntArray   → Float
+        # ------------------------------------------------------------
+        if (ref_type & fxp.Type_FloatArray) and (desired_type & fxp.Type_Int):
+            return True
+        if (ref_type & fxp.Type_IntArray) and (desired_type & fxp.Type_Float):
+            return True
 
-            if ref.is_array:
-                # Expand array while preserving existing values
-                if isinstance(ref.value, list):
-                    while len(ref.value) < new_size:
-                        ref.value.append(default)
-                else:
-                    # Convert scalar dummy to array
-                    ref.value = [default] * new_size
-            else:
-                # SCALAR: ensure value is scalar
-                if isinstance(ref.value, list):
-                    ref.value = ref.value[0] if ref.value else default
+        # ------------------------------------------------------------
+        # 4. Scalar → array (Float→FloatArray, Int→IntArray)
+        # ------------------------------------------------------------
+        if (ref_type & fxp.Type_Float) and (desired_type & fxp.Type_FloatArray):
+            return True
+        if (ref_type & fxp.Type_Int) and (desired_type & fxp.Type_IntArray):
+            return True
 
-            self.mark_modified(ref)
+        # ------------------------------------------------------------
+        # 5. Scalar → array (cross‑type)
+        #    Float → IntArray
+        #    Int   → FloatArray
+        # ------------------------------------------------------------
+        if (ref_type & fxp.Type_Float) and (desired_type & fxp.Type_IntArray):
+            return True
+        if (ref_type & fxp.Type_Int) and (desired_type & fxp.Type_FloatArray):
+            return True
+
+        return False
 
     # ----------------------------------------------------------------------
     # Shape enforcement

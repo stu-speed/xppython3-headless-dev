@@ -221,7 +221,6 @@ class XPBridgeClient:
         if enable:
             xp.log(f"[Bridge] Enable connection")
             self._enabled = True
-            self._last_activity = time.time() - 100  # connect right away
         else:
             xp.log(f"[Bridge] Disable connection")
             self._enabled = False
@@ -236,9 +235,9 @@ class XPBridgeClient:
     def connect(self) -> None:
         self.disconnect()
 
-        self.set_conn_status(f"Connecting to {self.host}:{self.port}")
+        self._last_activity = time.monotonic()
 
-        self._last_activity = time.time()
+        self.set_conn_status(f"Connecting to {self.host}:{self.port}")
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setblocking(False)
@@ -279,7 +278,6 @@ class XPBridgeClient:
 
         data = BridgeMsg.encode_batch(msgs)
         self.sock.sendall(data)
-        self._last_activity = time.time()
 
     # ------------------------------------------------------------------
     # Public API
@@ -299,7 +297,7 @@ class XPBridgeClient:
         if not self.enabled:
             return False
 
-        now = time.time()
+        now = time.monotonic()
 
         # --------------------------------------------------------------
         # 1. If disconnected, retry connection every RECONNECT_INTERVAL
@@ -525,7 +523,7 @@ class XPBridgeClient:
                 ref = self.fake_xp.dataref_manager.get_handle(ev.path)
                 if not ref or not ev.dtype:
                     continue
-                if not ref.dummy:
+                if not ref.dummy and not ref.cached:
                     continue
 
                 # Promote authoritative type

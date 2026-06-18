@@ -5,14 +5,110 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import re
 import time
-from typing import Any, Optional, Pattern, TYPE_CHECKING
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, Optional, Pattern, TYPE_CHECKING
 
 from xp_typing import XPWidgetID, XPWidgetMessage
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
+
+
+@dataclass
+class CacheEntry:
+    path: str
+    type: int
+    size: int
+    writable: bool
+    value: Any  # Python object (int, float, list, bytes, etc.)
+
+    def to_json(self) -> str:
+        data = asdict(self)
+
+        # Encode Type_Data (bytes/bytearray) as base64 string
+        if isinstance(self.value, (bytes, bytearray)):
+            data["value"] = {
+                "encoding": "base64",
+                "data": base64.b64encode(self.value).decode("ascii")
+            }
+
+        return json.dumps(data)
+
+    @staticmethod
+    def from_json(s: str) -> "CacheEntry":
+        data = json.loads(s)
+
+        # Decode Type_Data if present
+        if isinstance(data.get("value"), dict) and data["value"].get("encoding") == "base64":
+            b64 = data["value"]["data"]
+            data["value"] = base64.b64decode(b64)
+
+        return CacheEntry(**data)
+
+
+class DataRefCache:
+    """
+    Dict-backed cache of DataRef metadata.
+    One line per dataref, left-justified, min 3 spaces between columns.
+    """
+
+    HEADER = (
+        "# DataRef Cache to ensure correct dataref shape/value when offline\n"
+        "#PATH                                                                                TYPE                                 SIZE    WRITEABLE   VALUE\n"
+    )
+
+    def __init__(self, fake_xp: FakeXP) -> None:
+        self.fake_xp = fake_xp
+        self._cache: Dict[str, CacheEntry] = {}
+
+        self.from_file()
+
+    def get_cached_info(self, path: str) -> Optional[CacheEntry]:
+        return self._cache.get(path)
+
+    def to_file(self):
+        with open(self.fake_xp._dataref_cache_path, "w", encoding="utf-8") as f:
+            for entry in self._cache.values():
+                f.write(entry.to_json() + "\n")
+
+    def from_file(self):
+        self._cache.clear()
+
+        try:
+            with open(self.fake_xp._dataref_cache_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    entry = CacheEntry.from_json(line)
+                    self._cache[entry.path] = entry
+
+        except FileNotFoundError:
+            pass
+
+    def update(self):
+        for ref in self.fake_xp.dataref_manager.all_handles():
+            if ref.dummy or ref.cached:
+                continue
+            self._cache[ref.path] = CacheEntry(
+                path=ref.path,
+                type=ref.type,
+                size=ref.size,
+                writable=ref.writable,
+                value=ref.value
+            )
+
+        self.to_file()
+
+    def clear(self):
+        self._cache.clear()
+        with open(self.fake_xp._dataref_cache_path, "w", encoding="utf-8") as f:
+            f.write(self.HEADER)
 
 
 class DataRefViewer:
@@ -23,6 +119,8 @@ class DataRefViewer:
     filter_field: XPWidgetID
     filter_button: XPWidgetID
     data_caption: XPWidgetID
+    cache_save_button: XPWidgetID
+    cache_clear_button: XPWidgetID
 
     def __init__(self, xp: FakeXP) -> None:
         self.fake_xp = xp
@@ -104,6 +202,26 @@ class DataRefViewer:
             1, "Apply", 0, self.window, self.fake_xp.WidgetClass_Button
         )
 
+        # DATAREF CACHE CONTROLS (same row as filter)
+        self.fake_xp.createWidget(
+            660, y_top, 740, y_bot,
+            1, "Dataref Cache:", 0, self.window, self.fake_xp.WidgetClass_Caption
+        )
+
+        self.cache_save_button = self.fake_xp.createWidget(
+            760, y_top, 800, y_bot,
+            1, "Save", 0, self.window, self.fake_xp.WidgetClass_Button
+        )
+
+        self.cache_clear_button = self.fake_xp.createWidget(
+            810, y_top, 870, y_bot,
+            1, "Delete", 0, self.window, self.fake_xp.WidgetClass_Button
+        )
+
+        # Register callbacks
+        self.fake_xp.addWidgetCallback(self.cache_save_button, self._widget_handler)
+        self.fake_xp.addWidgetCallback(self.cache_clear_button, self._widget_handler)
+
         # DATAREF LIST (nudged up to match reclaimed space)
         self.data_caption = self.fake_xp.createWidget(
             110, 705, 1390, 250,
@@ -127,9 +245,16 @@ class DataRefViewer:
             p2: Any,
     ) -> int:
         # Button presses are delivered to the parent window
-        if msg == self.fake_xp.Msg_PushButtonPressed and p1 == self.filter_button:
-            self._apply_filter()
-            return 1
+        if msg == self.fake_xp.Msg_PushButtonPressed:
+            if p1 == self.filter_button:
+                self._apply_filter()
+                return 1
+            if p1 == self.cache_clear_button:
+                self.fake_xp.dataref_cache.clear()
+                return 1
+            if p1 == self.cache_save_button:
+                self.fake_xp.dataref_cache.update()
+                return 1
 
         return 0
 

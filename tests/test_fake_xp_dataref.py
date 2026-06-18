@@ -195,6 +195,116 @@ def test_setDatab_internal_buffer_and_real_bounds(xp: FakeXP):
         xp.setDatab(dr, [ord("X"), ord("Y"), ord("Z"), ord("!"), ord("?")], 0, 5)
 
 
+def test_transform_scalar_array_semantics(xp: FakeXP):
+    dm = xp.dm
+
+    # ------------------------------------------------------------
+    # FLOAT ARRAY
+    # ------------------------------------------------------------
+    dr_arr = dm.add_handle("test/float_array")
+    dm.promote(
+        ref=dr_arr,
+        dtype=xp.Type_FloatArray,
+        writable=True,
+        array_size=3,
+    )
+    dr_arr.value[:] = [10.0, 20.0, 30.0]
+
+    # FLOAT ARRAY → FLOAT
+    v = dm.get_value(dr_arr.df_id, xp.Type_Float)
+    assert v == 10.0
+
+    # FLOAT ARRAY → FLOAT ARRAY
+    buf = []
+    n = dm.get_value(dr_arr.df_id, xp.Type_FloatArray, values=buf)
+    assert n == 3
+    assert buf == [10.0, 20.0, 30.0]
+
+    # NEW: FLOAT ARRAY → INT
+    v = dm.get_value(dr_arr.df_id, xp.Type_Int)
+    assert isinstance(v, int)
+    assert v == 10
+
+    # ------------------------------------------------------------
+    # FLOAT SCALAR
+    # ------------------------------------------------------------
+    dr_scalar = dm.add_handle("test/float_scalar")
+    dm.promote(
+        ref=dr_scalar,
+        dtype=xp.Type_Float,
+        writable=True,
+    )
+    dr_scalar.value = 42.0
+
+    # FLOAT → FLOAT
+    assert dm.get_value(dr_scalar.df_id, xp.Type_Float) == 42.0
+
+    # FLOAT → FLOAT ARRAY
+    buf = []
+    n = dm.get_value(dr_scalar.df_id, xp.Type_FloatArray, values=buf)
+    assert n == 1
+    assert buf == [42.0]
+
+    # NEW: FLOAT → INT ARRAY
+    buf = []
+    n = dm.get_value(dr_scalar.df_id, xp.Type_IntArray, values=buf)
+    assert n == 1
+    assert buf == [42]   # cast to int
+
+    # ------------------------------------------------------------
+    # INT ARRAY
+    # ------------------------------------------------------------
+    dr_iarr = dm.add_handle("test/int_array")
+    dm.promote(
+        ref=dr_iarr,
+        dtype=xp.Type_IntArray,
+        writable=True,
+        array_size=3,
+    )
+    dr_iarr.value[:] = [1, 2, 3]
+
+    # INT ARRAY → INT
+    assert dm.get_value(dr_iarr.df_id, xp.Type_Int) == 1
+
+    # INT ARRAY → INT ARRAY
+    buf = []
+    n = dm.get_value(dr_iarr.df_id, xp.Type_IntArray, values=buf)
+    assert n == 3
+    assert buf == [1, 2, 3]
+
+    # INT ARRAY → FLOAT
+    v = dm.get_value(dr_iarr.df_id, xp.Type_Float)
+    assert isinstance(v, float)
+    assert v == 1.0
+
+    # ------------------------------------------------------------
+    # INT SCALAR
+    # ------------------------------------------------------------
+    dr_iscalar = dm.add_handle("test/int_scalar")
+    dm.promote(
+        ref=dr_iscalar,
+        dtype=xp.Type_Int,
+        writable=True,
+    )
+    dr_iscalar.value = 7
+
+    # INT → INT
+    assert dm.get_value(dr_iscalar.df_id, xp.Type_Int) == 7
+
+    # INT → INT ARRAY
+    buf = []
+    n = dm.get_value(dr_iscalar.df_id, xp.Type_IntArray, values=buf)
+    assert n == 1
+    assert buf == [7]
+
+    # NEW: INT → FLOAT ARRAY
+    buf = []
+    n = dm.get_value(dr_iscalar.df_id, xp.Type_FloatArray, values=buf)
+    assert n == 1
+    assert buf == [7.0]   # cast to float
+
+
+
 # ================================================================
 #  ACCESSOR SCALAR READ/WRITE
 # ================================================================

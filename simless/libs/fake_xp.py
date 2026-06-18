@@ -48,6 +48,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from simless.libs.dataref_viewer import DataRefCache
 from simless.libs.dataref import DataRefManager
 from simless.libs.fake_xp_constants import bind_xp_constants
 from simless.libs.fake_xp_dataref import FakeXPDataRef
@@ -97,6 +98,7 @@ class FakeXP(
         self._xplane_root = Path(__file__).resolve().parents[2]
         self._xpp_log = self._xplane_root / "XPPython3Log.txt"
         self._sim_log = self._xplane_root / "Log.txt"
+        self._dataref_cache_path = self._xplane_root / "simless" / "DataRefCache.txt"
 
         if not self.terminal_logging:
             # Fresh logs every run
@@ -123,6 +125,7 @@ class FakeXP(
         self.window_manager = WindowManager(self)
         self.widget_manager = WidgetManager(self)
         self.menu_manager = MenuManager(self)
+        self.dataref_cache = DataRefCache(self)
 
         # Must be done last as it builds the FakeXP facade with what has been instantiated to this point
         self.simless_runner = SimlessRunner(self, enable_dataref_bridge, bridge_host, bridge_port)
