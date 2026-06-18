@@ -83,8 +83,7 @@ xppython3-headless-dev/                      # Runner treats as X=plane root dir
 ├── simless/                                 # Sim‑less execution harness (development‑only)
 │   │
 │   ├── __init__.py                          # Bootstraps paths expected by plugins
-│   ├── run_standalone_oat.py                # FakeXP-only Widget runner
-│   ├── run_bridged_oat.py                   # FakeXP + live DataRef bridge
+│   ├── run_oat_control.py                   # example run script for plugins
 │   ├── DataRefCache.txt                     # Cached DataRefs from bridge to work offline
 │   │
 │   └── libs/

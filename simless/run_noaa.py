@@ -1,8 +1,5 @@
 # ===========================================================================
-# SIM-LESS OAT TEST HARNESS WITH LIVE DATAREFS
-# Allows user to test OAT with live datarefs and monitor with viewer
-#
-# *REQUIRED: PL_sshd_dataref_bridge plugin running in X-plane
+# *REQUIRED: NOAA Weather Plugin install to framework PythonPlugins
 # ===========================================================================
 
 from simless.libs.fake_xp import FakeXP
