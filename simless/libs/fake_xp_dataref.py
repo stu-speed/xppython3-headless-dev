@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from typing import Any, Callable, List, MutableSequence, Optional, Sequence, TYPE_CHECKING, Tuple, cast
 
-import time
 from simless.libs.dataref import DataRefManager
 from xp_typing import XPLMDataRef, XPLMDataRefInfo_t, XPLMDataTypeID
 

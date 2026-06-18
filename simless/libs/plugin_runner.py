@@ -82,7 +82,7 @@ import traceback
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from XPPython3.xp_typing import XPLMMenuID, XPLMPluginID, XPLMCommandRef
+from XPPython3.xp_typing import XPLMCommandRef, XPLMMenuID, XPLMPluginID
 from simless.libs.dataref import DataRefManager
 from simless.libs.fake_xp_types import XPShutdown
 from simless.libs.plugin_loader import LoadedPlugin

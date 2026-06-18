@@ -48,8 +48,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from simless.libs.dataref_viewer import DataRefCache
 from simless.libs.dataref import DataRefManager
+from simless.libs.dataref_viewer import DataRefCache
 from simless.libs.fake_xp_constants import bind_xp_constants
 from simless.libs.fake_xp_dataref import FakeXPDataRef
 from simless.libs.fake_xp_flightloop import FakeXPFlightLoop
