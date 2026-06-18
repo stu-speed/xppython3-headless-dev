@@ -100,6 +100,10 @@ class FakeXP(
         self._sim_log = self._xplane_root / "Log.txt"
         self._dataref_cache_path = self._xplane_root / "simless" / "DataRefCache.txt"
 
+        self._xplane_version = 12050  # Pretend XP12.05
+        self._xplm_version = 303  # XPLM 3.0.3
+        self._host_id = 1  # Host_XPlane
+
         if not self.terminal_logging:
             # Fresh logs every run
             self._xpp_log.write_text("")
@@ -178,6 +182,29 @@ class FakeXP(
 
     def sys_log(self, msg: str) -> None:
         self.systemLog(msg)
+
+    def getVersions(self):
+        """
+        FakeXP implementation of xp.getVersions()
+
+        Returns:
+            tuple[int, int, int]:
+                (xplaneVersion, xplmVersion, hostID)
+
+        Meaning:
+            xplaneVersion : integer revision of X‑Plane
+                            e.g. 12050 → X‑Plane 12.05
+            xplmVersion   : XPLM SDK version (e.g. 303 → 3.0.3)
+            hostID        : 1 = Host_XPlane, 0 = Host_Unknown
+        """
+        # These values are configurable inside FakeXP so plugins can
+        # special‑case XP11 vs XP12 behavior during sim‑less execution.
+
+        return (
+            self._xplane_version,  # int
+            self._xplm_version,  # int
+            self._host_id  # int
+        )
 
     # ----------------------------------------------------------------------
     # Base xp methods (XPPython3-compatible, SimlessXPInterface)

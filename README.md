@@ -85,6 +85,7 @@ xppython3-headless-dev/                      # Runner treats as X=plane root dir
 │   ├── __init__.py                          # Bootstraps paths expected by plugins
 │   ├── run_standalone_oat.py                # FakeXP-only Widget runner
 │   ├── run_bridged_oat.py                   # FakeXP + live DataRef bridge
+│   ├── DataRefCache.txt                     # Cached DataRefs from bridge to work offline
 │   │
 │   └── libs/
 │       ├── fake_xp.py                       # FakeXP: public xp.* API façade
@@ -123,52 +124,6 @@ See GUI_EMULATION.md for special considerations for GUI usage.
 
 ---------------------------------------------------------------------
 
-# 🧩 Managed DataRefs (XPPython3 extension)
-
-Managed DataRefs provide:
-
-• Automatic waiting for required DataRefs during startup  
-• Defaults used until X‑Plane provides real values  
-• Automatic handle and metadata retrieval  
-• Unified, type‑safe get/set access  
-
-Managed DataRefs define the plugin’s contract with X‑Plane and are production‑safe.
-
-See DATAREF_MODEL.md#managed-datarefs for full details.
-
----------------------------------------------------------------------
-
-# 🔌 Bridged DataRefs (Live X‑Plane integration)
-
-Bridged DataRefs allow a sim‑less FakeXP environment to mirror live X‑Plane DataRefs in real time.
-
-This enables:
-
-• Running plugins in an IDE while X‑Plane is running  
-• Injecting real simulator values into FakeXP  
-• Debugging plugin logic against live aircraft state  
-• Seamless transition between sim‑less and in‑sim execution  
-
-See DATAREF_MODEL.md#bridge-enabled-datarefs for full details.
-
-Key properties:
-
-• Bridged DataRefs are non‑blocking  
-• Fake values are always available  
-• Authority is established explicitly by X‑Plane  
-• Type and value become authoritative together  
-• Disconnects safely revert DataRefs to dummy state  
-
-Bridged DataRefs integrate transparently with:
-
-• Managed DataRefs  
-• Auto‑created DataRefs  
-• The standard xp.* API  
-
-No plugin code changes are required.
-
----------------------------------------------------------------------
-
 # ▶️ Minimal Sim‑less Runner
 
 A simple runner script is all that’s needed to execute plugins outside X‑Plane.
@@ -194,7 +149,73 @@ This runner:
 • Boots FakeXP which emulates the X‑Plane xp module  
 • Loads any number of plugins that will share the same DataRef namespace  
 • Executes the full lifecycle (start/enable/flight_loop/disable/stop)  
-• Runs in GUI or headless mode  
+• Runs in GUI or headless mode
+
+---------------------------------------------------------------------
+
+# 🔌 Bridged DataRefs (Live X‑Plane integration)
+
+Bridged DataRefs allow a sim‑less FakeXP environment to mirror live X‑Plane DataRefs in real time.
+The live DataRefs can be cached to a file to allow for subsequent offline debugging sessions
+with properly shaped data.
+
+This enables:
+
+• Running plugins in an IDE while X‑Plane is running  
+• Injecting real simulator values into FakeXP  
+• Debugging plugin logic against live aircraft state  
+• Debugging plugin logic against cached plausible data
+• Seamless transition between sim‑less and in‑sim execution  
+
+See DATAREF_MODEL.md#bridge-enabled-datarefs for full details.
+
+Key properties:
+
+• Bridged DataRefs are non‑blocking  
+• Fake values are always available  
+• Authority is established explicitly by X‑Plane  
+• Type and value become authoritative together  
+• Disconnects safely revert DataRefs to dummy state  
+
+Bridged DataRefs integrate transparently with:
+
+• Managed DataRefs  
+• Auto‑created DataRefs  
+• The standard xp.* API  
+
+No plugin code changes are required.
+
+---------------------------------------------------------------------
+
+# 🔍 DataRef Viewer (Plugin Menu Tool)
+
+A lightweight in‑sim DataRef Viewer is included for debugging.  
+It appears under:
+
+Plugins → FakeXP → Dataref Viewer
+
+The viewer automatically catalogs **all DataRefs used by the plugin**, including:
+
+Features:
+
+• Search and filter  
+• Real‑time updates when bridged to X‑Plane  
+• Safe fallback to cached values when offline  
+
+---------------------------------------------------------------------
+
+# 🧩 Managed DataRefs (extension)
+
+Managed DataRefs provide:
+
+• Automatic waiting for required DataRefs during startup  
+• Defaults used until X‑Plane provides real values  
+• Automatic handle and metadata retrieval  
+• Unified, type‑safe get/set access
+
+Managed DataRefs define the plugin’s contract with X‑Plane and are production‑safe.
+
+See DATAREF_MODEL.md#managed-datarefs for full details.
 
 ---------------------------------------------------------------------
 
