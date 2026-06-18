@@ -132,7 +132,8 @@ A simple runner script is all that’s needed to execute plugins outside X‑Pla
 from simless.libs.fake_xp import FakeXP
 
 def run_gui_sample() -> None:
-    xp = FakeXP(enable_gui=True)
+    # log to terminal instead of log files for IDE debugging
+    xp = FakeXP(terminal_logging=True)
 
     plugins = [
         "PI_sshd_gui_sample",
