@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Callable, cast, Dict, TYPE_CHECKING
 
 from simless.libs.flightloop import FlightLoop
-from XPPython3.xp_typing import XPLMFlightLoopPhaseType, XPLMFlightLoopID
+from xp_typing import XPLMFlightLoopPhaseType, XPLMFlightLoopID
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
@@ -60,7 +60,7 @@ class FakeXPFlightLoop:
     def createFlightLoop(
         self,
         callback: Callable[[float, float, int, Any], float],
-        phase: XPLMFlightLoopPhaseType = None,
+        phase: XPLMFlightLoopPhaseType = XPLMFlightLoopPhaseType(0),
         refCon: Any = None,
     ) -> XPLMFlightLoopID | int:
 

@@ -6,7 +6,7 @@
 
 import XPPython3
 
-from PythonPlugins.sshd_extensions.bridge_protocol import BridgeData, BridgeDataType
+from simless.libs.bridge_client import BridgeData, BridgeDataType
 from simless.libs.fake_xp import FakeXP
 
 
@@ -15,7 +15,7 @@ from simless.libs.fake_xp import FakeXP
 # ===========================================================================
 
 def test_headless_plugin_lifecycle(inline_plugin):
-    xp = FakeXP(debug=True, enable_gui=False)
+    xp = FakeXP(debug_logging=True, enable_gui=False)
     XPPython3.xp = xp
 
     class Plugin:
@@ -49,7 +49,7 @@ def test_headless_plugin_lifecycle(inline_plugin):
 # ===========================================================================
 
 def test_headless_plugin_dataref_usage(inline_plugin):
-    xp = FakeXP(debug=True, enable_gui=False)
+    xp = FakeXP(debug_logging=True, enable_gui=False)
     XPPython3.xp = xp
 
     class Plugin:
@@ -88,7 +88,7 @@ def test_headless_plugin_dataref_usage(inline_plugin):
 # ===========================================================================
 
 def test_headless_shared_datarefs(inline_plugin):
-    xp = FakeXP(debug=True, enable_gui=False)
+    xp = FakeXP(debug_logging=True, enable_gui=False)
     XPPython3.xp = xp
 
     class Writer:
@@ -155,7 +155,7 @@ def test_headless_shared_datarefs(inline_plugin):
 # ===========================================================================
 
 def test_example_gui(inline_plugin):
-    xp = FakeXP(debug=True, enable_gui=True)
+    xp = FakeXP(debug_logging=True, enable_gui=True)
     XPPython3.xp = xp
 
     class DevOTAGUIPlugin:
@@ -200,6 +200,8 @@ def test_example_gui(inline_plugin):
                 xp.WidgetClass_Button
             )
 
+            xp.commandOnce(xp.simless_runner.cmd_show_viewer)
+
             return 1
 
         def XPluginDisable(self):
@@ -230,11 +232,11 @@ def test_example_gui(inline_plugin):
 # 5. Validate that FakeXP + SimlessRunner correctly process bridge META/UPDATE
 # ===========================================================================
 
-def test_headless_bridge_enabled(inline_plugin, monkeypatch):
+def test_bridge_promote_dataref(inline_plugin, monkeypatch):
     # ----------------------------------------------------------------------
     # 1. FakeXP in headless mode (bridge is runner-owned)
     # ----------------------------------------------------------------------
-    xp = FakeXP(debug=True, enable_gui=False, enable_dataref_bridge=True)
+    xp = FakeXP(debug_logging=True, enable_gui=False, enable_dataref_bridge=True)
     XPPython3.xp = xp
 
     # ----------------------------------------------------------------------
@@ -264,6 +266,7 @@ def test_headless_bridge_enabled(inline_plugin, monkeypatch):
     # ----------------------------------------------------------------------
     # 4. Fake bridge events
     # ----------------------------------------------------------------------
+    # dataref type will be known
     meta_event = BridgeData(
         type=BridgeDataType.META,
         path="sim/test/bridge_value",
@@ -274,6 +277,7 @@ def test_headless_bridge_enabled(inline_plugin, monkeypatch):
         text=None,
     )
 
+    # dataref shape will be known
     update_event = BridgeData(
         type=BridgeDataType.UPDATE,
         path="sim/test/bridge_value",
@@ -295,8 +299,9 @@ def test_headless_bridge_enabled(inline_plugin, monkeypatch):
     # Bridge is runner-owned in headless mode
     runner = getattr(xp, "simless_runner", None)
     assert runner is not None, "FakeXP did not expose simless_runner"
-    assert hasattr(runner, "_bridge_client"), "Runner has no _bridge_client"
-    monkeypatch.setattr(runner._bridge_client, "poll_data", fake_poll)
+    assert hasattr(runner, "bridge_client"), "Runner has no _bridge_client"
+    monkeypatch.setattr(runner.bridge_client, "poll_data", fake_poll)
+    monkeypatch.setattr(runner.bridge_client, "ready_for_processing", lambda: True)
 
     # ----------------------------------------------------------------------
     # 5. Run lifecycle
@@ -307,8 +312,10 @@ def test_headless_bridge_enabled(inline_plugin, monkeypatch):
     # 6. Assertions
     # ----------------------------------------------------------------------
     h = xp.findDataRef("sim/test/bridge_value")
+    assert h is not None
     assert xp.getDataf(h) == 123.45
+    ref = xp.dataref_manager.require_handle(h)
+    assert not ref.dummy
 
     info = xp.getDataRefInfo(h)
-    # XPLM-style bitmask, not DRefType enum
-    assert int(info.type) != 0
+    assert info.type == xp.Type_Float

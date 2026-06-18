@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
 import sys
 import types
-from pathlib import Path
 from types import ModuleType
 from typing import List, Protocol, TYPE_CHECKING
+
+from xp_typing import XPLMPluginID
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
@@ -17,9 +19,14 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 class PythonInterfaceProto(Protocol):
+    # Required plugin methods
+
     def XPluginStart(self) -> tuple[str, str, str]: ...
+
     def XPluginEnable(self) -> int: ...
+
     def XPluginDisable(self) -> None: ...
+
     def XPluginStop(self) -> None: ...
 
 
@@ -29,13 +36,13 @@ class PythonInterfaceProto(Protocol):
 
 class LoadedPlugin:
     def __init__(
-        self,
-        plugin_id: int,
-        name: str,
-        sig: str,
-        desc: str,
-        module: ModuleType,
-        instance: PythonInterfaceProto,
+            self,
+            plugin_id: XPLMPluginID,
+            name: str,
+            sig: str,
+            desc: str,
+            module: ModuleType,
+            instance: PythonInterfaceProto,
     ) -> None:
         self.plugin_id = plugin_id
         self.name = name
@@ -44,6 +51,16 @@ class LoadedPlugin:
         self.module = module
         self.instance = instance
         self.enabled = False
+
+        # Bind optional receive method
+        self._recv = getattr(instance, "XPluginReceiveMessage", None)
+
+    def has_receive(self) -> bool:
+        return callable(self._recv)
+
+    def receive_message(self, sender: int, msg: int, param) -> None:
+        if self._recv:
+            self._recv(sender, msg, param)
 
     def __repr__(self) -> str:
         return f"<LoadedPlugin id={self.plugin_id} name={self.name}>"
@@ -55,24 +72,28 @@ class LoadedPlugin:
 
 class SimlessPluginLoader:
     """
-    Loads Python plugins from plugins/PythonPlugins, wires a synthetic
-    XPPython3 runtime, and exposes X‑Plane‑authentic plugin lifecycle behavior.
+    Loads Python plugins from Resources/plugins/PythonPlugins,
+    wires a synthetic XPPython3 runtime, and exposes X‑Plane‑authentic
+    plugin lifecycle behavior.
     """
 
     def __init__(self, xp: FakeXP) -> None:
-        project_root = Path(__file__).resolve().parents[2]
-
-        # Real X‑Plane structure:
-        self.plugins_root = project_root / "plugins"
+        self.xp = xp
+        self.plugins_root = self.xp._xplane_root / "Resources" / "plugins"
         self.root = self.plugins_root / "PythonPlugins"
         self.xppython3_root = self.plugins_root / "XPPython3"
+        # Plugins expects cwd == X‑Plane root
+        os.chdir(self.xp._xplane_root)
 
-        self.xp = xp
         self._loaded_plugins: List[LoadedPlugin] = []
         self._next_id: int = 1
 
         self._ensure_sys_path()
         self._install_xp_facade()
+
+    @property
+    def loaded_plugins(self) -> List[LoadedPlugin]:
+        return self._loaded_plugins
 
     # ----------------------------------------------------------------------
     # sys.path setup
@@ -117,7 +138,7 @@ class SimlessPluginLoader:
         exactly like in X‑Plane.
         """
         xp_mod = types.ModuleType("xp")
-        xp_mod.VERSION = "simless"
+        xp_mod.VERSION = "FakeXP"
         xp_mod.log = self.xp.log
 
         # Expose FakeXP API surface
@@ -140,17 +161,15 @@ class SimlessPluginLoader:
     # Plugin lookup APIs
     # ----------------------------------------------------------------------
 
-    def get_plugin(self, plugin_id: int) -> LoadedPlugin | None:
-        return next((p for p in self._loaded_plugins if p.plugin_id == plugin_id), None)
+    def get_plugin(self, plugin_id: XPLMPluginID) -> LoadedPlugin | None:
+        return next((p for p in self.loaded_plugins if p.plugin_id == plugin_id), None)
 
-    def find_plugin_by_signature(self, signature: str) -> int:
-        return next((p.plugin_id for p in self._loaded_plugins if p.signature == signature), -1)
+    def find_plugin_by_signature(self, signature: str) -> XPLMPluginID:
+        return next((p.plugin_id for p in self.loaded_plugins if p.signature == signature), XPLMPluginID(-1))
 
-    def find_plugin_by_path(self, path: str) -> int:
-        return next(
-            (p.plugin_id for p in self._loaded_plugins if getattr(p.module, "__file__", None) == path),
-            -1,
-        )
+    def find_plugin_by_path(self, path: str) -> XPLMPluginID:
+        return next((p.plugin_id for p in self.loaded_plugins if getattr(p.module, "__file__", None) == path),
+                    XPLMPluginID(-1))
 
     # ----------------------------------------------------------------------
     # Plugin loading
@@ -161,7 +180,9 @@ class SimlessPluginLoader:
         if not plugin_path.exists():
             raise RuntimeError(f"[Loader] Plugin '{name}' not found in {self.root}")
 
-    def load_plugins(self, modules: List[str | ModuleType]) -> List[LoadedPlugin]:
+    def load_plugins(self, modules: List[str | ModuleType]) -> None:
+        self.xp.log("[Loader] === XPluginStart ===")
+
         plugins: List[LoadedPlugin] = []
 
         for item in modules:
@@ -176,7 +197,6 @@ class SimlessPluginLoader:
             plugins.append(plugin)
 
         self._loaded_plugins = plugins
-        return plugins
 
     def _load_single(self, name: str) -> LoadedPlugin:
         self.xp.log(f"[Loader] Loading module {name}")
@@ -201,16 +221,12 @@ class SimlessPluginLoader:
 
         # Provide xp.* façade to plugin instance
         instance.xp = self.xp
-
-        # Run XPluginStart
-        self.xp.log("[Loader] === XPluginStart BEGIN ===")
         try:
             name, sig, desc = instance.XPluginStart()
         except Exception as exc:
             raise RuntimeError(f"[Loader] XPluginStart failed for {module.__name__}: {exc!r}")
-        self.xp.log("[Loader] === XPluginStart END ===")
 
-        plugin_id = self._next_id
+        plugin_id = XPLMPluginID(self._next_id)
         self._next_id += 1
 
         return LoadedPlugin(

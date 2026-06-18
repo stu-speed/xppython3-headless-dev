@@ -8,15 +8,15 @@
 #   suitable only for simless execution.
 #
 # DESIGN PRINCIPLES
-#   - Names must match the real SDK exactly (xp.pyi).
+#   - Names must match the real SDK exactly (pyi).
 #   - Values are not authoritative; they exist only to satisfy plugin
 #     imports, comparisons, and switch logic during simless runs.
 #   - No classes, enums, or grouping structures — a flat module keeps
-#     imports simple and mirrors the real xp.* surface.
+#     imports simple and mirrors the real * surface.
 #
 # USAGE
-#   - FakeXP bulk‑binds these names into the xp.* namespace at startup.
-#   - Plugins see xp.CONSTANT_NAME exactly as they would in X‑Plane.
+#   - FakeXP bulk‑binds these names into the * namespace at startup.
+#   - Plugins see CONSTANT_NAME exactly as they would in X‑Plane.
 #   - Contributors may add new constants by defining additional module‑
 #     level names; no registration or binding code is required.
 #
@@ -30,570 +30,633 @@ from __future__ import annotations
 
 
 def bind_xp_constants(xp) -> None:
-    # Data type bitmask
-    xp.Type_Int = 1 << 0  # 1
-    xp.Type_Float = 1 << 1  # 2
-    xp.Type_Double = 1 << 2  # 4
-    xp.Type_FloatArray = 1 << 3  # 8
-    xp.Type_IntArray = 1 << 4  # 16
-    xp.Type_Data = 1 << 5  # 32
-    xp.Type_Unknown = 0
+    """
+    Bind all module-level constants into the xp namespace.
+    """
+    for name, val in globals().items():
+        setattr(xp, name, val)
 
-    # ----------------------------------------------------------------------
-    # AUDIO (1000–1999)
-    # ----------------------------------------------------------------------
-    xp.AudioExteriorAircraft = 1000
-    xp.AudioExteriorEnvironment = 1001
-    xp.AudioExteriorUnprocessed = 1002
-    xp.AudioGround = 1003
-    xp.AudioInterior = 1004
-    xp.AudioRadioCom1 = 1005
-    xp.AudioRadioCom2 = 1006
-    xp.AudioRadioCopilot = 1007
-    xp.AudioRadioPilot = 1008
-    xp.AudioUI = 1009
-    xp.Master = 1010
-    xp.MasterBank = 1011
-    xp.RadioBank = 1012
-    xp.FMOD_OK = 1013
-    xp.FMOD_SOUND_FORMAT_PCM16 = 1014
+def lookup_constant_name(value: int, prefix: str) -> str:
+    """
+    Generic reverse lookup for any constant defined in this module.
+    Example:
+        lookup_constant_name(3005, "WidgetClass_") -> "Caption"
+        lookup_constant_name(9010, "VK_") -> "A"
+    """
+    for name, val in globals().items():
+        if name.startswith(prefix) and val == value:
+            return name.replace(prefix, "")
+    return f"Unknown({value})"
 
-    # ----------------------------------------------------------------------
-    # COMMAND PHASES (2000–2099)
-    # ----------------------------------------------------------------------
-    xp.CommandBegin = 2000
-    xp.CommandContinue = 2001
-    xp.CommandEnd = 2002
 
-    # ----------------------------------------------------------------------
-    # CAMERA CONTROL (2100–2199)
-    # ----------------------------------------------------------------------
-    xp.ControlCameraForever = 2100
-    xp.ControlCameraUntilViewChanges = 2101
+# Data type bitmask
+Type_Int = 1 << 0  # 1
+Type_Float = 1 << 1  # 2
+Type_Double = 1 << 2  # 4
+Type_FloatArray = 1 << 3  # 8
+Type_IntArray = 1 << 4  # 16
+Type_Data = 1 << 5  # 32
+Type_Unknown = 0
 
-    # ----------------------------------------------------------------------
-    # KEY FLAGS (2200–2299)
-    # ----------------------------------------------------------------------
-    xp.ControlFlag = 2200
-    xp.DownFlag = 2201
-    xp.UpFlag = 2202
-    xp.NoFlag = 2203
-    xp.OptionAltFlag = 2204
-    xp.ShiftFlag = 2205
+# ----------------------------------------------------------------------
+# AUDIO (1000–1999)
+# ----------------------------------------------------------------------
+AudioExteriorAircraft = 1000
+AudioExteriorEnvironment = 1001
+AudioExteriorUnprocessed = 1002
+AudioGround = 1003
+AudioInterior = 1004
+AudioRadioCom1 = 1005
+AudioRadioCom2 = 1006
+AudioRadioCopilot = 1007
+AudioRadioPilot = 1008
+AudioUI = 1009
+Master = 1010
+MasterBank = 1011
+RadioBank = 1012
+FMOD_OK = 1013
+FMOD_SOUND_FORMAT_PCM16 = 1014
 
-    # ----------------------------------------------------------------------
-    # CURSOR STATUS (2300–2399)
-    # ----------------------------------------------------------------------
-    xp.CursorArrow = 2300
-    xp.CursorButton = 2301
-    xp.CursorCustom = 2302
-    xp.CursorDefault = 2303
-    xp.CursorDown = 2304
-    xp.CursorFourArrows = 2305
-    xp.CursorHandle = 2306
-    xp.CursorHidden = 2307
-    xp.CursorLeft = 2308
-    xp.CursorLeftRight = 2309
-    xp.CursorRight = 2310
-    xp.CursorRotateLarge = 2311
-    xp.CursorRotateLargeLeft = 2312
-    xp.CursorRotateLargeRight = 2313
-    xp.CursorRotateMedium = 2314
-    xp.CursorRotateMediumLeft = 2315
-    xp.CursorRotateMediumRight = 2316
-    xp.CursorRotateSmall = 2317
-    xp.CursorRotateSmallLeft = 2318
-    xp.CursorRotateSmallRight = 2319
-    xp.CursorSplitterH = 2320
-    xp.CursorSplitterV = 2321
-    xp.CursorText = 2322
-    xp.CursorUp = 2323
-    xp.CursorUpDown = 2324
+# ----------------------------------------------------------------------
+# COMMAND PHASES (2000–2099)
+# ----------------------------------------------------------------------
+CommandBegin = 2000
+CommandContinue = 2001
+CommandEnd = 2002
 
-    # ----------------------------------------------------------------------
-    # ELEMENTS / WORLD OBJECTS (2400–2599)
-    #   Includes Element_* styles and related world object constants.
-    # ----------------------------------------------------------------------
-    xp.AircraftCarrier = 2400
-    xp.Building = 2401
-    xp.CoolingTower = 2402
-    xp.CustomObject = 2403
-    xp.Fire = 2404
-    xp.ILSGlideScope = 2405
-    xp.LittleDownArrow = 2406
-    xp.LittleUpArrow = 2407
-    xp.NDB = 2408
-    xp.OilPlatform = 2409
-    xp.OilPlatformSmall = 2410
-    xp.PowerLine = 2411
-    xp.RadioTower = 2412
-    xp.Ship = 2413
-    xp.SmokeStack = 2414
-    xp.VOR = 2415
-    xp.VORWithCompassRose = 2416
-    xp.WayPoint = 2417
-    xp._Airport = 2418
+# ----------------------------------------------------------------------
+# CAMERA CONTROL (2100–2199)
+# ----------------------------------------------------------------------
+ControlCameraForever = 2100
+ControlCameraUntilViewChanges = 2101
 
-    xp.Element_AircraftCarrier = 2450
-    xp.Element_Airport = 2451
-    xp.Element_Building = 2452
-    xp.Element_CheckBox = 2453
-    xp.Element_CheckBoxLit = 2454
-    xp.Element_CoolingTower = 2455
-    xp.Element_CopyButtons = 2456
-    xp.Element_CopyButtonsWithEditingGrid = 2457
-    xp.Element_CustomObject = 2458
-    xp.Element_EditingGrid = 2459
-    xp.Element_Fire = 2460
-    xp.Element_ILSGlideScope = 2461
-    xp.Element_LittleDownArrow = 2462
-    xp.Element_LittleUpArrow = 2463
-    xp.Element_MarkerLeft = 2464
-    xp.Element_MarkerRight = 2465
-    xp.Element_NDB = 2466
-    xp.Element_OilPlatform = 2467
-    xp.Element_OilPlatformSmall = 2468
-    xp.Element_PowerLine = 2469
-    xp.Element_PushButton = 2470
-    xp.Element_PushButtonLit = 2471
-    xp.Element_RadioTower = 2472
-    xp.Element_ScrollBar = 2473
-    xp.Element_Ship = 2474
-    xp.Element_SmokeStack = 2475
-    xp.Element_TextField = 2476
-    xp.Element_TextFieldMiddle = 2477
-    xp.Element_VOR = 2478
-    xp.Element_VORWithCompassRose = 2479
-    xp.Element_Waypoint = 2480
-    xp.Element_WindowCloseBox = 2481
-    xp.Element_WindowCloseBoxPressed = 2482
-    xp.Element_WindowDragBar = 2483
-    xp.Element_WindowDragBarSmooth = 2484
-    xp.Element_Zoomer = 2485
+# ----------------------------------------------------------------------
+# KEY FLAGS (2200–2299)
+# ----------------------------------------------------------------------
+ControlFlag = 2200
+DownFlag = 2201
+UpFlag = 2202
+NoFlag = 2203
+OptionAltFlag = 2204
+ShiftFlag = 2205
 
-    # ----------------------------------------------------------------------
-    # WIDGET CLASSES (3000–3099)
-    # ----------------------------------------------------------------------
-    xp.WidgetClass_None = 3000
-    xp.WidgetClass_MainWindow = 3001
-    xp.WidgetClass_SubWindow = 3002
-    xp.WidgetClass_Button = 3003
-    xp.WidgetClass_TextField = 3004
-    xp.WidgetClass_Caption = 3005
-    xp.WidgetClass_ScrollBar = 3006
-    xp.WidgetClass_GeneralGraphics = 3007
-    xp.WidgetClass_Progress = 3008
+# ----------------------------------------------------------------------
+# CURSOR STATUS (2300–2399)
+# ----------------------------------------------------------------------
+CursorArrow = 2300
+CursorButton = 2301
+CursorCustom = 2302
+CursorDefault = 2303
+CursorDown = 2304
+CursorFourArrows = 2305
+CursorHandle = 2306
+CursorHidden = 2307
+CursorLeft = 2308
+CursorLeftRight = 2309
+CursorRight = 2310
+CursorRotateLarge = 2311
+CursorRotateLargeLeft = 2312
+CursorRotateLargeRight = 2313
+CursorRotateMedium = 2314
+CursorRotateMediumLeft = 2315
+CursorRotateMediumRight = 2316
+CursorRotateSmall = 2317
+CursorRotateSmallLeft = 2318
+CursorRotateSmallRight = 2319
+CursorSplitterH = 2320
+CursorSplitterV = 2321
+CursorText = 2322
+CursorUp = 2323
+CursorUpDown = 2324
 
-    # ----------------------------------------------------------------------
-    # WIDGET PROPERTIES (4000–4199)
-    # ----------------------------------------------------------------------
-    xp.Property_ButtonType = 4000
-    xp.Property_ButtonBehavior = 4001
-    xp.Property_ButtonState = 4002
-    xp.Property_MainWindowHasCloseBoxes = 4003
-    xp.Property_MainWindowType = 4004
-    xp.Property_SubWindowType = 4005
-    xp.Property_TextFieldType = 4006
-    xp.Property_ActiveEditSide = 4007
-    xp.Property_EditFieldSelDragStart = 4008
-    xp.Property_EditFieldSelStart = 4009
-    xp.Property_EditFieldSelEnd = 4010
-    xp.Property_MaxCharacters = 4011
-    xp.Property_PasswordMode = 4012
-    xp.Property_Font = 4013
-    xp.Property_GeneralGraphicsType = 4014
-    xp.Property_ProgressMin = 4015
-    xp.Property_ProgressMax = 4016
-    xp.Property_ProgressPosition = 4017
-    xp.Property_ScrollBarMin = 4018
-    xp.Property_ScrollBarMax = 4019
-    xp.Property_ScrollBarSliderPosition = 4020
-    xp.Property_ScrollBarPageAmount = 4021
-    xp.Property_ScrollBarSlop = 4022
-    xp.Property_ScrollBarType = 4023
-    xp.Property_ScrollPosition = 4024
-    xp.Property_Clip = 4025
-    xp.Property_DragXOff = 4026
-    xp.Property_DragYOff = 4027
-    xp.Property_Dragging = 4028
-    xp.Property_Enabled = 4029
-    xp.Property_Hilited = 4030
-    xp.Property_Object = 4031
-    xp.Property_Refcon = 4032
-    xp.Property_UserStart = 4033
-    xp.Property_CaptionLit = 4034
-    xp.Property_CaptionFont = 4035
+# ----------------------------------------------------------------------
+# ELEMENTS / WORLD OBJECTS (2400–2599)
+#   Includes Element_* styles and related world object constants.
+# ----------------------------------------------------------------------
+AircraftCarrier = 2400
+Building = 2401
+CoolingTower = 2402
+CustomObject = 2403
+Fire = 2404
+ILSGlideScope = 2405
+LittleDownArrow = 2406
+LittleUpArrow = 2407
+NDB = 2408
+OilPlatform = 2409
+OilPlatformSmall = 2410
+PowerLine = 2411
+RadioTower = 2412
+Ship = 2413
+SmokeStack = 2414
+VOR = 2415
+VORWithCompassRose = 2416
+WayPoint = 2417
+_Airport = 2418
 
-    # ----------------------------------------------------------------------
-    # WIDGET / WINDOW STYLES & TRACKS (5000–5199)
-    # ----------------------------------------------------------------------
-    xp.MainWindowStyle_MainWindow = 5000
-    xp.MainWindowStyle_Translucent = 5001
+Element_AircraftCarrier = 2450
+Element_Airport = 2451
+Element_Building = 2452
+Element_CheckBox = 2453
+Element_CheckBoxLit = 2454
+Element_CoolingTower = 2455
+Element_CopyButtons = 2456
+Element_CopyButtonsWithEditingGrid = 2457
+Element_CustomObject = 2458
+Element_EditingGrid = 2459
+Element_Fire = 2460
+Element_ILSGlideScope = 2461
+Element_LittleDownArrow = 2462
+Element_LittleUpArrow = 2463
+Element_MarkerLeft = 2464
+Element_MarkerRight = 2465
+Element_NDB = 2466
+Element_OilPlatform = 2467
+Element_OilPlatformSmall = 2468
+Element_PowerLine = 2469
+Element_PushButton = 2470
+Element_PushButtonLit = 2471
+Element_RadioTower = 2472
+Element_ScrollBar = 2473
+Element_Ship = 2474
+Element_SmokeStack = 2475
+Element_TextField = 2476
+Element_TextFieldMiddle = 2477
+Element_VOR = 2478
+Element_VORWithCompassRose = 2479
+Element_Waypoint = 2480
+Element_WindowCloseBox = 2481
+Element_WindowCloseBoxPressed = 2482
+Element_WindowDragBar = 2483
+Element_WindowDragBarSmooth = 2484
+Element_Zoomer = 2485
 
-    xp.SubWindowStyle_ListView = 5010
-    xp.SubWindowStyle_Screen = 5011
-    xp.SubWindowStyle_SubWindow = 5012
+# ----------------------------------------------------------------------
+# WIDGET CLASSES (3000–3099)
+# ----------------------------------------------------------------------
+WidgetClass_None = 3000
+WidgetClass_MainWindow = 3001
+WidgetClass_SubWindow = 3002
+WidgetClass_Button = 3003
+WidgetClass_TextField = 3004
+WidgetClass_Caption = 3005
+WidgetClass_ScrollBar = 3006
+WidgetClass_GeneralGraphics = 3007
+WidgetClass_Progress = 3008
 
-    xp.Window_Help = 5020
-    xp.Window_ListView = 5021
-    xp.Window_MainWindow = 5022
-    xp.Window_Screen = 5023
-    xp.Window_SubWindow = 5024
+# ----------------------------------------------------------------------
+# WIDGET PROPERTIES (4000–4199)
+# ----------------------------------------------------------------------
+Property_ButtonType = 4000
+Property_ButtonBehavior = 4001
+Property_ButtonState = 4002
+Property_MainWindowHasCloseBoxes = 4003
+Property_MainWindowType = 4004
+Property_SubWindowType = 4005
+Property_TextFieldType = 4006
+Property_ActiveEditSide = 4007
+Property_EditFieldSelDragStart = 4008
+Property_EditFieldSelStart = 4009
+Property_EditFieldSelEnd = 4010
+Property_MaxCharacters = 4011
+Property_PasswordMode = 4012
+Property_Font = 4013
+Property_GeneralGraphicsType = 4014
+Property_ProgressMin = 4015
+Property_ProgressMax = 4016
+Property_ProgressPosition = 4017
+Property_ScrollBarMin = 4018
+Property_ScrollBarMax = 4019
+Property_ScrollBarSliderPosition = 4020
+Property_ScrollBarPageAmount = 4021
+Property_ScrollBarSlop = 4022
+Property_ScrollBarType = 4023
+Property_ScrollPosition = 4024
+Property_Clip = 4025
+Property_DragXOff = 4026
+Property_DragYOff = 4027
+Property_Dragging = 4028
+Property_Enabled = 4029
+Property_Hilited = 4030
+Property_Object = 4031
+Property_Refcon = 4032
+Property_UserStart = 4033
+Property_CaptionLit = 4034
+Property_CaptionFont = 4035
 
-    xp.WindowCloseBox = 5030
+# ----------------------------------------------------------------------
+# WIDGET / WINDOW STYLES & TRACKS (5000–5199)
+# ----------------------------------------------------------------------
+MainWindowStyle_MainWindow = 5000
+MainWindowStyle_Translucent = 5001
 
-    xp.Track_Progress = 5040
-    xp.Track_ScrollBar = 5041
-    xp.Track_Slider = 5042
+SubWindowStyle_ListView = 5010
+SubWindowStyle_Screen = 5011
+SubWindowStyle_SubWindow = 5012
 
-    xp.TextEntryField = 5050
-    xp.TextTranslucent = 5051
-    xp.TextTransparent = 5052
+Window_Help = 5020
+Window_ListView = 5021
+Window_MainWindow = 5022
+Window_Screen = 5023
+Window_SubWindow = 5024
 
-    # ----------------------------------------------------------------------
-    # FONTS, TEXTURES, LANGUAGE, MOUSE (6000–6299)
-    # ----------------------------------------------------------------------
-    xp.Font_Basic = 6000
-    xp.Font_Proportional = 6001
+Track_Progress = 5040
+Track_ScrollBar = 5041
+Track_Slider = 5042
 
-    xp.Tex_GeneralInterface = 6010
-    xp.Tex_Radar_Copilot = 6011
-    xp.Tex_Radar_Pilot = 6012
+TextEntryField = 5050
+TextTranslucent = 5051
+TextTransparent = 5052
 
-    xp.Language_Chinese = 6020
-    xp.Language_English = 6021
-    xp.Language_French = 6022
-    xp.Language_German = 6023
-    xp.Language_Greek = 6024
-    xp.Language_Italian = 6025
-    xp.Language_Japanese = 6026
-    xp.Language_Korean = 6027
-    xp.Language_Russian = 6028
-    xp.Language_Spanish = 6029
-    xp.Language_Ukrainian = 6030
-    xp.Language_Unknown = 6031
+# ----------------------------------------------------------------------
+# FONTS, TEXTURES, LANGUAGE, MOUSE (6000–6299)
+# ----------------------------------------------------------------------
+Font_Basic = 6000
+Font_Proportional = 6001
 
-    xp.MouseDown = 6040
-    xp.MouseDrag = 6041
-    xp.MouseUp = 6042
+Tex_GeneralInterface = 6010
+Tex_Radar_Copilot = 6011
+Tex_Radar_Pilot = 6012
 
-    # ----------------------------------------------------------------------
-    # MAP / WEATHER / PROBE / FILE TYPES (7000–7499)
-    # ----------------------------------------------------------------------
-    xp.MapLayer_Fill = 7000
-    xp.MapLayer_Markings = 7001
-    xp.MapOrientation_Map = 7002
-    xp.MapOrientation_UI = 7003
-    xp.MapStyle_IFR_HighEnroute = 7004
-    xp.MapStyle_IFR_LowEnroute = 7005
-    xp.MapStyle_VFR_Sectional = 7006
+Language_Chinese = 6020
+Language_English = 6021
+Language_French = 6022
+Language_German = 6023
+Language_Greek = 6024
+Language_Italian = 6025
+Language_Japanese = 6026
+Language_Korean = 6027
+Language_Russian = 6028
+Language_Spanish = 6029
+Language_Ukrainian = 6030
+Language_Unknown = 6031
 
-    xp.DefaultWxrRadiusMslFt = 7010
-    xp.DefaultWxrRadiusNm = 7011
+# ----------------------------------------------------------------------
+# MAP / WEATHER / PROBE / FILE TYPES (7000–7499)
+# ----------------------------------------------------------------------
+MapLayer_Fill = 7000
+MapLayer_Markings = 7001
+MapOrientation_Map = 7002
+MapOrientation_UI = 7003
+MapStyle_IFR_HighEnroute = 7004
+MapStyle_IFR_LowEnroute = 7005
+MapStyle_VFR_Sectional = 7006
 
-    xp.ProbeError = 7020
-    xp.ProbeHitTerrain = 7021
-    xp.ProbeMissed = 7022
-    xp.ProbeY = 7023
+DefaultWxrRadiusMslFt = 7010
+DefaultWxrRadiusNm = 7011
 
-    xp.DataFile_ReplayMovie = 7030
-    xp.DataFile_Situation = 7031
+ProbeError = 7020
+ProbeHitTerrain = 7021
+ProbeMissed = 7022
+ProbeY = 7023
 
-    # ----------------------------------------------------------------------
-    # NAVIGATION TYPES & FLIGHTPLAN (7500–7699)
-    # ----------------------------------------------------------------------
-    xp.Nav_Airport = 7500
-    xp.Nav_Any = 7501
-    xp.Nav_DME = 7502
-    xp.Nav_Fix = 7503
-    xp.Nav_GlideSlope = 7504
-    xp.Nav_ILS = 7505
-    xp.Nav_InnerMarker = 7506
-    xp.Nav_LatLon = 7507
-    xp.Nav_Localizer = 7508
-    xp.Nav_MiddleMarker = 7509
-    xp.Nav_NDB = 7510
-    xp.Nav_OuterMarker = 7511
-    xp.Nav_TACAN = 7512
-    xp.Nav_Unknown = 7513
-    xp.Nav_VOR = 7514
-    xp.NAV_NOT_FOUND = 7515
+DataFile_ReplayMovie = 7030
+DataFile_Situation = 7031
 
-    xp.Fpl_CoPilot_Approach = 7550
-    xp.Fpl_CoPilot_Primary = 7551
-    xp.Fpl_CoPilot_Temporary = 7552
-    xp.Fpl_Pilot_Approach = 7553
-    xp.Fpl_Pilot_Primary = 7554
-    xp.Fpl_Pilot_Temporary = 7555
+# ----------------------------------------------------------------------
+# NAVIGATION TYPES & FLIGHTPLAN (7500–7699)
+# ----------------------------------------------------------------------
+Nav_Airport = 7500
+Nav_Any = 7501
+Nav_DME = 7502
+Nav_Fix = 7503
+Nav_GlideSlope = 7504
+Nav_ILS = 7505
+Nav_InnerMarker = 7506
+Nav_LatLon = 7507
+Nav_Localizer = 7508
+Nav_MiddleMarker = 7509
+Nav_NDB = 7510
+Nav_OuterMarker = 7511
+Nav_TACAN = 7512
+Nav_Unknown = 7513
+Nav_VOR = 7514
+NAV_NOT_FOUND = 7515
 
-    # ----------------------------------------------------------------------
-    # HOST / DEVICE / INTERNAL PATHS (7700–7899)
-    # ----------------------------------------------------------------------
-    xp.Host_Unknown = 7700
-    xp.Host_XPlane = 7701
+Fpl_CoPilot_Approach = 7550
+Fpl_CoPilot_Primary = 7551
+Fpl_CoPilot_Temporary = 7552
+Fpl_Pilot_Approach = 7553
+Fpl_Pilot_Primary = 7554
+Fpl_Pilot_Temporary = 7555
 
-    xp.Device_CDU739_1 = 7710
-    xp.Device_CDU739_2 = 7711
-    xp.Device_CDU815_1 = 7712
-    xp.Device_CDU815_2 = 7713
-    xp.Device_G1000_MFD = 7714
-    xp.Device_G1000_PFD_1 = 7715
-    xp.Device_G1000_PFD_2 = 7716
-    xp.Device_GNS430_1 = 7717
-    xp.Device_GNS430_2 = 7718
-    xp.Device_GNS530_1 = 7719
-    xp.Device_GNS530_2 = 7720
-    xp.Device_MCDU_1 = 7721
-    xp.Device_MCDU_2 = 7722
-    xp.Device_Primus_MFD_1 = 7723
-    xp.Device_Primus_MFD_2 = 7724
-    xp.Device_Primus_MFD_3 = 7725
-    xp.Device_Primus_PFD_1 = 7726
-    xp.Device_Primus_PFD_2 = 7727
-    xp.Device_Primus_RMU_1 = 7728
-    xp.Device_Primus_RMU_2 = 7729
+# ----------------------------------------------------------------------
+# HOST / DEVICE / INTERNAL PATHS (7700–7899)
+# ----------------------------------------------------------------------
+Host_Unknown = 7700
+Host_XPlane = 7701
 
-    xp.INTERNALPLUGINSPATH = ""
-    xp.PLUGINSPATH = ""
-    xp.PLUGIN_XPLANE = 7800
+Device_CDU739_1 = 7710
+Device_CDU739_2 = 7711
+Device_CDU815_1 = 7712
+Device_CDU815_2 = 7713
+Device_G1000_MFD = 7714
+Device_G1000_PFD_1 = 7715
+Device_G1000_PFD_2 = 7716
+Device_GNS430_1 = 7717
+Device_GNS430_2 = 7718
+Device_GNS530_1 = 7719
+Device_GNS530_2 = 7720
+Device_MCDU_1 = 7721
+Device_MCDU_2 = 7722
+Device_Primus_MFD_1 = 7723
+Device_Primus_MFD_2 = 7724
+Device_Primus_MFD_3 = 7725
+Device_Primus_PFD_1 = 7726
+Device_Primus_PFD_2 = 7727
+Device_Primus_RMU_1 = 7728
+Device_Primus_RMU_2 = 7729
 
-    xp.MAP_IOS = ""
-    xp.MAP_USER_INTERFACE = ""
+INTERNALPLUGINSPATH = ""
+PLUGINSPATH = ""
+PLUGIN_XPLANE = 7800
 
-    # ----------------------------------------------------------------------
-    # MESSAGES (7900–8299)
-    # ----------------------------------------------------------------------
-    xp.MSG_AIRPLANE_COUNT_CHANGED = 7900
-    xp.MSG_AIRPORT_LOADED = 7901
-    xp.MSG_DATAREFS_ADDED = 7902
-    xp.MSG_ENTERED_VR = 7903
-    xp.MSG_EXITING_VR = 7904
-    xp.MSG_FMOD_BANK_LOADED = 7905
-    xp.MSG_FMOD_BANK_UNLOADING = 7906
-    xp.MSG_LIVERY_LOADED = 7907
-    xp.MSG_PLANE_CRASHED = 7908
-    xp.MSG_PLANE_LOADED = 7909
-    xp.MSG_PLANE_UNLOADED = 7910
-    xp.MSG_RELEASE_PLANES = 7911
-    xp.MSG_SCENERY_LOADED = 7912
-    xp.MSG_WILL_WRITE_PREFS = 7913
+MAP_IOS = ""
+MAP_USER_INTERFACE = ""
 
-    xp.MsgAirplaneCountChanged = 7920
-    xp.MsgAirportLoaded = 7921
-    xp.MsgDatarefsAdded = 7922
-    xp.MsgDatarefs_Added = 7923
-    xp.MsgEnteredVr = 7924
-    xp.MsgExitingVr = 7925
-    xp.MsgFmodBankLoaded = 7926
-    xp.MsgFmodBankUnloading = 7927
-    xp.MsgLivery_Loaded = 7928
-    xp.MsgPlaneCrashed = 7929
-    xp.MsgPlaneLoaded = 7930
-    xp.MsgPlaneUnloaded = 7931
-    xp.MsgReleasePlanes = 7932
-    xp.MsgSceneryLoaded = 7933
-    xp.MsgWillWritePrefs = 7934
+# ----------------------------------------------------------------------
+# MESSAGES (7900–8299)
+# ----------------------------------------------------------------------
+MSG_AIRPLANE_COUNT_CHANGED = 7900
+MSG_AIRPORT_LOADED = 7901
+MSG_DATAREFS_ADDED = 7902
+MSG_ENTERED_VR = 7903
+MSG_EXITING_VR = 7904
+MSG_FMOD_BANK_LOADED = 7905
+MSG_FMOD_BANK_UNLOADING = 7906
+MSG_LIVERY_LOADED = 7907
+MSG_PLANE_CRASHED = 7908
+MSG_PLANE_LOADED = 7909
+MSG_PLANE_UNLOADED = 7910
+MSG_RELEASE_PLANES = 7911
+MSG_SCENERY_LOADED = 7912
+MSG_WILL_WRITE_PREFS = 7913
 
-    xp.Message_CloseButtonPushed = 7940
+MsgAirplaneCountChanged = 7920
+MsgAirportLoaded = 7921
+MsgDatarefsAdded = 7922
+MsgDatarefs_Added = 7923
+MsgEnteredVr = 7924
+MsgExitingVr = 7925
+MsgFmodBankLoaded = 7926
+MsgFmodBankUnloading = 7927
+MsgLivery_Loaded = 7928
+MsgPlaneCrashed = 7929
+MsgPlaneLoaded = 7930
+MsgPlaneUnloaded = 7931
+MsgReleasePlanes = 7932
+MsgSceneryLoaded = 7933
+MsgWillWritePrefs = 7934
 
-    # ----------------------------------------------------------------------
-    # WIDGET MESSAGES (8000–8999)
-    # ----------------------------------------------------------------------
-    xp.Msg_None = 8000
-    xp.Msg_Create = 8001
-    xp.Msg_Destroy = 8002
-    xp.Msg_Paint = 8003
-    xp.Msg_Draw = 8004
-    xp.Msg_MouseDown = 8005
-    xp.Msg_MouseDrag = 8006
-    xp.Msg_MouseUp = 8007
-    xp.Msg_MouseWheel = 8008
-    xp.Msg_KeyPress = 8009
-    xp.Msg_KeyTakeFocus = 8010
-    xp.Msg_KeyLoseFocus = 8011
-    xp.Msg_DescriptorChanged = 8012
-    xp.Msg_PropertyChanged = 8013
-    xp.Msg_ExposedChanged = 8014
-    xp.Msg_Hidden = 8015
-    xp.Msg_Shown = 8016
-    xp.Msg_Reshape = 8017
-    xp.Msg_AcceptParent = 8018
-    xp.Msg_AcceptChild = 8019
-    xp.Msg_LoseChild = 8020
-    xp.Msg_TextFieldChanged = 8021
-    xp.Msg_PushButtonPressed = 8022
-    xp.Msg_ScrollBarSliderPositionChanged = 8023
-    xp.Msg_UserStart = 8024
+Message_CloseButtonPushed = 7940
 
-    xp.Message_CloseButtonPushed = 8100
+# ----------------------------------------------------------------------
+# WIDGET MESSAGES (8000–8999)
+# ----------------------------------------------------------------------
+Msg_None = 8000
+Msg_Create = 8001
+Msg_Destroy = 8002
+Msg_Paint = 8003
+Msg_Draw = 8004
+Msg_MouseDown = 8005
+Msg_MouseDrag = 8006
+Msg_MouseUp = 8007
+Msg_MouseWheel = 8008
+Msg_KeyPress = 8009
+Msg_KeyTakeFocus = 8010
+Msg_KeyLoseFocus = 8011
+Msg_DescriptorChanged = 8012
+Msg_PropertyChanged = 8013
+Msg_ExposedChanged = 8014
+Msg_Hidden = 8015
+Msg_Shown = 8016
+Msg_Reshape = 8017
+Msg_AcceptParent = 8018
+Msg_AcceptChild = 8019
+Msg_LoseChild = 8020
+Msg_TextFieldChanged = 8021
+Msg_PushButtonPressed = 8022
+Msg_ScrollBarSliderPositionChanged = 8023
+Msg_UserStart = 8024
+Msg_ButtonStateChanged = 8025
+Msg_Show = 8016         # alias for Msg_Shown
+Msg_Hide = 8015         # alias for Msg_Hidden
+Msg_Resize = 8017       # alias for Msg_Reshape
 
-    # ----------------------------------------------------------------------
-    # KEYBOARD / VK_* (9000–10999)
-    # ----------------------------------------------------------------------
-    base = 9000
-    names = [
-        "VK_0", "VK_1", "VK_2", "VK_3", "VK_4", "VK_5", "VK_6", "VK_7", "VK_8", "VK_9",
-        "VK_A", "VK_ADD", "VK_B", "VK_BACK", "VK_BACKQUOTE", "VK_BACKSLASH", "VK_C",
-        "VK_CLEAR", "VK_COMMA", "VK_D", "VK_DECIMAL", "VK_DELETE", "VK_DIVIDE",
-        "VK_DOWN", "VK_E", "VK_END", "VK_ENTER", "VK_EQUAL", "VK_ESCAPE", "VK_EXECUTE",
-        "VK_F10", "VK_F11", "VK_F12", "VK_F13", "VK_F14", "VK_F15", "VK_F16", "VK_F17",
-        "VK_F18", "VK_F19", "VK_F1", "VK_F20", "VK_F21", "VK_F22", "VK_F23", "VK_F24",
-        "VK_F2", "VK_F3", "VK_F4", "VK_F5", "VK_F6", "VK_F7", "VK_F8", "VK_F9", "VK_F",
-        "VK_G", "VK_H", "VK_HELP", "VK_HOME", "VK_I", "VK_INSERT", "VK_J", "VK_K",
-        "VK_L", "VK_LBRACE", "VK_LEFT", "VK_M", "VK_MINUS", "VK_MULTIPLY", "VK_N",
-        "VK_NEXT", "VK_NUMPAD0", "VK_NUMPAD1", "VK_NUMPAD2", "VK_NUMPAD3",
-        "VK_NUMPAD4", "VK_NUMPAD5", "VK_NUMPAD6", "VK_NUMPAD7", "VK_NUMPAD8",
-        "VK_NUMPAD9", "VK_NUMPAD_ENT", "VK_NUMPAD_EQ", "VK_O", "VK_P", "VK_PERIOD",
-        "VK_PRINT", "VK_PRIOR", "VK_Q", "VK_QUOTE", "VK_R", "VK_RBRACE", "VK_RETURN",
-        "VK_RIGHT", "VK_S", "VK_SELECT", "VK_SEMICOLON", "VK_SEPARATOR", "VK_SLASH",
-        "VK_SNAPSHOT", "VK_SPACE", "VK_SUBTRACT", "VK_T", "VK_TAB", "VK_U", "VK_UP",
-        "VK_V", "VK_W", "VK_X", "VK_Y", "VK_Z"
-    ]
+# ----------------------------------------------------------------------
+# KEYBOARD / VK_* (9000–10999)
+# ----------------------------------------------------------------------
+VK_0 = 9000
+VK_1 = 9001
+VK_2 = 9002
+VK_3 = 9003
+VK_4 = 9004
+VK_5 = 9005
+VK_6 = 9006
+VK_7 = 9007
+VK_8 = 9008
+VK_9 = 9009
+VK_A = 9010
+VK_ADD = 9011
+VK_B = 9012
+VK_BACK = 9013
+VK_BACKQUOTE = 9014
+VK_BACKSLASH = 9015
+VK_C = 9016
+VK_CLEAR = 9017
+VK_COMMA = 9018
+VK_D = 9019
+VK_DECIMAL = 9020
+VK_DELETE = 9021
+VK_DIVIDE = 9022
+VK_DOWN = 9023
+VK_E = 9024
+VK_END = 9025
+VK_ENTER = 9026
+VK_EQUAL = 9027
+VK_ESCAPE = 9028
+VK_EXECUTE = 9029
+VK_F10 = 9030
+VK_F11 = 9031
+VK_F12 = 9032
+VK_F13 = 9033
+VK_F14 = 9034
+VK_F15 = 9035
+VK_F16 = 9036
+VK_F17 = 9037
+VK_F18 = 9038
+VK_F19 = 9039
+VK_F1 = 9040
+VK_F20 = 9041
+VK_F21 = 9042
+VK_F22 = 9043
+VK_F23 = 9044
+VK_F24 = 9045
+VK_F2 = 9046
+VK_F3 = 9047
+VK_F4 = 9048
+VK_F5 = 9049
+VK_F6 = 9050
+VK_F7 = 9051
+VK_F8 = 9052
+VK_F9 = 9053
+VK_F = 9054
+VK_G = 9055
+VK_H = 9056
+VK_HELP = 9057
+VK_HOME = 9058
+VK_I = 9059
+VK_INSERT = 9060
+VK_J = 9061
+VK_K = 9062
+VK_L = 9063
+VK_LBRACE = 9064
+VK_LEFT = 9065
+VK_M = 9066
+VK_MINUS = 9067
+VK_MULTIPLY = 9068
+VK_N = 9069
+VK_NEXT = 9070
+VK_NUMPAD0 = 9071
+VK_NUMPAD1 = 9072
+VK_NUMPAD2 = 9073
+VK_NUMPAD3 = 9074
+VK_NUMPAD4 = 9075
+VK_NUMPAD5 = 9076
+VK_NUMPAD6 = 9077
+VK_NUMPAD7 = 9078
+VK_NUMPAD8 = 9079
+VK_NUMPAD9 = 9080
+VK_NUMPAD_ENT = 9081
+VK_NUMPAD_EQ = 9082
+VK_O = 9083
+VK_P = 9084
+VK_PERIOD = 9085
+VK_PRINT = 9086
+VK_PRIOR = 9087
+VK_Q = 9088
+VK_QUOTE = 9089
+VK_R = 9090
+VK_RBRACE = 9091
+VK_RETURN = 9092
+VK_RIGHT = 9093
+VK_S = 9094
+VK_SELECT = 9095
+VK_SEMICOLON = 9096
+VK_SEPARATOR = 9097
+VK_SLASH = 9098
+VK_SNAPSHOT = 9099
+VK_SPACE = 9100
+VK_SUBTRACT = 9101
+VK_T = 9102
+VK_TAB = 9103
+VK_U = 9104
+VK_UP = 9105
+VK_V = 9106
+VK_W = 9107
+VK_X = 9108
+VK_Y = 9109
+VK_Z = 9110
 
-    for i, name in enumerate(names):
-        setattr(xp, name, base + i)
+# ----------------------------------------------------------------------
+# WINDOW / POSITIONING / DECORATION / LAYERS (11000–11999)
+# ----------------------------------------------------------------------
+WindowCenterOnMonitor = 11000
+WindowFullScreenOnAllMonitors = 11001
+WindowFullScreenOnMonitor = 11002
+WindowPopOut = 11003
+WindowPositionFree = 11004
+WindowVR = 11005
 
-    # ----------------------------------------------------------------------
-    # WINDOW / POSITIONING / DECORATION / LAYERS (11000–11999)
-    # ----------------------------------------------------------------------
-    xp.WindowCenterOnMonitor = 11000
-    xp.WindowFullScreenOnAllMonitors = 11001
-    xp.WindowFullScreenOnMonitor = 11002
-    xp.WindowPopOut = 11003
-    xp.WindowPositionFree = 11004
-    xp.WindowVR = 11005
+WindowDecorationNone = 11100
+WindowDecorationRoundRectangle = 11101
+WindowDecorationSelfDecorated = 11102
+WindowDecorationSelfDecoratedResizable = 11103
 
-    xp.WindowDecorationNone = 11100
-    xp.WindowDecorationRoundRectangle = 11101
-    xp.WindowDecorationSelfDecorated = 11102
-    xp.WindowDecorationSelfDecoratedResizable = 11103
+WindowLayerFlightOverlay = 11200
+WindowLayerFloatingWindows = 11201
+WindowLayerGrowlNotifications = 11202
+WindowLayerModal = 11203
 
-    xp.WindowLayerFlightOverlay = 11200
-    xp.WindowLayerFloatingWindows = 11201
-    xp.WindowLayerGrowlNotifications = 11202
-    xp.WindowLayerModal = 11203
+WindowCloseBox = 11300
 
-    xp.WindowCloseBox = 11300
+# ----------------------------------------------------------------------
+# WEATHER / ATMOSPHERE LAYERS (12100–12199)
+# ----------------------------------------------------------------------
+NumCloudLayers = 12100
+NumTemperatureLayers = 12101
+NumWindLayers = 12102
+WindUndefinedLayer = 12103
 
-    # ----------------------------------------------------------------------
-    # WEATHER / ATMOSPHERE LAYERS (12100–12199)
-    # ----------------------------------------------------------------------
-    xp.NumCloudLayers = 12100
-    xp.NumTemperatureLayers = 12101
-    xp.NumWindLayers = 12102
-    xp.WindUndefinedLayer = 12103
+# ----------------------------------------------------------------------
+# SCROLLBAR (12200–12299)
+# ----------------------------------------------------------------------
+ScrollBarTypeScrollBar = 12210
+ScrollBarTypeSlider = 12211
 
-    # ----------------------------------------------------------------------
-    # PROGRESS / TRACK / SCROLLBAR (12200–12299)
-    # ----------------------------------------------------------------------
-    xp.Track_Progress = 12200
-    xp.Track_ScrollBar = 12201
-    xp.Track_Slider = 12202
+# ----------------------------------------------------------------------
+# BUTTON BEHAVIOR (12300–12399)
+# ----------------------------------------------------------------------
+ButtonBehaviorCheckBox = 12300
+ButtonBehaviorPushButton = 12301
+ButtonBehaviorRadioButton = 12302
 
-    xp.ScrollBarTypeScrollBar = 12210
-    xp.ScrollBarTypeSlider = 12211
+PushButton = 12310
+RadioButton = 12311
+CheckBox = 12312
 
-    # ----------------------------------------------------------------------
-    # BUTTON BEHAVIOR (12300–12399)
-    # ----------------------------------------------------------------------
-    xp.ButtonBehaviorCheckBox = 12300
-    xp.ButtonBehaviorPushButton = 12301
-    xp.ButtonBehaviorRadioButton = 12302
+# ----------------------------------------------------------------------
+# MISC XP CONSTANTS (12400–12699)
+# ----------------------------------------------------------------------
+USER_AIRCRAFT = 12400
+NO_PARENT = 12401
+NO_PLUGIN_ID = 12402
 
-    xp.PushButton = 12310
-    xp.RadioButton = 12311
-    xp.CheckBox = 12312
+PARAM_PARENT = 12410
 
-    # ----------------------------------------------------------------------
-    # MISC XP CONSTANTS (12400–12699)
-    # ----------------------------------------------------------------------
-    xp.USER_AIRCRAFT = 12400
-    xp.NO_PARENT = 12401
-    xp.NO_PLUGIN_ID = 12402
+# ----------------------------------------------------------------------
+# INTERNAL / PYTHON / SYSTEM (12700–12999)
+# ----------------------------------------------------------------------
+ModuleMTimes = object()  # 12700
+pythonDebugLevel = 12701
+pythonExecutable = "python.exe"
 
-    xp.PARAM_PARENT = 12410
+# ----------------------------------------------------------------------
+# DRAWING PHASES (13000–13099)
+# ----------------------------------------------------------------------
+Phase_FirstCockpit = 13000
+Phase_Gauges = 13001
+Phase_LastCockpit = 13002
+Phase_LocalMap2D = 13003
+Phase_LocalMap3D = 13004
+Phase_LocalMapProfile = 13005
+Phase_Modern3D = 13006
+Phase_Panel = 13007
+Phase_Window = 13008
 
-    xp.NAV_NOT_FOUND = 12420
+# ----------------------------------------------------------------------
+# MOUSE STATUS (13100–13199)
+# ----------------------------------------------------------------------
+MouseDown = 13100
+MouseDrag = 13101
+MouseUp = 13102
 
-    # ----------------------------------------------------------------------
-    # INTERNAL / PYTHON / SYSTEM (12700–12999)
-    # ----------------------------------------------------------------------
-    xp.ModuleMTimes = object()  # 12700
-    xp.pythonDebugLevel = 12701
-    xp.pythonExecutable = ""
+# ----------------------------------------------------------------------
+# REMAINING WORLD OBJECTS / ICONS (14200–14299)
+# ----------------------------------------------------------------------
+MarkerLeft = 14200
+MarkerRight = 14201
 
-    # ----------------------------------------------------------------------
-    # DRAWING PHASES (13000–13099)
-    # ----------------------------------------------------------------------
-    xp.Phase_FirstCockpit = 13000
-    xp.Phase_Gauges = 13001
-    xp.Phase_LastCockpit = 13002
-    xp.Phase_LocalMap2D = 13003
-    xp.Phase_LocalMap3D = 13004
-    xp.Phase_LocalMapProfile = 13005
-    xp.Phase_Modern3D = 13006
-    xp.Phase_Panel = 13007
-    xp.Phase_Window = 13008
+# ----------------------------------------------------------------------
+# VERSION / IDENTIFIERS (15100–15199)
+# ----------------------------------------------------------------------
 
-    # ----------------------------------------------------------------------
-    # MOUSE STATUS (13100–13199)
-    # ----------------------------------------------------------------------
-    xp.MouseDown = 13100
-    xp.MouseDrag = 13101
-    xp.MouseUp = 13102
+VERSION = Version = "12.4"
+kVersion = 15100
+kXPLM_Version = 15101
 
-    # ----------------------------------------------------------------------
-    # XP WINDOW STYLES (13200–13299)
-    # ----------------------------------------------------------------------
-    xp.Window_Help = 13200
-    xp.Window_ListView = 13201
-    xp.Window_MainWindow = 13202
-    xp.Window_Screen = 13203
-    xp.Window_SubWindow = 13204
-
-    # ----------------------------------------------------------------------
-    # WINDOW / UI CONTINUATION (14000–14199)
-    # ----------------------------------------------------------------------
-    xp.WindowLayerFlightOverlay = 14000
-    xp.WindowLayerFloatingWindows = 14001
-    xp.WindowLayerGrowlNotifications = 14002
-    xp.WindowLayerModal = 14003
-
-    # ----------------------------------------------------------------------
-    # REMAINING WORLD OBJECTS / ICONS (14200–14299)
-    # ----------------------------------------------------------------------
-    xp.MarkerLeft = 14200
-    xp.MarkerRight = 14201
-
-    # ----------------------------------------------------------------------
-    # REMAINING SCROLLBAR / BUTTON / TEXTFIELD (14300–14399)
-    # ----------------------------------------------------------------------
-    xp.ScrollBarTypeScrollBar = 14300
-    xp.ScrollBarTypeSlider = 14301
-
-    # ----------------------------------------------------------------------
-    # REMAINING MAP / INTERNAL STRINGS (14500–14599)
-    # ----------------------------------------------------------------------
-    xp.MAP_IOS = ""
-    xp.MAP_USER_INTERFACE = ""
-
-    # ----------------------------------------------------------------------
-    # REMAINING PYTHON / INTERNAL (15000–15099)
-    # ----------------------------------------------------------------------
-    xp.pythonDebugLevel = 15000
-    xp.pythonExecutable = "python.exe"
-
-    # ----------------------------------------------------------------------
-    # VERSION / IDENTIFIERS (15100–15199)
-    # ----------------------------------------------------------------------
-
-    xp.VERSION = xp.Version = "12.4"
-    xp.kVersion = 15100
-    xp.kXPLM_Version = 15101
-
-    # ----------------------------------------------------------------------
-    # MENUS (XPLMMenus API)
-    # ----------------------------------------------------------------------
-    xp.Menu_NoCheck = 16000  # Item cannot be checked
-    xp.Menu_Unchecked = 16001  # Item is checkable and currently unchecked
-    xp.Menu_Checked = 16002  # Item is checkable and currently checked
+# ----------------------------------------------------------------------
+# MENUS (XPLMMenus API)
+# ----------------------------------------------------------------------
+Menu_NoCheck = 16000  # Item cannot be checked
+Menu_Unchecked = 16001  # Item is checkable and currently unchecked
+Menu_Checked = 16002  # Item is checkable and currently checked

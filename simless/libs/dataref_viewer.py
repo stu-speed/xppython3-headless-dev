@@ -5,78 +5,164 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional, Pattern, TYPE_CHECKING
 
-from simless.libs.dataref import DataRefManager
-from simless.libs.fake_xp_types import FakeDataRef
-from XPPython3.xp_typing import XPWidgetID, XPWidgetMessage
+from xp_typing import XPWidgetID, XPWidgetMessage
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
 
 
-# ============================================================
-# Viewer state model
-# ============================================================
-
 @dataclass
-class RefMeta:
-    idx: int
-    name: str
+class CacheEntry:
+    path: str
     type: int
+    size: int
     writable: bool
-    array_size: int
-    is_dummy: bool
+    value: Any  # Python object (int, float, list, bytes, etc.)
+
+    def to_json(self) -> str:
+        data = asdict(self)
+
+        # Encode Type_Data (bytes/bytearray) as base64 string
+        if isinstance(self.value, (bytes, bytearray)):
+            data["value"] = {
+                "encoding": "base64",
+                "data": base64.b64encode(self.value).decode("ascii")
+            }
+
+        return json.dumps(data)
+
+    @staticmethod
+    def from_json(s: str) -> "CacheEntry":
+        data = json.loads(s)
+
+        # Decode Type_Data if present
+        if isinstance(data.get("value"), dict) and data["value"].get("encoding") == "base64":
+            b64 = data["value"]["data"]
+            data["value"] = base64.b64decode(b64)
+
+        return CacheEntry(**data)
 
 
-@dataclass
-class RefState:
-    meta: RefMeta
-    value: Any = None
-    last_value: Any = None
-    changed: bool = False
+class DataRefCache:
+    """
+    Dict-backed cache of DataRef metadata.
+    One line per dataref, left-justified, min 3 spaces between columns.
+    """
 
+    HEADER = (
+        "# DataRef Cache to ensure correct dataref shape/value when offline\n"
+        "#PATH                                                                                TYPE                                 SIZE    WRITEABLE   VALUE\n"
+    )
 
-class ViewerState:
-    def __init__(self) -> None:
-        self.refs: Dict[str, RefState] = {}
+    def __init__(self, fake_xp: FakeXP) -> None:
+        self.fake_xp = fake_xp
+        self._cache: Dict[str, CacheEntry] = {}
 
+        self.from_file()
 
-# ============================================================
-# Widget-only viewer
-# ============================================================
+    def get_cached_info(self, path: str) -> Optional[CacheEntry]:
+        return self._cache.get(path)
+
+    def to_file(self):
+        with open(self.fake_xp._dataref_cache_path, "w", encoding="utf-8") as f:
+            for entry in self._cache.values():
+                f.write(entry.to_json() + "\n")
+
+    def from_file(self):
+        self._cache.clear()
+
+        try:
+            with open(self.fake_xp._dataref_cache_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    entry = CacheEntry.from_json(line)
+                    self._cache[entry.path] = entry
+
+        except FileNotFoundError:
+            pass
+
+    def update(self):
+        for ref in self.fake_xp.dataref_manager.all_handles():
+            if ref.dummy or ref.cached:
+                continue
+            self._cache[ref.path] = CacheEntry(
+                path=ref.path,
+                type=ref.type,
+                size=ref.size,
+                writable=ref.writable,
+                value=ref.value
+            )
+
+        self.to_file()
+
+    def clear(self):
+        self._cache.clear()
+        with open(self.fake_xp._dataref_cache_path, "w", encoding="utf-8") as f:
+            f.write(self.HEADER)
+
 
 class DataRefViewer:
     LOG_PREFIX = "[FakeXPDataRefViewer]"
 
+    status_caption: XPWidgetID
+    filter_label: XPWidgetID
+    filter_field: XPWidgetID
+    filter_button: XPWidgetID
+    data_caption: XPWidgetID
+    cache_save_button: XPWidgetID
+    cache_clear_button: XPWidgetID
+
     def __init__(self, xp: FakeXP) -> None:
         self.fake_xp = xp
 
-        self.win: XPWidgetID | None = None
-        self.status_caption: XPWidgetID | None = None
-
-        self.filter_label: XPWidgetID | None = None
-        self.filter_field: XPWidgetID | None = None
-        self.filter_button: XPWidgetID | None = None
-
-        self.data_caption: XPWidgetID | None = None
-
-        self.state = ViewerState()
         self._next_idx: int = 1
         self._dirty: bool = False
+        self._bridge_status: str = ""
+        self._last_dataref_render = time.monotonic()
 
-        self._filter_text: str = ""
+        self._window: Optional[XPWidgetID] = None
         self._filter_regex: Optional[Pattern[str]] = None
+
+    @property
+    def window(self) -> XPWidgetID:
+        if self._window is None:
+            raise RuntimeError("WidgetID accessed before creation")
+        return self._window
+
+    @window.setter
+    def window(self, wid: XPWidgetID) -> None:
+        self._window = wid
+
+    @property
+    def is_created(self) -> bool:
+        return self._window is not None
+
+    @property
+    def bridge_status(self) -> str:
+        return self._bridge_status
+
+    @bridge_status.setter
+    def bridge_status(self, val: str) -> None:
+        self._bridge_status = val
+        self._dirty = True
 
     # --------------------------------------------------------
 
-    def open(self) -> None:
-        if self.win:
+    def create(self) -> None:
+        if self._window:
             return
 
-        self.win = self.fake_xp.createWidget(
+        self._window = self.fake_xp.createWidget(
             100, 800, 1400, 200,
             1,
             "FakeXP DataRef Viewer",
@@ -84,12 +170,12 @@ class DataRefViewer:
             0,
             self.fake_xp.WidgetClass_MainWindow,
         )
-        self.fake_xp.setWidgetProperty(self.win, self.fake_xp.Property_MainWindowHasCloseBoxes, 1)
+        self.fake_xp.setWidgetProperty(self.window, self.fake_xp.Property_MainWindowHasCloseBoxes, 1)
 
         # STATUS (single line)
         self.status_caption = self.fake_xp.createWidget(
             110, 770, 850, 735,
-            1, "", 0, self.win, self.fake_xp.WidgetClass_Caption
+            1, "", 0, self.window, self.fake_xp.WidgetClass_Caption
         )
 
         # FILTER (single line, moved up)
@@ -98,12 +184,12 @@ class DataRefViewer:
 
         self.filter_label = self.fake_xp.createWidget(
             110, y_top, 220, y_bot,
-            1, "FILTER (regex):", 0, self.win, self.fake_xp.WidgetClass_Caption
+            1, "FILTER (regex):", 0, self.window, self.fake_xp.WidgetClass_Caption
         )
 
         self.filter_field = self.fake_xp.createWidget(
             225, y_top, 525, y_bot,
-            1, "", 0, self.win, self.fake_xp.WidgetClass_TextField
+            1, "", 0, self.window, self.fake_xp.WidgetClass_TextField
         )
         self.fake_xp.setWidgetProperty(
             self.filter_field,
@@ -113,97 +199,130 @@ class DataRefViewer:
 
         self.filter_button = self.fake_xp.createWidget(
             530, y_top, 610, y_bot,
-            1, "Apply", 0, self.win, self.fake_xp.WidgetClass_Button
+            1, "Apply", 0, self.window, self.fake_xp.WidgetClass_Button
         )
+
+        # DATAREF CACHE CONTROLS (same row as filter)
+        self.fake_xp.createWidget(
+            660, y_top, 740, y_bot,
+            1, "Dataref Cache:", 0, self.window, self.fake_xp.WidgetClass_Caption
+        )
+
+        self.cache_save_button = self.fake_xp.createWidget(
+            760, y_top, 800, y_bot,
+            1, "Save", 0, self.window, self.fake_xp.WidgetClass_Button
+        )
+
+        self.cache_clear_button = self.fake_xp.createWidget(
+            810, y_top, 870, y_bot,
+            1, "Delete", 0, self.window, self.fake_xp.WidgetClass_Button
+        )
+
+        # Register callbacks
+        self.fake_xp.addWidgetCallback(self.cache_save_button, self._widget_handler)
+        self.fake_xp.addWidgetCallback(self.cache_clear_button, self._widget_handler)
 
         # DATAREF LIST (nudged up to match reclaimed space)
         self.data_caption = self.fake_xp.createWidget(
             110, 705, 1390, 250,
-            1, "", 0, self.win, self.fake_xp.WidgetClass_Caption
+            1, "", 0, self.window, self.fake_xp.WidgetClass_Caption
         )
+        self.fake_xp.setWidgetProperty(self.data_caption, self.fake_xp.Property_Font, self.fake_xp.Font_Basic)
 
         # Callbacks
-        self.fake_xp.addWidgetCallback(self.win, self._widget_handler)
-        self.fake_xp.addWidgetCallback(self.filter_field, self._widget_handler)
-        self.fake_xp.addWidgetCallback(self.filter_button, self._widget_handler)
+        self.fake_xp.addWidgetCallback(self.window, self._widget_handler)
+        self.fake_xp.addWidgetCallback(self.filter_field, self._input_handler)
 
         self._dirty = True
-
-    def close(self) -> None:
-        if self.win:
-            self.fake_xp.destroyWidget(self.win, 1)
-            self.win = None
 
     # --------------------------------------------------------
 
     def _widget_handler(
-        self,
-        msg: XPWidgetMessage | int,
-        widget: XPWidgetID | int,
-        p1: Any,
-        p2: Any,
+            self,
+            msg: XPWidgetMessage | int,
+            widget: XPWidgetID,
+            p1: Any,
+            p2: Any,
     ) -> int:
-        if msg == self.fake_xp.Message_CloseButtonPushed and widget == self.win:
-            self.fake_xp.hideWidget(self.win)
-            return 1
-
-        # TextField commits are event-driven
-        if msg == self.fake_xp.Msg_TextFieldChanged and widget == self.filter_field:
-            self._filter_text = str(p1)
-            return 1
-
         # Button presses are delivered to the parent window
-        if msg == self.fake_xp.Msg_PushButtonPressed and widget == self.filter_button:
-            self._apply_filter(self._filter_text)
-            return 1
+        if msg == self.fake_xp.Msg_PushButtonPressed:
+            if p1 == self.filter_button:
+                self._apply_filter()
+                return 1
+            if p1 == self.cache_clear_button:
+                self.fake_xp.dataref_cache.clear()
+                return 1
+            if p1 == self.cache_save_button:
+                self.fake_xp.dataref_cache.update()
+                return 1
 
         return 0
 
+    def _input_handler(
+            self,
+            msg: XPWidgetMessage | int,
+            widget: XPWidgetID,
+            p1: Any,
+            p2: Any,
+    ) -> int:
+        info = self.fake_xp.widget_manager.require_info(widget)
+        return self.fake_xp.widget_manager.handle_input_msg(info, msg, p1, p2, self._apply_filter)
+
     # --------------------------------------------------------
 
+    def menu_cmd(self, cmd, phase, refcon):
+        if phase == self.fake_xp.CommandBegin:
+            if not self.is_created:
+                self.create()
+            elif not self.fake_xp.isWidgetVisible(self.window):
+                self.fake_xp.showWidget(self.window)
+                self.fake_xp.setKeyboardFocus(self.filter_field)
+
     def refresh(self) -> None:
-        if not self._dirty or not self.win:
-            self._dirty = False
+        if not self.is_created:
+            return
+        if not self.fake_xp.isWidgetVisible(self.window):
+            return
+        if self.fake_xp.dataref_manager.last_updated > self._last_dataref_render:
+            self._dirty = True
+        if not self._dirty:
             return
 
         self._render_status()
-        self._render_datarefs()
-        self._dirty = False
+        recent_changes = self._render_datarefs()
+        if not recent_changes:
+            self._dirty = False
 
     # --------------------------------------------------------
 
     def _render_status(self) -> None:
-        enabled, connected, conn_status = self.fake_xp.simless_runner.get_bridge_status()
+        status = self.fake_xp.simless_runner.bridge_client.conn_status
+        self.fake_xp.setWidgetDescriptor(self.status_caption, status)
 
-        if not enabled:
-            text = "Bridge: DISABLED"
-        else:
-            text = f"Bridge: {"CONNECTED" if connected else "DISCONNECTED"} - {conn_status}"
+    def _render_datarefs(self) -> bool:
+        lines: list[str] = ["  D IDX  NAME                                                         W VALUE",
+                            "  - ---- ------------------------------------------------------------ - -----"]
 
-        self.fake_xp.setWidgetDescriptor(self.status_caption, text)
-
-    def _render_datarefs(self) -> None:
-        lines: list[str] = []
-        lines.append("  D IDX  NAME                                                         W VALUE")
-        lines.append("  - ---- ------------------------------------------------------------ - -----")
-
-        for ref in sorted(self.state.refs.values(), key=lambda r: r.meta.idx):
-            meta = ref.meta
-
-            if self._filter_regex and not self._filter_regex.search(meta.name):
+        recent = False
+        for ref in self.fake_xp.dataref_manager.all_handles():
+            if self._filter_regex and not self._filter_regex.search(ref.path):
                 continue
 
-            mark = "*" if ref.changed else " "
-            dummy = "D" if meta.is_dummy else " "
+            now = time.monotonic()
+            mark = " "
+            if now - ref.last_modified <= 10:
+                mark = "*"
+                recent = True
             lines.append(
-                f"{mark} {dummy} {meta.idx:4d} {meta.name:60s} "
-                f"{'W' if meta.writable else '-'} {ref.value}"
+                f"{mark} {ref.phase} {ref.df_id:4d} {ref.path:60s} "
+                f"{'W' if ref.writable else ' '} {ref.value}"
             )
 
         self.fake_xp.setWidgetDescriptor(self.data_caption, "\n".join(lines))
+        return recent
 
-    def _apply_filter(self, text: str) -> None:
-        text = (text or "").strip()
+    def _apply_filter(self) -> None:
+        text = self.fake_xp.getWidgetDescriptor(self.filter_field)
 
         if not text:
             self._filter_regex = None
@@ -211,117 +330,3 @@ class DataRefViewer:
             self._filter_regex = re.compile(re.escape(text))
 
         self._dirty = True
-
-
-# ============================================================
-# Viewer client (runner-owned)
-# ============================================================
-
-class FakeXPDataRefViewerClient:
-    def __init__(self, xp: FakeXP):
-        self.fake_xp = xp
-        self.viewer = DataRefViewer(xp)
-        self._attached = False
-
-    @property
-    def dm(self) -> DataRefManager:
-        return self.fake_xp.dataref_manager
-
-    def attach(self) -> None:
-        if self._attached:
-            return
-        self._attached = True
-
-        for ref in self.dm.all_handles():
-            self._add_ref(ref)
-
-        self.dm.attach_handle_callback(self._on_new_handle)
-        self.viewer.open()
-
-    def detach(self) -> None:
-        if not self._attached:
-            return
-        self._attached = False
-
-        self.dm.detach_handle_callback()
-        self.viewer.close()
-
-    def update(self) -> None:
-        for state in self.viewer.state.refs.values():
-            self._update_value(state)
-        self.viewer.refresh()
-
-    def _on_new_handle(self, ref: FakeDataRef) -> None:
-        self._add_ref(ref)
-
-    def _add_ref(self, ref: FakeDataRef) -> None:
-        if ref.path in self.viewer.state.refs:
-            return
-
-        value = self._read_value(ref)
-
-        meta = RefMeta(
-            idx=self.viewer._next_idx,
-            name=ref.path,
-            type=ref.type,
-            writable=ref.writable,
-            array_size=ref.size,
-            is_dummy=not ref.shape_known and not ref.type_known,
-        )
-
-        self.viewer.state.refs[ref.path] = RefState(
-            meta=meta,
-            value=value,
-            changed=True,
-        )
-
-        self.viewer._next_idx += 1
-        self.viewer._dirty = True
-
-    def _update_value(self, state: RefState) -> None:
-        ref = self.dm.get_handle(state.meta.name)
-        if ref is None:
-            return
-
-        new_value = self._read_value(ref)
-
-        state.last_value = state.value
-        state.value = new_value
-        state.changed = (state.last_value != state.value)
-        if state.changed:
-            self.viewer._dirty = True
-
-    def _read_value(self, ref: FakeDataRef) -> Any:
-        """
-        Read the current value of a FakeDataRef using its xp.Type_* dtype.
-        """
-        fxp = self.fake_xp
-        t = ref.type
-
-        # --- Scalars ---
-        if t & fxp.Type_Float:
-            return fxp.getDataf(ref)
-
-        if t & fxp.Type_Int:
-            return fxp.getDatai(ref)
-
-        if t & fxp.Type_Double:
-            return fxp.getDatad(ref)
-
-        # --- Arrays ---
-        if t & fxp.Type_FloatArray:
-            buf = [0.0] * ref.size
-            fxp.getDatavf(ref, buf, 0, ref.size)
-            return buf
-
-        if t & fxp.Type_IntArray:
-            buf = [0] * ref.size
-            fxp.getDatavi(ref, buf, 0, ref.size)
-            return buf
-
-        if t & fxp.Type_Data:
-            buf = bytearray(ref.size)
-            fxp.getDatab(ref, buf, 0, ref.size)
-            return buf
-
-        return None

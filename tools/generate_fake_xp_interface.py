@@ -1,17 +1,3 @@
-"""
-generate_fake_xp_interface.py
------------------------------
-
-Generate a complete `fake_xp.pyi` stub for simless execution.
-
-This stub contains:
-    • All constants from production XPPython3 xp.pyi
-    • All public methods from simless FakeXP / plugin loader / runner
-    • All imports collected from those modules (deduped, merged)
-    • A single FakeXP class exposing the xp.* façade
-    • A top-level `xp: FakeXP` declaration
-"""
-
 import re
 from pathlib import Path
 
@@ -19,7 +5,7 @@ from pathlib import Path
 # Paths
 # ---------------------------------------------------------------------------
 
-XP_PYI = Path("../plugins/XPPython3/xp.pyi")
+XP_PYI = Path("../Resources/plugins/XPPython3/xp.pyi")
 SIMLESS_DIR = Path("../simless/libs")
 
 SIMLESS_SOURCES = {
@@ -102,10 +88,17 @@ def extract_all_imports():
                     inner = lines[i].strip()
                     if inner == ")":
                         break
-                    names.append(inner.rstrip(","))
+
+                    # sanitize inner name
+                    name = inner.rstrip(",").strip()
+                    name = name.lstrip("(").rstrip(")")
+                    if name:
+                        names.append(name)
+
                     i += 1
 
-                from_imports.setdefault(mod, set()).update(names)
+                if names:
+                    from_imports.setdefault(mod, set()).update(names)
                 i += 1
                 continue
 
@@ -113,8 +106,15 @@ def extract_all_imports():
             m = re.match(r"from\s+([A-Za-z0-9_.]+)\s+import\s+(.+)", line)
             if m:
                 mod, names = m.groups()
-                parts = [n.strip() for n in names.split(",")]
-                from_imports.setdefault(mod, set()).update(parts)
+                parts: list[str] = []
+                for raw in names.split(","):
+                    name = raw.strip().strip(",").strip()
+                    name = name.lstrip("(").rstrip(")")
+                    if name:
+                        parts.append(name)
+
+                if parts:
+                    from_imports.setdefault(mod, set()).update(parts)
                 i += 1
                 continue
 
@@ -133,14 +133,18 @@ def extract_all_imports():
         lines.append(f"import {mod}")
 
     for mod in sorted(from_imports):
-        names = sorted(from_imports[mod])
-        lines.append(f"from {mod} import {', '.join(names)}")
+        names = sorted(
+            n for n in from_imports[mod]
+            if n and n not in {",", "(", ")"}
+        )
+        if names:
+            lines.append(f"from {mod} import {', '.join(names)}")
 
     return lines
 
 
 # ---------------------------------------------------------------------------
-# Extract methods from simless sources
+# Extract methods from FakeXP classes
 #  • multi-line signatures
 #  • skip @property
 #  • skip private methods
@@ -150,11 +154,13 @@ def extract_all_imports():
 def extract_methods():
     methods: list[tuple[str, str, str]] = []
 
+    CLASS_RE = re.compile(r"^(\s*)class\s+([A-Za-z_][A-Za-z0-9_]*)")
+
     for src in SIMLESS_SOURCES:
         code = src.read_text(encoding="utf-8")
         lines = code.splitlines()
 
-        # Find Protocol class blocks to skip
+        # Identify Protocol blocks (unchanged)
         protocol_blocks: list[tuple[int, int]] = []
         for match in PROTOCOL_CLASS_RE.finditer(code):
             cls_name, bases = match.groups()
@@ -187,20 +193,35 @@ def extract_methods():
         def in_protocol_block(pos: int) -> bool:
             return any(start <= pos < end for start, end in protocol_blocks)
 
+        current_class = None
+
         i = 0
         while i < len(lines):
-            raw_line = lines[i]
-            line = raw_line.lstrip()
+            raw = lines[i]
+            stripped = raw.lstrip()
 
-            # Skip if inside a Protocol block
-            pos = code.find(raw_line)
+            # Skip Protocol blocks
+            pos = code.find(raw)
             if in_protocol_block(pos):
                 i += 1
                 continue
 
-            if line.startswith("def ") and "(" in line:
-                sig_lines = [raw_line]
+            # Detect class start
+            m = CLASS_RE.match(raw)
+            if m:
+                indent, cls_name = m.groups()
+                if cls_name.startswith("FakeXP"):
+                    current_class = cls_name
+                else:
+                    current_class = None
+                i += 1
+                continue
 
+            # Only extract methods inside FakeXP* classes
+            if current_class and stripped.startswith("def ") and "(" in stripped:
+                sig_lines = [raw]
+
+                # Multi-line signature
                 while not sig_lines[-1].rstrip().endswith(":"):
                     i += 1
                     if i >= len(lines):
@@ -216,6 +237,7 @@ def extract_methods():
                 if m:
                     name, args, ret = m.groups()
 
+                    # Skip private
                     if name.startswith("_"):
                         i += 1
                         continue
@@ -227,6 +249,7 @@ def extract_methods():
                         i += 1
                         continue
 
+                    # Clean args
                     args = args.strip()
                     if args.startswith("self,"):
                         args = args[len("self,"):].strip()
@@ -235,6 +258,9 @@ def extract_methods():
 
                     ret = ret.strip() if ret else "None"
                     methods.append((name, args, ret))
+
+                i += 1
+                continue
 
             i += 1
 
@@ -267,8 +293,9 @@ def generate_fake_xp_pyi():
     out.append("")
 
     # FakeXP instance attributes
-    out.append("    debug: bool")
     out.append("    enable_gui: bool")
+    out.append("    terminal_logging: bool")
+    out.append("    debug_logging: bool")
     out.append("")
     out.append("    enable_dataref_bridge: bool")
     out.append("    bridge_host: str")
@@ -280,24 +307,28 @@ def generate_fake_xp_pyi():
     out.append("    input_manager: InputManager")
     out.append("    widget_manager: WidgetManager")
     out.append("    dataref_manager: DataRefManager")
-    out.append("")
-    out.append("    _debug: bool")
-    out.append("    _sim_time: float")
+    out.append("    menu_manager: MenuManager")
+    out.append("    dataref_cache: DataRefCache")
     out.append("")
 
     # Explicit constructor so PyCharm knows FakeXP accepts these arguments
     out.append("    def __init__(")
     out.append("        self,")
-    out.append("        debug: bool = False,")
-    out.append("        enable_gui: bool = True,")
     out.append("        enable_dataref_bridge: bool = False,")
     out.append("        bridge_host: Optional[str] = None,")
     out.append("        bridge_port: Optional[int] = None,")
+    out.append("        enable_gui: bool = True,")
+    out.append("        terminal_logging: bool = False,")
+    out.append("        debug_logging: bool = False,")
     out.append("    ) -> None: ...")
     out.append("")
+    out.append("    _xplane_root: Path")
+    out.append("    _sim_log: Path")
+    out.append("    _xpp_log: Path")
+    out.append("    _dataref_cache_path: Path")
+
     out.append("    def _init_flightloop(self) -> None: ...")
     out.append("    def _init_utilities(self) -> None: ...")
-    out.append("    def _init_command(self) -> None: ...")
     out.append("")
 
     for name, typ in constants:

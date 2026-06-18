@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import dearpygui.dearpygui as dpg
 
-from simless.libs.fake_xp_types import (
-    DPGCommand, DPGGeom, DPGOp, WindowExInfo
-)
-from XPPython3.xp_typing import XPLMMenuID, XPLMWindowID
+from simless.libs.fake_xp_types import DPGCommand, DPGGeom, DPGOp, XPGeom
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
@@ -22,25 +19,27 @@ class GraphicsDpg:
     # ------------------------------------------------------------------
     _dpg_commands: list[DPGCommand]
 
-    # ------------------------------------------------------------------
-    # WindowEx bookkeeping
-    #
-    # Graphics-owned windows with independent drawlists and callbacks.
-    # ------------------------------------------------------------------
-    _current_window_ex: Optional[WindowExInfo]
-
-    # Input focus (owned by InputManager, but renderer stores the tag)
-    _keyboard_focus_window: Optional[XPLMWindowID]
-
-    # ------------------------------------------------------------------
-    # Menu bookkeeping (renderer owns DPG menu structures)
-    # ------------------------------------------------------------------
-    _menus: Dict[XPLMMenuID, Dict[str, Any]]
-    _next_menu_id: int
-    _menu_callbacks: Dict[XPLMMenuID, Callable]
-    _root_plugins_menu: Optional[XPLMMenuID]
+    font_proportional: int | str
+    font_mono = int | str
 
     fake_xp: FakeXP
+
+    # ------------------------------------------------------------------
+    # Initialize font registry and load bundled fonts
+    # ------------------------------------------------------------------
+    def init_fonts(self):
+        """Load proportional + monospaced fonts bundled with FakeXP."""
+        font_dir = self.fake_xp._xplane_root / "simless" / "fonts"
+
+        prop_path = font_dir / "DejaVuSans.ttf"
+        mono_path = font_dir / "DejaVuSansMono.ttf"
+
+        with dpg.font_registry():  # type: ignore
+            self.font_proportional = dpg.add_font(str(prop_path), 14)
+            self.font_mono = dpg.add_font(str(mono_path), 14)
+
+        # bind proportional as global default
+        dpg.bind_font(self.font_proportional)
 
     # ----------------------------------------------------------------------
     # DPG HELPERS (ALL DPG calls handled by this class)
@@ -57,19 +56,27 @@ class GraphicsDpg:
     def dpg_get_viewport_client_height(self) -> int:
         return dpg.get_viewport_client_height()
 
-    def dpg_is_item_shown(self, item: int | str) -> bool:
+    def dpg_get_value(self, item: int | str) -> Any:
+        return dpg.get_value(item)
+
+    def dpg_set_value(self, item: int | str, value: Any) -> None:
+        dpg.set_value(item, value)
+
+    def dpg_is_item_shown(self, item: int | str) -> bool | None:
         return dpg.is_item_shown(item)
 
     def dpg_get_mouse_pos(self, **kwargs) -> list[int] | tuple[int, ...]:
         return dpg.get_mouse_pos(**kwargs)
 
+    def dpg_get_text_size(self, text: str) -> list[float] | tuple[float, ...]:
+        return dpg.get_text_size(text)
+
     def enqueue_dpg(
-        self,
-        op: DPGOp,
-        *,
-        target_drawlist: str | None = None,
-        args: tuple[Any, ...] = (),
-        kwargs: dict[str, Any] | None = None,
+            self,
+            op: DPGOp,
+            target_drawlist: str | int | None = None,
+            args: tuple[Any, ...] = (),
+            kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Record a deferred DearPyGui operation.
 
@@ -88,6 +95,77 @@ class GraphicsDpg:
                 kwargs=kwargs,
             )
         )
+
+    def compute_window_decorations(self, dpg_window_id: str) -> dict[str, Any]:
+        """
+        Compute XPWidget-style decoration metrics from a DPG window
+        using only APIs available in this version of DearPyGui.
+
+        Returns:
+            {
+                "title_bar": int,
+                "border_left": int,
+                "border_right": int,
+                "border_bottom": int,
+                "client_rect": XPGeom,
+                "frame_rect": XPGeom,
+            }
+        """
+
+        screen_h = self.dpg_get_viewport_client_height()
+
+        # ------------------------------------------------------------
+        # 1. FRAME RECT (outer window)
+        # ------------------------------------------------------------
+        fmin_x, fmin_y = dpg.get_item_rect_min(dpg_window_id)
+        fmax_x, fmax_y = dpg.get_item_rect_max(dpg_window_id)
+
+        frame = XPGeom(
+            left=fmin_x,
+            top=screen_h - fmin_y,
+            right=fmax_x,
+            bottom=screen_h - fmax_y,
+        )
+
+        # ------------------------------------------------------------
+        # 2. CLIENT RECT (inner drawlist)
+        #
+        # In your architecture, every WindowEx has:
+        #   - a DPG window (frame)
+        #   - a DPG drawlist inside it (client)
+        #
+        # The drawlist tag is stored in WindowExInfo.drawlist_tag.
+        # ------------------------------------------------------------
+        win_info = self.fake_xp.window_manager.require_info_by_dpg_id(dpg_window_id)
+        dl_id = win_info.drawlist_tag
+        assert dl_id is not None
+
+        dl_min_x, dl_min_y = dpg.get_item_rect_min(dl_id)
+        dl_max_x, dl_max_y = dpg.get_item_rect_max(dl_id)
+
+        client = XPGeom(
+            left=dl_min_x,
+            top=screen_h - dl_min_y,
+            right=dl_max_x,
+            bottom=screen_h - dl_max_y,
+        )
+
+        # ------------------------------------------------------------
+        # 3. DECORATION METRICS
+        # ------------------------------------------------------------
+        border_left = client.left - frame.left
+        border_right = frame.right - client.right
+        border_bottom = client.bottom - frame.bottom
+        title_bar = frame.top - client.top
+
+        return {
+            "title_bar": title_bar,
+            "border_left": border_left,
+            "border_right": border_right,
+            "border_bottom": border_bottom,
+            "client_rect": client,
+            "frame_rect": frame,
+        }
 
     # ----------------------------------------------------------------------
     # INTERNAL HELPERS
@@ -132,6 +210,9 @@ class GraphicsDpg:
             case DPGOp.ADD_BUTTON:
                 dpg.add_button(*cmd.args, **cmd.kwargs)
 
+            case DPGOp.ADD_CHECKBOX:
+                dpg.add_checkbox(*cmd.args, **cmd.kwargs)
+
             # --------------------------------------------------
             # Menus (XPLMMenus → DearPyGui)
             # --------------------------------------------------
@@ -139,28 +220,13 @@ class GraphicsDpg:
                 dpg.add_menu(*cmd.args, **cmd.kwargs)
 
             case DPGOp.ADD_MENU_ITEM:
-                label = cmd.kwargs["label"]
-                parent = cmd.kwargs["parent"]
-                tag = cmd.kwargs["tag"]
+                dpg.add_menu_item(*cmd.args, **cmd.kwargs)
 
-                dpg.add_menu_item(
-                    label=label,
-                    parent=parent,
-                    tag=tag,
-                    callback=self._dispatch_menu_click
-                )
+            case DPGOp.CONFIGURE_ITEM:
+                dpg.configure_item(*cmd.args, **cmd.kwargs)
 
-            case DPGOp.ADD_MENU_SEPARATOR:
-                dpg.add_separator(*cmd.args, **cmd.kwargs)
-
-            case DPGOp.SET_MENU_ITEM_CHECKED:
-                # DearPyGui uses configure_item(check=True/False)
-                menu_item_tag, checked = cmd.args
-                dpg.configure_item(menu_item_tag, check=checked)
-
-            case DPGOp.SET_MENU_ITEM_ENABLED:
-                menu_item_tag, enabled = cmd.args
-                dpg.configure_item(menu_item_tag, enabled=enabled)
+            case DPGOp.DELETE_ITEM:
+                dpg.delete_item(*cmd.args, **cmd.kwargs)
 
             # --------------------------------------------------
             # Item mutation
@@ -180,16 +246,17 @@ class GraphicsDpg:
             case DPGOp.DELETE_ITEM:
                 dpg.delete_item(*cmd.args)
 
+            case DPGOp.BIND_ITEM_FONT:
+                dpg.bind_item_font(*cmd.args)
+
             # --------------------------------------------------
             # Safety net
             # --------------------------------------------------
             case _:
                 raise RuntimeError(f"Unhandled DPG operation: {cmd.op}")
 
-    def _clear_drawlist_children(self, drawlist_id: Optional[str]) -> None:
+    def _clear_drawlist_children(self, drawlist_id: int | str) -> None:
         """Clear per-frame draw primitives to avoid unbounded accumulation."""
-        if drawlist_id is None:
-            return
         if not dpg.does_item_exist(drawlist_id):
             return
         dpg.delete_item(drawlist_id, children_only=True)
@@ -203,11 +270,11 @@ class GraphicsDpg:
             if not info._dirty_xp_to_dpg:
                 continue
 
-            wid = info.wid
             dpg_id = info.dpg_tag
+            assert dpg_id is not None
 
             if not dpg.does_item_exist(dpg_id):
-                print(f"[XP→DPG] SKIP: DPG item missing for wid={wid}")
+                print(f"[XP→DPG] SKIP: DPG item missing for wid={info.wid}")
                 continue
 
             xp_geom = info.frame
@@ -235,7 +302,9 @@ class GraphicsDpg:
 
         for info in self.fake_xp.window_manager.all_info():
             dpg_id = info.dpg_tag
+            assert dpg_id is not None
             dl_id = info.drawlist_tag
+            assert dl_id is not None
 
             if not dpg.does_item_exist(dpg_id) or not dpg.does_item_exist(dl_id):
                 continue
@@ -244,7 +313,9 @@ class GraphicsDpg:
             try:
                 win_x, win_y = dpg.get_item_pos(dpg_id)
                 win_w = dpg.get_item_width(dpg_id)
+                assert win_w
                 win_h = dpg.get_item_height(dpg_id)
+                assert win_h
             except Exception:
                 continue
 
@@ -280,52 +351,3 @@ class GraphicsDpg:
             # Optional: fire XP callbacks here
 
             info._dirty_dpg_to_xp = False
-
-    def _init_menu_bar(self) -> None:
-        """Create the top-level X-Plane-style menu bar on the viewport."""
-
-        dpg_tag = "xp_menu_plugins"
-        with dpg.viewport_menu_bar(tag="xp_menu_bar"):
-            with dpg.menu(label="File", tag="xp_menu_file"):
-                dpg.add_menu_item(
-                    label="Quit",
-                    tag="xp_menu_file_quit",
-                    callback=lambda: self.fake_xp.simless_runner.end_run_loop()
-                )
-
-            # The actual DPG root for plugin menus
-            dpg.add_menu(
-                label="Plugins",
-                tag=dpg_tag
-            )
-
-        # Allocate a real XP menu ID for the plugin vroot
-        root_id = XPLMMenuID(self._next_menu_id)
-        self._next_menu_id += 1
-
-        self._root_plugins_menu = root_id
-
-        self._menus[root_id] = {
-            "name": "Plugins",
-            "parent": None,
-            "parent_item": None,
-            "handler": None,
-            "refcon": None,
-            "items": [],
-            "dpg_tag": dpg_tag,
-        }
-
-    def _dispatch_menu_click(self, sender, app_data):
-        tag = sender  # DPG gives us the authoritative tag
-
-        # Search all menus for this item tag
-        for menu_id, menu in self._menus.items():
-            for index, item in enumerate(menu["items"]):
-                if item.get("tag") == tag:
-                    handler = menu["handler"]
-                    if handler:
-                        handler(menu["refcon"], item["refcon"])
-                    return
-
-        # If we get here, the tag was not found — this is a real error
-        raise KeyError(f"[FakeXP] Menu item tag not found: {tag}")

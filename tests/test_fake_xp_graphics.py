@@ -4,7 +4,7 @@ import pytest
 import XPPython3
 
 from simless.libs.fake_xp import FakeXP
-from simless.libs.fake_xp_types import EventInfo, EventKind
+from simless.libs.fake_xp_types import EventInfo, EventKind, XPPoint
 
 
 @pytest.fixture
@@ -13,7 +13,7 @@ def xp() -> FakeXP:
     Full DearPyGui environment, identical to SimlessRunner.
     No monkeypatching. GUI fully functional.
     """
-    fake = FakeXP(enable_gui=True, debug=True)
+    fake = FakeXP(enable_gui=True, debug_logging=True)
     XPPython3.xp = fake
     fake.graphics_manager.init_graphics_root()
     return fake
@@ -236,8 +236,7 @@ def test_mouse_click_dispatch_to_window(xp):
 
     xp.input_manager.queue_input_event(EventInfo.from_xp(
         kind=EventKind.MOUSE_BUTTON,
-        xp_x=100,
-        xp_y=550,
+        xp_pt=XPPoint(100, 550),
         state="down",
         button=0,
     ))

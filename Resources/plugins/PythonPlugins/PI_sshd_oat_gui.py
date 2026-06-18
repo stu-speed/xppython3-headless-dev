@@ -53,14 +53,11 @@ class PythonInterface:
         self.bus_array_handle = None
         self._fl_id = None
 
-        # Start visible
-        self._window_visible = True
-
         # --------------------------------------------------------------
         # Create plugin menu under Plugins root
         # --------------------------------------------------------------
         self.menu_id = xp.createMenu(
-            name="OAT GUI",
+            name="OAT",
             parentMenuID=None,     # attaches to Plugins menu
             parentItem=0,
             handler=self._menu_handler,
@@ -69,7 +66,7 @@ class PythonInterface:
 
         self.menu_item_index = xp.appendMenuItem(
             self.menu_id,
-            "Hide Window",
+            "Control",
             refCon=None,
         )
 
@@ -80,14 +77,12 @@ class PythonInterface:
     # ------------------------------------------------------------------
     def _menu_handler(self, menu_refcon: Any, item_refcon: Any) -> None:
         """Strongly-typed XP menu handler: (refCon, itemRefCon) -> None."""
-        self._window_visible = not self._window_visible
+        window_visible = xp.isWidgetVisible(self.win)
 
-        if self._window_visible:
-            xp.showWidget(self.win)
-            xp.setMenuItemName(self.menu_id, self.menu_item_index, "Hide Window")
-        else:
+        if window_visible:
             xp.hideWidget(self.win)
-            xp.setMenuItemName(self.menu_id, self.menu_item_index, "Show Window")
+        else:
+            xp.showWidget(self.win)
 
     # ------------------------------------------------------------------
     # UI BUILD
@@ -114,19 +109,7 @@ class PythonInterface:
             0,
             xp.WidgetClass_MainWindow,
         )
-
         xp.setWidgetProperty(self.win, xp.Property_MainWindowHasCloseBoxes, 1)
-
-        # Close box handler
-        def window_handler(msg, widget, p1, p2):
-            if msg == xp.Message_CloseButtonPushed:
-                xp.hideWidget(self.win)
-                self._window_visible = False
-                xp.setMenuItemName(self.menu_id, self.menu_item_index, "Show Window")
-                return 1
-            return 0
-
-        xp.addWidgetCallback(self.win, window_handler)
 
     def _create_oat_controls(self):
         xp.createWidget(
@@ -239,11 +222,6 @@ class PythonInterface:
             return 0
 
         self._build_ui()
-
-        # ⭐ Start visible
-        xp.showWidget(self.win)
-        self._window_visible = True
-        xp.setMenuItemName(self.menu_id, self.menu_item_index, "Hide Window")
 
         return 1
 

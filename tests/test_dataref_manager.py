@@ -9,7 +9,7 @@ import time
 import XPPython3
 
 from simless.libs.fake_xp import FakeXP
-from PythonPlugins.sshd_extensions.dataref_manager import DataRefManager
+from sshd_extensions.dataref_manager import DataRefManager
 
 
 # ===========================================================================
@@ -17,7 +17,7 @@ from PythonPlugins.sshd_extensions.dataref_manager import DataRefManager
 # ===========================================================================
 
 def test_dummy_spec_creation():
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug_logging=True)
     XPPython3.xp = xp
 
     specs = {
@@ -29,8 +29,8 @@ def test_dummy_spec_creation():
 
     assert mgr.timeout == 30.0
 
-    foo = mgr.get_spec("sim/test/foo")
-    bar = mgr.get_spec("sim/test/bar")
+    foo = mgr.require_spec("sim/test/foo")
+    bar = mgr.require_spec("sim/test/bar")
 
     assert foo.is_dummy is True
     assert bar.is_dummy is True
@@ -43,21 +43,21 @@ def test_dummy_spec_creation():
 # ===========================================================================
 
 def test_dummy_to_real_promotion(monkeypatch):
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug_logging=True)
     XPPython3.xp = xp
 
     # Make this spec required so the manager will wait for a real handle.
     mgr = DataRefManager(xp, {"sim/test/promote": {"required": True, "default": 5.0}})
 
     # before any ready() call the spec should be a dummy
-    spec = mgr.get_spec("sim/test/promote")
+    spec = mgr.require_spec("sim/test/promote")
     assert spec.is_dummy is True
 
     # FakeXP auto register dataref- ready() should observe the promoted spec and return True
     assert mgr.ready() is True
 
     # after promotion the spec should no longer be a dummy
-    spec = mgr.get_spec("sim/test/promote")
+    spec = mgr.require_spec("sim/test/promote")
     assert spec.is_dummy is False
     assert spec.handle is not None
 
@@ -71,7 +71,7 @@ def test_dummy_to_real_promotion(monkeypatch):
 # ===========================================================================
 
 def test_required_timeout(monkeypatch):
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug_logging=True)
     XPPython3.xp = xp
 
     # Simulate xp never providing the dataref
@@ -94,7 +94,7 @@ def test_required_timeout(monkeypatch):
 # ===========================================================================
 
 def test_dummy_returns_default(monkeypatch):
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug_logging=True)
     XPPython3.xp = xp
 
     # Make the spec required so set_value is permitted by manager
@@ -116,7 +116,7 @@ def test_dummy_returns_default(monkeypatch):
 # ===========================================================================
 
 def test_real_value_after_promotion(monkeypatch):
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug_logging=True)
     XPPython3.xp = xp
 
     mgr = DataRefManager(xp, {"sim/test/live": {"required": False, "default": 1.0}})
@@ -129,7 +129,7 @@ def test_real_value_after_promotion(monkeypatch):
 
     # simulate plugin write via manager API (since tests should prefer manager helpers)
     # make the spec required so set_value is permitted
-    spec = mgr.get_spec("sim/test/live")
+    spec = mgr.require_spec("sim/test/live")
     spec.required = True
     mgr.set_value("sim/test/live", 88.8)
     assert mgr.get_value("sim/test/live") == 88.8
@@ -140,7 +140,7 @@ def test_real_value_after_promotion(monkeypatch):
 # ===========================================================================
 
 def test_set_value_scalar():
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug_logging=True)
     XPPython3.xp = xp
 
     # make required so manager allows set_value
@@ -163,7 +163,7 @@ def test_set_value_scalar():
 # ===========================================================================
 
 def test_set_value_not_writable():
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug_logging=True)
     XPPython3.xp = xp
 
     mgr = DataRefManager(xp, {"sim/test/ro": {"required": True, "default": 5.0}})
@@ -172,12 +172,12 @@ def test_set_value_not_writable():
     mgr.ready()
 
     # Ensure underlying xp handle is marked not writable so xp.set* raises
-    spec = mgr.get_spec("sim/test/ro")
+    spec = mgr.require_spec("sim/test/ro")
     # spec.handle is the real xp handle after promotion
     with xp.dataref_manager._handles_lock:
         xp.dataref_manager._handles[spec.name].writable = False
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(ValueError):
         mgr.set_value("sim/test/ro", 10.0)
 
 
@@ -186,7 +186,7 @@ def test_set_value_not_writable():
 # ===========================================================================
 
 def test_set_value_on_dummy_autoregisters():
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug_logging=True)
     XPPython3.xp = xp
 
     mgr = DataRefManager(xp, {"sim/test/dummy": {"required": True, "default": 9.9}})
@@ -203,7 +203,7 @@ def test_set_value_on_dummy_autoregisters():
 # ===========================================================================
 
 def test_set_value_unmanaged_autoregisters():
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug_logging=True)
     XPPython3.xp = xp
 
     mgr = DataRefManager(xp, datarefs=None)
@@ -218,7 +218,7 @@ def test_set_value_unmanaged_autoregisters():
 # ===========================================================================
 
 def test_set_value_after_promotion():
-    xp = FakeXP(debug=True)
+    xp = FakeXP(debug_logging=True)
     XPPython3.xp = xp
 
     mgr = DataRefManager(xp, {"sim/test/livewrite": {"required": True, "default": 1.0}})

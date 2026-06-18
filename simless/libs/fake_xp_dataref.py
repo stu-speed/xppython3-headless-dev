@@ -21,11 +21,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, cast, List, MutableSequence, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import Any, Callable, List, MutableSequence, Optional, Sequence, TYPE_CHECKING, Tuple, cast
 
 from simless.libs.dataref import DataRefManager
-from simless.libs.fake_xp_types import FakeDataRef
-from XPPython3.xp_typing import XPLMDataRefInfo_t
+from xp_typing import XPLMDataRef, XPLMDataRefInfo_t, XPLMDataTypeID
 
 if TYPE_CHECKING:
     from simless.libs.fake_xp import FakeXP
@@ -50,436 +49,235 @@ class FakeXPDataRef:
     # ------------------------------------------------------------------
     # Lookup / dummy creation
     # ------------------------------------------------------------------
-    def findDataRef(self, name: str) -> Optional[FakeDataRef]:
+    def findDataRef(self, name: str) -> Optional[XPLMDataRef]:
         existing = self.dm.get_handle(name)
         if existing is not None:
-            return existing
+            return existing.df_id
 
-        # Dummy refs use FLOAT scalar as provisional type
-        ref = FakeDataRef(
-            path=name,
-            type=self.fake_xp.Type_Float,
-            writable=True,
-            size=1,
-            value=0.0,
-        )
-        self.dm.add_handle(name, ref)
-        self.dm.notify_handle_created(ref)
-        return ref
+        return self.dm.add_handle(name).df_id
 
     # ------------------------------------------------------------------
     # Introspection
     # ------------------------------------------------------------------
-    def getDataRefTypes(self, dataRef: FakeDataRef) -> int:
-        ref = self._resolve_ref(dataRef)
-        return self.dm.dtype_to_bitmask(ref)
+    def getDataRefTypes(self, dataRef: XPLMDataRef) -> XPLMDataTypeID | int:
+        return self.dm.require_handle(dataRef).type
 
-    def getDataRefInfo(self, dataRef: FakeDataRef) -> XPLMDataRefInfo_t:
-        ref = self._resolve_ref(dataRef)
+    def getDataRefInfo(self, dataRef: XPLMDataRef) -> XPLMDataRefInfo_t:
+        ref = self.dm.require_handle(dataRef)
+
+        # Base XPLM fields
         info = XPLMDataRefInfo_t(
             name=ref.path,
-            type=self.dm.dtype_to_bitmask(ref),
+            type=ref.type,
             writable=bool(ref.writable),
             owner=0,
         )
+
+        # XPLMGetDataRefInfo adds these dynamically
         setattr(info, "is_array", ref.is_array)
-        setattr(info, "size", ref.size if getattr(ref, "shape_known", False) else 0)
+
+        # Production semantics:
+        #   • Dummy refs report size = 0
+        #   • Promoted refs report actual size
+        size = ref.size if not ref.dummy else 0
+        setattr(info, "size", size)
+
         return info
 
-    def canWriteDataRef(self, dataRef: FakeDataRef) -> bool:
-        return self._resolve_ref(dataRef).writable
+    def canWriteDataRef(self, dataRef: XPLMDataRef) -> bool:
+        return self.dm.require_handle(dataRef).writable
 
-    def isDataRefGood(self, dataRef: FakeDataRef) -> bool:
+    def isDataRefGood(self, dataRef: XPLMDataRef) -> bool:
         try:
-            self._resolve_ref(dataRef)
+            self.dm.require_handle(dataRef)
             return True
         except Exception:
             return False
 
-    # ------------------------------------------------------------------
-    # Internal resolver
-    # ------------------------------------------------------------------
-    def _resolve_ref(self, dataRef: FakeDataRef) -> FakeDataRef:
-        if not isinstance(dataRef, FakeDataRef):
-            raise TypeError("invalid dataRef")
-        ref = self.dm.get_handle(dataRef.path)
-        if ref is None or ref is not dataRef:
-            raise TypeError("invalid dataRef")
-        return ref
+    # ================================================================
+    #  SCALAR GETTERS (thin wrappers)
+    # ================================================================
 
-    # ------------------------------------------------------------------
-    # Scalar accessors
-    # ------------------------------------------------------------------
-    def getDatai(self, dataRef: FakeDataRef) -> int:
-        ref = self._resolve_ref(dataRef)
-        self.dm.require_scalar(ref, "getDatai")
-        meta = self.dm._accessors.get(ref.path)
-        if meta and meta.get("readInt"):
-            return int(meta["readInt"](meta.get("readRefCon")))
-        return int(ref.value)
+    def getDatai(self, dr: XPLMDataRef) -> int:
+        return int(self.dm.get_value(dr, self.fake_xp.Type_Int))
 
-    def getDataf(self, dataRef: FakeDataRef) -> float:
-        ref = self._resolve_ref(dataRef)
-        self.dm.require_scalar(ref, "getDataf")
-        meta = self.dm._accessors.get(ref.path)
-        cb = meta.get("readFloat") or meta.get("readDouble") if meta else None
-        if cb:
-            return float(cb(meta.get("readRefCon")))
-        return float(ref.value)
+    def getDataf(self, dr: XPLMDataRef) -> float:
+        return float(self.dm.get_value(dr, self.fake_xp.Type_Float))
 
-    def getDatad(self, dataRef: FakeDataRef) -> float:
-        return self.getDataf(dataRef)
+    def getDatad(self, dr: XPLMDataRef) -> float:
+        return self.getDataf(dr)
 
-    def setDataf(self, dataRef: FakeDataRef, v: float) -> None:
-        ref = self._resolve_ref(dataRef)
+    # ================================================================
+    #  ARRAY GETTERS (thin wrappers)
+    # ================================================================
 
-        # Dummy has no contract — conform before enforcing
-        if ref.is_dummy:
-            self.dm.conform_dummy_to_value(ref, float(v))
-
-        # Now enforce scalar contract
-        self.dm.require_scalar(ref, "setDataf")
-
-        if not ref.writable:
-            raise PermissionError("DataRef not writable")
-
-        meta = self.dm._accessors.get(ref.path)
-        cb = (meta.get("writeFloat") or meta.get("writeDouble")) if meta else None
-
-        if cb:
-            cb(meta.get("writeRefCon"), float(v))
-        else:
-            ref.value = float(v)
-
-    def setDatai(self, dataRef: FakeDataRef, v: int) -> None:
-        ref = self._resolve_ref(dataRef)
-
-        # Dummy has no contract — conform first
-        if ref.is_dummy:
-            self.dm.conform_dummy_to_value(ref, int(v))
-
-        # Enforce scalar contract
-        self.dm.require_scalar(ref, "setDatai")
-
-        if not ref.writable:
-            raise PermissionError("DataRef not writable")
-
-        meta = self.dm._accessors.get(ref.path)
-        cb = meta.get("writeInt") if meta else None
-
-        if cb:
-            cb(meta.get("writeRefCon"), int(v))
-        else:
-            ref.value = int(v)
-
-    def setDatad(self, dataRef: FakeDataRef, v: float) -> None:
-        ref = self._resolve_ref(dataRef)
-
-        # Dummy has no contract — conform first
-        if ref.is_dummy:
-            self.dm.conform_dummy_to_value(ref, float(v))
-
-        # Enforce scalar contract
-        self.dm.require_scalar(ref, "setDatad")
-
-        if not ref.writable:
-            raise PermissionError("DataRef not writable")
-
-        meta = self.dm._accessors.get(ref.path)
-        cb = meta.get("writeDouble") if meta else None
-
-        if cb:
-            cb(meta.get("writeRefCon"), float(v))
-        else:
-            ref.value = float(v)
-
-    # ------------------------------------------------------------------
-    # Array helpers
-    # ------------------------------------------------------------------
-    def _array_get_common(
-        self,
-        *,
-        ref: FakeDataRef,
-        values: Optional[MutableSequence[Any]],
-        offset: int,
-        count: int,
-        read_cb: Optional[Callable[[Any, MutableSequence[Any], int, int], int]],
-        refcon: Any,
+    def getDatavi(
+            self,
+            dr: XPLMDataRef,
+            values: Optional[List[int]] = None,
+            offset: int = 0,
+            count: int = -1
     ) -> int:
-        self.dm.require_array(ref, "_array_get_common")
-        arr = ref.value
+        return self.dm.get_value(dr, self.fake_xp.Type_IntArray, offset, count, values)
 
-        if values is None or count < 0:
-            return len(arr)
+    def getDatavf(
+            self,
+            dr: XPLMDataRef,
+            values: Optional[List[float]] = None,
+            offset: int = 0,
+            count: int = -1
+    ) -> int:
+        return self.dm.get_value(dr, self.fake_xp.Type_FloatArray, offset, count, values)
 
-        if offset < 0:
-            offset = 0
+    def getDatab(
+            self,
+            dr: XPLMDataRef,
+            values: Optional[List[int]] = None,
+            offset: int = 0,
+            count: int = -1
+    ) -> int:
+        return self.dm.get_value(dr, self.fake_xp.Type_Data, offset, count, values)
 
-        dest_start = 0 if len(values) == count else offset
-        if dest_start + count > len(values):
-            raise RuntimeError("array buffer too small")
+    # ================================================================
+    #  SCALAR SETTERS (thin wrappers)
+    # ================================================================
 
-        if read_cb:
-            tmp = [0] * count
-            got = int(read_cb(refcon, tmp, offset, count))
-            for i in range(got):
-                values[dest_start + i] = tmp[i]
-            return got
+    def setDatai(self, dr: XPLMDataRef, v: int) -> None:
+        self.dm.update_value(dr, self.fake_xp.Type_Int, v)
 
-        if offset + count > len(arr):
-            raise RuntimeError("array read past end")
+    def setDataf(self, dr: XPLMDataRef, v: float) -> None:
+        self.dm.update_value(dr, self.fake_xp.Type_Float, v)
 
-        for i in range(count):
-            values[dest_start + i] = arr[offset + i]
-        return count
+    def setDatad(self, dr: XPLMDataRef, v: float) -> None:
+        self.setDataf(dr, v)
 
-    # ------------------------------------------------------------------
-    # Array accessors
-    # ------------------------------------------------------------------
-    def getDatavf(self, dataRef, values=None, offset=0, count=-1) -> int:
-        ref = self._resolve_ref(dataRef)
-        if ref.type != self.fake_xp.Type_FloatArray:
-            raise TypeError("getDatavf on non-float-array")
-        meta = self.dm._accessors.get(ref.path)
-        return self._array_get_common(
-            ref=ref,
-            values=values,
+    # ================================================================
+    #  ARRAY SETTERS (thin wrappers)
+    # ================================================================
+
+    def setDatavi(
+            self,
+            dr: XPLMDataRef,
+            values: Sequence[int],
+            offset: int = 0,
+            count: int = -1
+    ) -> int:
+        written = self.dm.update_value(dr, self.fake_xp.Type_IntArray, values, offset, count)
+        assert written is not None
+        return written
+
+    def setDatavf(
+            self,
+            dr: XPLMDataRef,
+            values: Sequence[float],
+            offset: int = 0,
+            count: int = -1
+    ) -> int:
+        written = self.dm.update_value(dr, self.fake_xp.Type_FloatArray, values, offset, count)
+        assert written is not None
+        return written
+
+    def setDatab(
+            self,
+            dr: XPLMDataRef,
+            values: Sequence[int],
+            offset: int = 0,
+            count: int = -1
+    ) -> int:
+        written = self.dm.update_value(dr, self.fake_xp.Type_Data, values, offset, count)
+        assert written is not None
+        return written
+
+    def getDatas(
+            self,
+            dr: XPLMDataRef,
+            offset: int = 0,
+            count: int = -1
+    ) -> str:
+        """
+        Strongly typed DATA string getter.
+
+        • Uses universal get_value() with a buffer
+        • Accessor-backed DATA arrays bypass clipping
+        • Canonical DATA arrays clip
+        • Stops at first NUL
+        • Returns UTF‑8 decoded string
+        """
+        buf: list[int] = []
+
+        n = self.fake_xp.dataref_manager.get_value(
+            dr,
+            desired_type=self.fake_xp.Type_Data,
             offset=offset,
             count=count,
-            read_cb=meta.get("readFloatArray") if meta else None,
-            refcon=meta.get("readRefCon") if meta else None,
+            values=buf,
         )
 
-    def getDatavi(self, dataRef, values=None, offset=0, count=-1) -> int:
-        ref = self._resolve_ref(dataRef)
-        if ref.type != self.fake_xp.Type_IntArray:
-            raise TypeError("getDatavi on non-int-array")
-        meta = self.dm._accessors.get(ref.path)
-        return self._array_get_common(
-            ref=ref,
-            values=values,
-            offset=offset,
-            count=count,
-            read_cb=meta.get("readIntArray") if meta else None,
-            refcon=meta.get("readRefCon") if meta else None,
-        )
+        raw = bytes(buf[:n])
 
-    def getDatab(self, dataRef, values=None, offset=0, count=-1) -> int:
-        ref = self._resolve_ref(dataRef)
-        if ref.type != self.fake_xp.Type_Data:
-            raise TypeError("getDatab on non-byte-array")
-        meta = self.dm._accessors.get(ref.path)
-        return self._array_get_common(
-            ref=ref,
-            values=values,
-            offset=offset,
-            count=count,
-            read_cb=meta.get("readData") if meta else None,
-            refcon=meta.get("readRefCon") if meta else None,
-        )
+        nul = raw.find(b"\x00")
+        if nul >= 0:
+            raw = raw[:nul]
 
-    def setDatavf(self, dataRef, values, offset=0, count=-1) -> int:
-        ref = self._resolve_ref(dataRef)
-        fxp = self.fake_xp
-
-        if not ref.writable:
-            raise PermissionError("DataRef not writable")
-
-        # Dummy has no contract — conform first
-        if ref.is_dummy:
-            self.dm.conform_dummy_to_value(ref, values, offset, count)
-
-        if ref.type != fxp.Type_FloatArray:
-            raise TypeError("setDatavf on non-float-array")
-
-        if count < 0:
-            count = len(values)
-        if count > len(values):
-            raise RuntimeError("setDatavf list too short for provided count")
-        if offset < 0:
-            offset = 0
-
-        meta = self.dm._accessors.get(ref.path)
-        write_cb = meta.get("writeFloatArray") if meta else None
-        refcon = meta.get("writeRefCon") if meta else None
-
-        self.dm.require_array(ref, "setDatavf")
-        if offset + count > len(ref.value):
-            raise RuntimeError("setDatavf would write past end of dataRef")
-
-        if write_cb is None:
-            for i in range(count):
-                ref.value[offset + i] = float(values[i])
-            return count
-
-        write_cb(refcon, values, offset, count)
-        return count
-
-    def setDatavi(self, dataRef, values, offset=0, count=-1) -> int:
-        ref = self._resolve_ref(dataRef)
-        fxp = self.fake_xp
-
-        if not ref.writable:
-            raise PermissionError("DataRef not writable")
-
-        if ref.is_dummy:
-            self.dm.conform_dummy_to_value(ref, values, offset, count)
-
-        if ref.type != fxp.Type_IntArray:
-            raise TypeError("setDatavi on non-int-array")
-
-        if count < 0:
-            count = len(values)
-        if count > len(values):
-            raise RuntimeError("setDatavi list too short for provided count")
-        if offset < 0:
-            offset = 0
-
-        meta = self.dm._accessors.get(ref.path)
-        write_cb = meta.get("writeIntArray") if meta else None
-        refcon = meta.get("writeRefCon") if meta else None
-
-        self.dm.require_array(ref, "setDatavi")
-        if offset + count > len(ref.value):
-            raise RuntimeError("setDatavi would write past end of dataRef")
-
-        if write_cb is None:
-            for i in range(count):
-                ref.value[offset + i] = int(values[i])
-            return count
-
-        write_cb(refcon, values, offset, count)
-        return count
-
-    def setDatab(self, dataRef, values, offset=0, count=-1) -> int:
-        ref = self._resolve_ref(dataRef)
-        fxp = self.fake_xp
-
-        if not ref.writable:
-            raise PermissionError("DataRef not writable")
-
-        if ref.is_dummy:
-            self.dm.conform_dummy_to_value(ref, values, offset, count)
-
-        if ref.type != fxp.Type_Data:
-            raise TypeError("setDatab on non-byte-array")
-
-        if count < 0:
-            count = len(values)
-        if count > len(values):
-            raise RuntimeError("setDatab list too short for provided count")
-        if offset < 0:
-            offset = 0
-
-        meta = self.dm._accessors.get(ref.path)
-        write_cb = meta.get("writeData") if meta else None
-        refcon = meta.get("writeRefCon") if meta else None
-
-        self.dm.require_array(ref, "setDatab")
-        if offset + count > len(ref.value):
-            raise RuntimeError("setDatab would write past end of dataRef")
-
-        if write_cb is None:
-            for i in range(count):
-                ref.value[offset + i] = int(values[i]) & 0xFF
-            return count
-
-        write_cb(refcon, values, offset, count)
-        return count
-
-    # ------------------------------------------------------------------
-    # String helpers
-    # ------------------------------------------------------------------
-    def getDatas(self, dataRef, offset=0, count=-1) -> str:
-        ref = self._resolve_ref(dataRef)
-        fxp = self.fake_xp
-
-        if ref.type != fxp.Type_Data:
-            raise TypeError("getDatas on non-byte-array")
-
-        self.dm.require_array(ref, "getDatas")
-        arr = ref.value
-
-        if count < 0:
-            count = len(arr) - offset
-
-        raw = bytes(arr[offset: offset + count]).split(b"\x00", 1)[0]
         return raw.decode("utf-8", errors="ignore")
 
-    def setDatas(self, dataRef, value: str, offset=0, count=-1) -> None:
-        ref = self._resolve_ref(dataRef)
-        fxp = self.fake_xp
-
-        if not ref.writable:
-            raise PermissionError("DataRef not writable")
-
-        if ref.type != fxp.Type_Data:
-            raise TypeError("setDatas on non-byte-array")
-
-        self.dm.require_array(ref, "setDatas")
-        arr = ref.value
-        b = value.encode("utf-8")
-
-        if count < 0:
-            count = len(b)
-
-        if offset + count > len(arr):
-            raise RuntimeError("write past end")
-
-        for i in range(count):
-            arr[offset + i] = b[i] if i < len(b) else 0
-
-    def countDataRefs(self) -> int:
+    def setDatas(
+            self,
+            dr: XPLMDataRef,
+            value: str,
+            offset: int = 0,
+            count: int = -1
+    ) -> None:
         """
-        Return the total number of registered datarefs (including dummies and registered accessors).
-        """
-        with self.dm._handles_lock:
-            return len(self.dm._handles)
+        Strongly typed DATA string setter.
 
-    def getDataRefsByIndex(self, offset: int = 0, count: int = -1) -> List[FakeDataRef]:
+        • Encodes string as UTF‑8
+        • Uses universal update_value()
+        • Accessor-backed DATA arrays bypass canonical logic
+        • Canonical DATA arrays clip and cast via update_value()
         """
-        Return a list of dataRef handles by index paging. If count == -1 return all from offset.
-        """
-        with self.dm._handles_lock:
-            keys = list(self.dm._handles.keys())
-            if offset < 0:
-                offset = 0
-            if count == -1:
-                selected = keys[offset:]
-            else:
-                selected = keys[offset: offset + count]
-            return [self.dm._handles[k] for k in selected]
+        encoded = value.encode("utf-8")
+
+        self.fake_xp.dataref_manager.update_value(
+            dr=dr,
+            expected_type=self.fake_xp.Type_Data,
+            value=encoded,
+            offset=offset,
+            count=count,
+        )
 
     # -------------------------
     # Registration / publishing
     # -------------------------
     def registerDataAccessor(
-        self,
-        name: str,
-        *,
-        dataType: int = 0,
-        writable: int = -1,
-        readInt: Optional[Callable[[Any], int]] = None,
-        writeInt: Optional[Callable[[Any, int], None]] = None,
-        readFloat: Optional[Callable[[Any], float]] = None,
-        writeFloat: Optional[Callable[[Any, float], None]] = None,
-        readDouble: Optional[Callable[[Any], float]] = None,
-        writeDouble: Optional[Callable[[Any, float], None]] = None,
-        readIntArray: Optional[Callable[[Any, MutableSequence[int], int, int], int]] = None,
-        writeIntArray: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
-        readFloatArray: Optional[Callable[[Any, MutableSequence[float], int, int], int]] = None,
-        writeFloatArray: Optional[Callable[[Any, Sequence[float], int, int], None]] = None,
-        readData: Optional[Callable[[Any, bytearray, int, int], int]] = None,
-        writeData: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
-        readRefCon: Optional[Any] = None,
-        writeRefCon: Optional[Any] = None,
-    ) -> FakeDataRef:
+            self,
+            name: str,
+            dataType: int = 0,
+            writable: int = -1,
+            readInt: Optional[Callable[[Any], int]] = None,
+            writeInt: Optional[Callable[[Any, int], None]] = None,
+            readFloat: Optional[Callable[[Any], float]] = None,
+            writeFloat: Optional[Callable[[Any, float], None]] = None,
+            readDouble: Optional[Callable[[Any], float]] = None,
+            writeDouble: Optional[Callable[[Any, float], None]] = None,
+            readIntArray: Optional[Callable[[Any, MutableSequence[int], int, int], int]] = None,
+            writeIntArray: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
+            readFloatArray: Optional[Callable[[Any, MutableSequence[float], int, int], int]] = None,
+            writeFloatArray: Optional[Callable[[Any, Sequence[float], int, int], None]] = None,
+            readData: Optional[Callable[[Any, bytearray, int, int], int]] = None,
+            writeData: Optional[Callable[[Any, Sequence[int], int, int], None]] = None,
+            readRefCon: Optional[Any] = None,
+            writeRefCon: Optional[Any] = None,
+    ) -> XPLMDataRef:
         """
         Register callbacks and return a dataref handle. Signature mirrors XPLMRegisterDataAccessor.
         If dataType == 0 or writable == -1, compute from provided callbacks.
         """
         fxp = self.fake_xp
 
+        # ------------------------------------------------------------
+        # 1. Infer mask if dataType == 0
+        # ------------------------------------------------------------
         inferred_mask = fxp.Type_Unknown
         if readInt or writeInt:
             inferred_mask |= fxp.Type_Int
@@ -487,85 +285,130 @@ class FakeXPDataRef:
             inferred_mask |= fxp.Type_Float
         if readDouble or writeDouble:
             inferred_mask |= fxp.Type_Double
-        if readFloatArray or writeFloatArray:
-            inferred_mask |= fxp.Type_FloatArray
         if readIntArray or writeIntArray:
             inferred_mask |= fxp.Type_IntArray
+        if readFloatArray or writeFloatArray:
+            inferred_mask |= fxp.Type_FloatArray
         if readData or writeData:
             inferred_mask |= fxp.Type_Data
 
         mask = dataType if dataType != 0 else inferred_mask
 
+        # ------------------------------------------------------------
+        # 2. Determine writable flag
+        # ------------------------------------------------------------
         if writable != -1:
             writable_flag = bool(writable)
         else:
-            writable_flag = any(
-                (
-                    writeInt, writeFloat, writeDouble,
-                    writeIntArray, writeFloatArray, writeData
-                )
-            )
+            writable_flag = any((
+                writeInt, writeFloat, writeDouble,
+                writeIntArray, writeFloatArray, writeData
+            ))
 
+        # ------------------------------------------------------------
+        # 3. Determine dtype + shape
+        # ------------------------------------------------------------
         dtype, is_array, size = self._choose_dtype_from_mask(mask)
-        default_value = self.dm.default_value_for(dtype, size)
 
-        existing = self.dm.get_handle(name)
-        if existing is not None:
-            ref = existing
-        else:
-            ref = FakeDataRef(
-                path=name,
-                type=dtype,
-                writable=bool(writable_flag),
-                size=1,
-                value=0.0,
-            )
-            self.dm.add_handle(name, ref)
+        # ------------------------------------------------------------
+        # 4. Select correct callbacks based on dtype
+        # ------------------------------------------------------------
+        read_cb, write_cb = self._select_callbacks_for_dtype(
+            dtype,
+            readInt=readInt, writeInt=writeInt,
+            readFloat=readFloat, writeFloat=writeFloat,
+            readDouble=readDouble, writeDouble=writeDouble,
+            readIntArray=readIntArray, writeIntArray=writeIntArray,
+            readFloatArray=readFloatArray, writeFloatArray=writeFloatArray,
+            readData=readData, writeData=writeData,
+        )
 
-            # Explicit promotions: registration is authoritative.
-            self.dm.promote_type(ref=ref, dtype=dtype, writable=bool(writable_flag))
-            self.dm.promote_shape_from_value(ref=ref, value=default_value)
+        # ------------------------------------------------------------
+        # 5. Create or retrieve the FakeDataRef
+        # ------------------------------------------------------------
+        ref = self.dm.get_handle(name)
+        if ref is None:
+            ref = self.dm.add_handle(name)
 
-            owner = self.dm._next_owner_id
-            self.dm._next_owner_id += 1
-            self.dm._accessors[name] = {
-                "owner": owner,
-                "mask": mask,
-                "writable": bool(writable_flag),
-                "readInt": readInt,
-                "writeInt": writeInt,
-                "readFloat": readFloat,
-                "writeFloat": writeFloat,
-                "readDouble": readDouble,
-                "writeDouble": writeDouble,
-                "readIntArray": readIntArray,
-                "writeIntArray": writeIntArray,
-                "readFloatArray": readFloatArray,
-                "writeFloatArray": writeFloatArray,
-                "readData": readData,
-                "writeData": writeData,
-                "readRefCon": readRefCon,
-                "writeRefCon": writeRefCon,
-            }
+        # ------------------------------------------------------------
+        # 6. Promote dummy → accessor-backed DataRef
+        # ------------------------------------------------------------
+        self.dm.promote(
+            ref=ref,
+            dtype=dtype,
+            writable=writable_flag,
+            array_size=size,
+            read_scalar=read_cb if not is_array else None,
+            write_scalar=write_cb if not is_array else None,
+            read_array=read_cb if is_array else None,
+            write_array=write_cb if is_array else None,
+        )
 
-        self.dm.notify_handle_created(ref)
-        return ref
+        # ------------------------------------------------------------
+        # 7. Store refcons directly on the FakeDataRef
+        # ------------------------------------------------------------
+        ref.read_refcon = readRefCon
+        ref.write_refcon = writeRefCon
 
-    def unregisterDataAccessor(self, dataRef: FakeDataRef) -> None:
+        return ref.df_id
+
+    def unregisterDataAccessor(self, dataRef: XPLMDataRef) -> None:
         """
-        Unregister a previously registered accessor. Subsequent calls using the handle should raise TypeError.
+        Unregister a previously registered accessor.
+
+        Prod semantics:
+          • Scalar accessor-backed datarefs have no internal storage → delete.
+          • Array accessor-backed datarefs:
+                - If promoted (size > 0) → keep and revert to internal storage.
+                - If not promoted → delete.
         """
-        if not isinstance(dataRef, FakeDataRef):
-            raise TypeError("invalid dataRef")
-        stored = self.dm.get_handle(dataRef.path)
-        if stored is None or stored is not dataRef:
-            raise TypeError("invalid dataRef")
-        self.dm._accessors.pop(dataRef.path, None)
-        self.dm.del_handle(dataRef.path)
+        ref = self.fake_xp.dataref_manager.require_handle(dataRef)
+
+        # Remove accessor callbacks
+        ref.read_scalar = None
+        ref.write_scalar = None
+        ref.read_array = None
+        ref.write_array = None
+        ref.read_refcon = None
+        ref.write_refcon = None
+
+        if ref.is_array:
+            # Array: keep only if promoted (size > 0)
+            if ref.size and ref.size > 0:
+                return  # keep internal storage
+
+        self.fake_xp.dataref_manager.del_handle(dataRef)
 
     # -------------------------
     # Helpers for registerDataAccessor
     # -------------------------
+    def _select_callbacks_for_dtype(self, dtype, *,
+                                    readInt, writeInt,
+                                    readFloat, writeFloat,
+                                    readDouble, writeDouble,
+                                    readIntArray, writeIntArray,
+                                    readFloatArray, writeFloatArray,
+                                    readData, writeData):
+        xp = self.fake_xp
+
+        # Scalar types
+        if dtype & xp.Type_Int:
+            return readInt, writeInt
+        if dtype & xp.Type_Float:
+            return readFloat, writeFloat
+        if dtype & xp.Type_Double:
+            return readDouble, writeDouble
+
+        # Array types
+        if dtype & xp.Type_IntArray:
+            return readIntArray, writeIntArray
+        if dtype & xp.Type_FloatArray:
+            return readFloatArray, writeFloatArray
+        if dtype & xp.Type_Data:
+            return readData, writeData
+
+        return None, None
+
     def _bitmask_is_array(self, mask: int) -> bool:
         fxp = self.fake_xp
         return bool(mask & (fxp.Type_FloatArray | fxp.Type_IntArray | fxp.Type_Data))
