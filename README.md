@@ -65,6 +65,7 @@ xppython3-headless-dev/                      # Runner treats as X=plane root dir
 │       │   └── ...
 │       │
 │       └── PythonPlugins/                   # ALL XPPython3 plugins live here
+│           ├── PI_sshd_dataref_bridge.py    # This bridge server must be installed in X-plane
 │           ├── PI_sshd_ota.py               # Example plugin with managed DataRefs
 │           ├── PI_sshd_dev_ota_gui.py       # Example XPWidget GUI plugin
 │           │
@@ -159,6 +160,8 @@ Bridged DataRefs allow a sim‑less FakeXP environment to mirror live X‑Plane 
 The live DataRefs can be cached to a file to allow for subsequent offline debugging sessions
 with properly shaped data.
 
+**The PI_sshd_dataref_bridge.py plugin must be installed in X-Plane**
+
 This enables:
 
 • Running plugins in an IDE while X‑Plane is running  
@@ -215,7 +218,7 @@ Managed DataRefs provide:
 
 Managed DataRefs define the plugin’s contract with X‑Plane and are production‑safe.
 
-See DATAREF_MODEL.md#managed-datarefs for full details.
+See [DATAREF_MODEL.md](docs/DATAREF_MODEL.md) for full details.
 
 ---------------------------------------------------------------------
 
