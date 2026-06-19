@@ -170,7 +170,7 @@ This enables:
 • Debugging plugin logic against cached plausible data
 • Seamless transition between sim‑less and in‑sim execution  
 
-See [DATAREF_MODEL#bridge-enabled-datarefs](docs/DATAREF_MODEL.md) for full details.
+See [BRIDGED_DATAREFS](docs/DATAREF_MODEL.md#bridge-enabled-datarefs) for full details.
 
 Key properties:
 
